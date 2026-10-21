@@ -3606,7 +3606,6 @@ mod tests {
                 skipped.len() as u64,
                 None,
                 None,
-                "test",
             ) else {
                 break;
             };

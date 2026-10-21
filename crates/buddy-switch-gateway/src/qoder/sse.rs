@@ -33,15 +33,33 @@ fn process_line(line: &str) -> (Vec<Bytes>, bool) {
         ChatFrame::Chunk(cleaned) => (vec![Bytes::from(format!("data: {cleaned}\n\n"))], false),
         ChatFrame::Done => (Vec::new(), true),
         ChatFrame::UpstreamError { status, detail } => {
-            // 错误帧带**可操作信息**（状态码 + 上游详情）再收尾 —— 只补 [DONE] 会让
-            // 客户端把「上游 429」显示成「回答就这么短」。
-            let frame = json!({
-                "error": {
-                    "message": format!("上游错误（HTTP {status}）：{detail}"),
-                    "type": "upstream_error",
-                    "code": status,
-                }
-            });
+            /* 错误帧带**可操作信息**（状态码 + 上游详情）再收尾 —— 只补 [DONE] 会让
+            客户端把「上游 429」显示成「回答就这么短」。
+
+            ★ 排队（`10605` / `isQueued`）必须单独措辞 + 429：上游把它塞在 403 信封里，
+            原样报「上游错误（HTTP 403）」会让人以为账号/凭据出了问题（实测真机就是
+            403 + `{"code":"10605","isQueued":true}`）。 */
+            let queued = super::pool::queue_signal(&detail);
+            // ⚠️ 缺口（2026-11-02）：上游此处还有 `super::risk::note_queued()`，把排队
+            //   计入 `/health` 的风控遥测（`risk.{queued,rateLimited,rejected}`）。
+            //   `risk` 模块属上游 4dc3a0b，本分支未移植 ⇒ 这里不计。
+            let frame = if queued {
+                json!({
+                    "error": {
+                        "message": super::pool::queue_message(&detail),
+                        "type": "upstream_queued",
+                        "code": 429,
+                    }
+                })
+            } else {
+                json!({
+                    "error": {
+                        "message": format!("上游错误（HTTP {status}）：{detail}"),
+                        "type": "upstream_error",
+                        "code": status,
+                    }
+                })
+            };
             (vec![Bytes::from(format!("data: {frame}\n\n"))], true)
         }
     }
