@@ -4485,17 +4485,41 @@ const APP_SETTINGS_SNAPSHOT = "src/lib/app-settings-snapshot.ts";
 const BACKUP_LOCALE_ZH = "src/locales/domains/backup.zh.ts";
 const BACKUP_LOCALE_EN = "src/locales/domains/backup.en.ts";
 
-check("★ P7 设置 9 项子导航：9 项齐备，第 9 项是「备份与恢复」", () => {
+check("★ 设置子导航 7 项：通用 / 备份与恢复已移出客户端设置（全局设置抽屉承载）", () => {
+  /* 为什么改：这两项对所有客户端生效，留在每个客户端的设置页会让同一份全局配置
+     在 WB / Trae / Qoder 三处重复出现。现在统一挂在顶栏 ⚙「应用设置」抽屉里作入口，
+     点击打开弹框（`global-settings-dialogs.tsx`），抽屉不再平铺整页设置。
+     变异①：把 general / backup 加回子导航表 ⇒ 本条变红。
+     变异②：抽屉只剩平铺内容、没有两个入口（或入口没接 onClick）⇒ 本条变红。 */
   const code = readCode(BACKUP_SUBNAV);
   const m = code.match(/SETTINGS_SUBNAV[\s\S]*?=\s*\[([\s\S]*?)\];/);
   if (!m) throw new Error("找不到 `SETTINGS_SUBNAV` 表");
   const ids = [...m[1].matchAll(/id:\s*"([a-z]+)"/g)].map((x) => x[1]);
-  if (ids.length !== 9) throw new Error(`子导航应 9 项，实际 ${ids.length}：${ids.join(",")}`);
-  if (ids[ids.length - 1] !== "backup") {
-    throw new Error(`第 9 项应为 backup（备份与恢复），实际 ${ids[ids.length - 1]}`);
+  const want = ["account", "checkin", "gateway", "schedule", "client", "diagnostics", "logs"];
+  if (ids.join(",") !== want.join(",")) {
+    throw new Error(`子导航应为 ${want.join(" / ")}，实际 ${ids.join(" / ") || "（空）"}`);
   }
-  if (!/settings\.subnav\.backup/.test(code)) throw new Error("缺「备份与恢复」标签键");
-  return ids.join(" / ");
+  for (const gone of ["general", "backup"]) {
+    if (ids.includes(gone)) throw new Error(`「${gone}」是全局设置，不应再占客户端设置子导航`);
+    if (new RegExp(`settings\\.subnav\\.${gone}`).test(code)) {
+      throw new Error(`子导航已移除「${gone}」，标签键应一并删除（死键）`);
+    }
+  }
+  const drawer = readCode("src/components/shell/app-settings-drawer.tsx");
+  for (const [key, prop] of [
+    ["appSettings.global.general", "onOpenGeneralSettings"],
+    ["appSettings.global.backup", "onOpenBackupRestore"],
+  ]) {
+    if (!drawer.includes(key)) throw new Error(`应用设置抽屉缺「${key}」入口文案`);
+    if (!new RegExp(`\\b${prop}\\b`).test(drawer)) {
+      throw new Error(`应用设置抽屉的「${key}」入口没接 ${prop} —— 点了打不开弹框`);
+    }
+  }
+  const dialogs = readCode("src/components/settings/global-settings-dialogs.tsx");
+  if (!/export function GeneralSettingsDialog/.test(dialogs)) throw new Error("缺「通用设置」弹框");
+  if (!/export function BackupRestoreDialog/.test(dialogs)) throw new Error("缺「备份与恢复」弹框");
+  if (!/<BackupSection\b/.test(dialogs)) throw new Error("「备份与恢复」弹框没渲染备份分区");
+  return `${ids.length} 项客户端分区 + 抽屉两个全局入口`;
 });
 
 check("★ P7 导入预览是安全阀：逐作用域展示「会改什么」（删计数即变红）", () => {
@@ -4605,17 +4629,28 @@ check("★ P7 预估由实际勾选推导（全不勾 ⇒ 无可导出；勾选�
   return "默认 6×3 · 全不勾=0 · 勾选变则预估变 · 半选=mixed";
 });
 
-check("★ P7 设置页接线：子导航 + 备份分区 + 全不勾禁用导出", () => {
-  const page = readCode("src/pages/SettingsPage.tsx");
-  if (!/<SettingsSubnav\b/.test(page)) throw new Error("SettingsPage 没有接子导航");
-  if (!/<BackupSection\b/.test(page)) throw new Error("SettingsPage 没有渲染备份分区");
-  if (!/useState<SettingsSubnavId>/.test(page)) throw new Error("子导航选中态未接线");
+check("★ P7 备份接线：全局弹框渲染备份分区，客户端设置页零残留 + 全不勾禁用导出", () => {
+  /* 备份与恢复是全局设置（与客户端无关），只应出现在顶栏 ⚙ 的弹框里；
+     客户端设置页再渲染它 ⇒ 同一份配置在三处重复。 */
+  const dialogs = readCode("src/components/settings/global-settings-dialogs.tsx");
+  if (!/<BackupSection\b/.test(dialogs)) throw new Error("「备份与恢复」弹框没渲染备份分区");
+  if (!/<CacheSection\b/.test(dialogs)) throw new Error("「备份与恢复」弹框没渲染缓存分区");
+  for (const page of [
+    "src/pages/SettingsPage.tsx",
+    "src/pages/TraeSettingsPage.tsx",
+    "src/pages/QoderSettingsPage.tsx",
+  ]) {
+    const code = readCode(page);
+    if (/<BackupSection\b/.test(code) || /<CacheSection\b/.test(code)) {
+      throw new Error(`${page} 仍渲染全局备份 / 缓存分区 —— 应只在全局设置弹框里`);
+    }
+  }
   const section = readCode(BACKUP_SECTION);
   if (!/hasAnySelection/.test(section)) throw new Error("导出按钮未按「全不勾」判定");
   if (!/disabled=\{pending \|\| !canExport\}/.test(section)) {
     throw new Error("导出按钮未禁用 —— 全不勾仍可导出空备份（R10）");
   }
-  return "子导航接线 · 备份分区 · 全不勾禁用导出";
+  return "全局弹框承载备份 · 客户端页零残留 · 全不勾禁用导出";
 });
 
 check("★ 网关页两个轴：类型表 + 分区表按类型分家 + 三页接线（2026-10-15 起，替代原「7 项子导航」）", () => {
@@ -6718,17 +6753,18 @@ check("★ P0-4a 未检测程序位：「去设置」跳到「权限与诊断」
     if (!/export function parseSettingsSubnav/.test(nav)) {
       throw new Error("parseSettingsSubnav 不存在（校验被搬走却没落地）");
     }
-    if (!/SETTINGS_SUBNAV\.some/.test(nav) || !/:\s*"general"/.test(nav)) {
-      throw new Error("parseSettingsSubnav 未 fail-closed 回 general");
+    if (!/SETTINGS_SUBNAV\.some/.test(nav) || !/SETTINGS_SUBNAV\[0\]\.id/.test(nav)) {
+      throw new Error("parseSettingsSubnav 未 fail-closed 回第一项");
     }
   }
   return "带锚点 + 从 URL 读 + 合法性校验";
 });
 
-check("★ 设置页两平台同构：同一张 9 项子导航表 + URL 承载 + split 布局（PLAN §3.9 / D12）", () => {
+check("★ 设置页两平台同构：同一张 7 项子导航表 + URL 承载 + split 布局（PLAN §3.9 / D12）", () => {
   /* 变异①：把 Trae 设置页退回「一屏长滚动 10 组」⇒ 子导航断言变红。
      变异②：Trae 页自建一份子导航表 ⇒ 「同一张表」断言变红。
-     变异③：两页任一缺 `data-split-layout` ⇒ 900px 以下不转纵向、子导航不换行。 */
+     变异③：两页任一缺 `data-split-layout` ⇒ 900px 以下不转纵向、子导航不换行。
+     变异④：把全局「通用 / 备份与恢复」平铺回设置页 ⇒ AppSettingsGroups 断言变红。 */
   for (const page of ["src/pages/SettingsPage.tsx", "src/pages/TraeSettingsPage.tsx"]) {
     const code = stripComments(fs.readFileSync(path.join(ROOT, page), "utf8"));
     if (!/<SettingsSubnav\b/.test(code)) throw new Error(`${page} 没有接设置子导航`);
@@ -6741,6 +6777,9 @@ check("★ 设置页两平台同构：同一张 9 项子导航表 + URL 承载 +
     }
     /* 主区间距 = 原型 `.split-main { gap:16px }`；写 `space-y-10/12` 是改造前的长滚动间距。 */
     if (!/space-y-4\b/.test(code)) throw new Error(`${page} 主区间距不是原型的 16px`);
+    if (/<AppSettingsGroups\b/.test(code)) {
+      throw new Error(`${page} 仍平铺全局通用设置 —— 应走顶栏 ⚙ 抽屉里的「通用设置」弹框`);
+    }
   }
   const trae = stripComments(fs.readFileSync(path.join(ROOT, "src/pages/TraeSettingsPage.tsx"), "utf8"));
   if (/SETTINGS_SUBNAV\s*(:|=)/.test(trae)) {

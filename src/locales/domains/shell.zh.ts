@@ -5,7 +5,7 @@
  */
 export const zh = {
   // ---- 应用外壳 / 侧栏 ----
-  "app.name": "Buddy Switch",
+  "app.name": "AccSwitch",
   "app.demoBadge": "演示模式",
   "product.workbuddy": "WorkBuddy",
   /* ★ issue #44：`TraeWork` 是**已被官方合并掉**的老程序线名（客户端自 2026-10-13 起只剩
@@ -121,8 +121,13 @@ export const zh = {
   "undo.undone": "已恢复",
   "undo.failedTitle": "撤销失败",
 
-  // ---- 应用级设置（设置页「通用」分区 + 顶栏 ⚙「应用设置」抽屉，同一份实现两种外壳）----
+  // ---- 应用级设置（顶栏 ⚙「应用设置」抽屉的全局入口 + 对应弹框）----
+  "appSettings.drawer.global": "全局设置",
   "appSettings.drawer.more": "更多入口",
+  "appSettings.global.general": "通用设置",
+  "appSettings.global.generalDesc": "语言、外观、快捷键、启动与更新",
+  "appSettings.global.backup": "备份与恢复",
+  "appSettings.global.backupDesc": "导出、导入与自动备份",
 
   "appSettings.appearance.title": "外观",
   "appSettings.appearance.theme.label": "主题",
@@ -171,10 +176,9 @@ export const zh = {
   /* 设置页的入口改成「先看说明」：点开的是说明弹窗，不是直接下载（见 UPDATE-NOTES-ARCH.md）。 */
   "appSettings.update.viewNotes": "查看更新内容",
 
-  // ---- 设置页子导航（P7 §3.9：9 项，第 9 项「备份与恢复」）----
+  // ---- 设置页子导航（§3.9：7 项客户端分区；通用 / 备份与恢复是全局项，在 ⚙ 抽屉的弹框里）----
   // 应用级导航，与 appSettings 同域（§5：应用级放 shell，备份功能放 backup）。
   "settings.subnav.aria": "设置分区",
-  "settings.subnav.general": "通用",
   "settings.subnav.account": "账号与登录",
   "settings.subnav.checkin": "签到与积分",
   "settings.subnav.gateway": "网关",
@@ -182,7 +186,6 @@ export const zh = {
   "settings.subnav.client": "客户端",
   "settings.subnav.diagnostics": "权限与诊断",
   "settings.subnav.logs": "日志",
-  "settings.subnav.backup": "备份与恢复",
 
   // ---- 网关工作台子导航（PLAN §3.9 / §3.20：7 项，两个产品线共用同一份表；Trae 侧去掉「请求代理」）----
   "gateway.subnav.aria": "网关分区",

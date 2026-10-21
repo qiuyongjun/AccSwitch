@@ -262,5 +262,5 @@ export const zh = {
   "qoder.page.settings.schedule.keepaliveTimesDesc": "每天在这些时刻检查一次是否临近到期。",
   "qoder.page.settings.schedule.saveFailed": "保存计划任务失败",
   "qoder.page.settings.filtered":
-    "这里只列已有内容的分区；签到 / 网关 / 权限诊断 / 日志等设置项会随对应功能落地后出现（不预先摆空壳）。",
+    "这里只列与当前客户端相关且有内容的分区；通用与备份已移到顶栏「应用设置」。签到 / 网关 / 权限诊断 / 日志等设置项会随对应功能落地后出现（不预先摆空壳）。",
 } as const;

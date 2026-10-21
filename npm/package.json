@@ -1,7 +1,7 @@
 {
   "name": "@nextagentx/buddy-switch",
   "version": "2026.10.201902",
-  "description": "Buddy Switch（WorkBuddy 账号切换工具）：本地 webui（浏览器操作）+ 桌面 App（安装后运行 buddy-switch）",
+  "description": "AccSwitch（WorkBuddy 账号切换工具）：本地 webui（浏览器操作）+ 桌面 App（安装后运行 buddy-switch）",
   "bin": {
     "buddy-switch": "bin/buddy-switch.js"
   },

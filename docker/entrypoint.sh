@@ -1,5 +1,5 @@
 #!/bin/sh
-# Buddy Switch 容器入口。
+# AccSwitch 容器入口。
 #
 # 只做一件事：**保证 `BUDDY_SWITCH_HOME` 存在**，然后把参数原样交给 CLI。
 #

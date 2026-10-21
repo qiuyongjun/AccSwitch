@@ -10,7 +10,7 @@ export const en = {
   "clientSettings.entry": "Client settings",
   "clientSettings.title": "Upstream client settings",
   "clientSettings.description":
-    "Manage the proxied clients' own settings.json: read, edit by key, back up, restore, and compare across slots.",
+    "Manage the proxied clients' own settings.json: read, edit in place, back up, restore, and compare across slots.",
   "clientSettings.webuiNote":
     "Remote (webui) mode: this reads and writes the client config files on the SERVER machine, not this one.",
 
@@ -51,26 +51,21 @@ export const en = {
     "No settings.json was found for this slot, so it cannot be read or edited. Install the client and run it at least once.",
 
   "clientSettings.keys": "{n} keys",
-  "clientSettings.raw": "Raw text",
+  "clientSettings.raw": "Key values",
+  "clientSettings.raw.hint":
+    "All values are fully expanded and editable. Saving preserves the original formatting, changes only the target key, and backs up first.",
   "clientSettings.raw.show": "Show raw text",
   "clientSettings.raw.hide": "Hide raw text",
+  "clientSettings.raw.reset": "Reset",
 
-  "clientSettings.edit.title": "Edit by key",
-  "clientSettings.edit.hint":
-    "Keys accept dot paths (e.g. claw.channels.wechatmp.enabled). Writing preserves the original formatting, changes only the target key's line, and backs up automatically first.",
-  "clientSettings.edit.key": "Key",
-  "clientSettings.edit.keyPlaceholder": "Dot path, e.g. http.proxy",
-  "clientSettings.edit.value": "New value",
-  "clientSettings.edit.valuePlaceholder": "JSON value, e.g. \"\" or true or {\"a\":1}",
-  "clientSettings.edit.save": "Write",
-  "clientSettings.edit.saving": "Writing…",
-  "clientSettings.edit.done": "Wrote {keys}",
+  "clientSettings.edit.save": "Save",
+  "clientSettings.edit.saving": "Saving…",
+  "clientSettings.edit.done": "Saved {keys}",
   "clientSettings.edit.unchanged": "Value is identical to the current one — nothing written or backed up",
-  "clientSettings.edit.invalidJson": "The new value is not valid JSON: {message}",
-  "clientSettings.edit.emptyKey": "Enter the key to edit first",
+  "clientSettings.edit.invalidJson": "The value is not valid JSON: {message}",
   "clientSettings.edit.backup": "Previous content backed up to {path}",
   "clientSettings.edit.noBackup": "No backup was produced (nothing changed, or the backup failed)",
-  "clientSettings.edit.failed": "Write failed: {message}",
+  "clientSettings.edit.failed": "Save failed: {message}",
 
   "clientSettings.backups.title": "Backups",
   "clientSettings.backups.count": "{n} total",

@@ -28,11 +28,8 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
 import { SettingsFieldRow, SettingsGroup, SettingsRow } from "@/components/settings-primitives";
-// P7 T03：设置页子导航（9 项）+「备份与恢复」分区 + 通用设置分组（与侧栏弹层共用）。
+// 子导航只留客户端相关分区（7 项）；通用 / 备份与恢复是全局设置，在顶栏 ⚙ 抽屉里以弹框承载。
 import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
-import { BackupSection } from "@/components/settings/backup-section";
-import { CacheSection } from "@/components/settings/cache-section";
-import { AppSettingsGroups } from "@/components/app-settings";
 // 时点表编辑器与 Trae 设置页**共用同一份实现**（校验规则属于规则，不属于版式）。
 import { TimesEditor } from "@/components/schedule-times-editor";
 import { Input } from "@/components/ui/input";
@@ -649,7 +646,7 @@ function PermissionCheckCard() {
               <li>{t("wbSettings.permission.guideStep1")}</li>
               <li>{t("wbSettings.permission.guideStep2")}</li>
               <li>
-                {t("wbSettings.permission.guideStep3Pre")} <b>BuddySwitch.app</b>{" "}
+                {t("wbSettings.permission.guideStep3Pre")} <b>AccSwitch.app</b>{" "}
                 {t("wbSettings.permission.guideStep3Mid")} <b>{t("wbSettings.permission.guideStep3Drag")}</b>
                 {t("wbSettings.permission.guideStep3Post")}
               </li>
@@ -1617,18 +1614,17 @@ function ScheduleCard() {
 }
 
 /**
- * 设置页：**产品级**设置（P7 起改为 **9 项子导航**，§3.9）。
+ * 设置页：**产品级**设置（**7 项子导航**，§3.9）。
  *
  * ## 为什么从「一屏长滚动」改成子导航
  *
  * 现状是 7 张卡纵向堆叠（Trae 侧 10 组），用户找一项设置要滚很久、且看不出「还有哪些类」。
  * 子导航先把**有哪几类**摆出来，再按类展示 —— 与 Trae 设置页共用同一套分区名。
  *
- * ## 9 项与内容的对应（WB 侧）
+ * ## 7 项与内容的对应（WB 侧）
  *
  * | 子导航 | 内容 |
  * |:---|:---|
- * | 通用 | 应用级设置（外观 / 语言 / 快捷键 / 启动 / 更新，与侧栏弹层同一份实现） |
  * | 账号与登录 | 版本与账号库路径、切换行为 |
  * | 签到与积分 | 自动签到 + 日志 |
  * | 网关 | 网关配置 |
@@ -1636,7 +1632,10 @@ function ScheduleCard() {
  * | 客户端 | CodeBuddy CLI 自动轮换 |
  * | 权限与诊断 | 认证文件写权限自检 |
  * | 日志 | WorkBuddy 无独立运行日志 ⇒ **空态 + 出口**（§3.6 四要素） |
- * | 备份与恢复 | 全局备份（P7 新增，第 9 项） |
+ *
+ * 「通用」（外观 / 语言 / 快捷键 / 启动 / 更新）与「备份与恢复」属于**全局设置**，
+ * 与客户端无关，已迁到顶栏 ⚙「应用设置」抽屉，点击打开弹框
+ *（`src/components/settings/global-settings-dialogs.tsx`）。
  *
  * ⚠️ 「客户端 / 日志」是 **Trae 侧**的子项（PLAN §3.9）；WB 侧没有对应内容时**不硬塞**
  * （§3.4 规则 1：无数据不渲染），而是给一个**说明原因 + 有出口**的空态。
@@ -1650,7 +1649,7 @@ export default function SettingsPage() {
   /* ★ P0-4a：`section` 的**初始值从 URL 读**（`?section=diagnostics`）——
      否则「未检测到程序位 → 去设置」只能落到设置页**首页**，到不了「权限与诊断」子项
      （原型断言 `P0-4a` 要求点了之后能跳到「权限与诊断」）。
-     ⚠️ 必须**校验合法性**：非法值 fail-closed 回 "general"，不把任意串塞进 state。
+     ⚠️ 必须**校验合法性**：非法值 fail-closed 回第一项，不把任意串塞进 state。
      解析走 `parseSettingsSubnav`（与网关页的 `parseGatewaySubnav` 同一形状），
      Trae 设置页接的是同一个函数 —— 两平台同一件事只有一份实现。 */
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1693,8 +1692,6 @@ export default function SettingsPage() {
 
         {/* 主区 `.split-main`：分区之间 16px（原型 `:378`）。 */}
         <div className="min-w-0 flex-1 space-y-4">
-          {section === "general" && <AppSettingsGroups />}
-
           {section === "account" && (
             <>
               <VersionAccountsCard />
@@ -1744,12 +1741,6 @@ export default function SettingsPage() {
             />
           )}
 
-          {section === "backup" && (
-            <>
-              <BackupSection />
-              <CacheSection />
-            </>
-          )}
         </div>
       </div>
     </div>

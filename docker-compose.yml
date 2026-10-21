@@ -1,4 +1,4 @@
-# Buddy Switch 服务端（headless）—— webui + API 网关。
+# AccSwitch 服务端（headless）—— webui + API 网关。
 #
 #   docker compose up -d                 # 拉预构建镜像并后台启动（推荐）
 #   docker compose up -d --pull build    # 忽略镜像、纯源码构建

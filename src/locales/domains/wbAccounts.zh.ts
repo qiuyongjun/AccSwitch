@@ -243,7 +243,7 @@ export const zh = {
   "wbAccounts.dialog.hasBody": "有正文",
   "wbAccounts.dialog.permissionTitle": "如何授权（只需 3 步）：",
   "wbAccounts.dialog.permissionStep1": "点击下方「打开完全磁盘访问」",
-  "wbAccounts.dialog.permissionStep2": "把 BuddySwitch.app 从 Finder 拖进面板列表（即使没提示框也直接拖），打开它的开关",
+  "wbAccounts.dialog.permissionStep2": "把 AccSwitch.app 从 Finder 拖进面板列表（即使没提示框也直接拖），打开它的开关",
   "wbAccounts.dialog.permissionStep3": "授权后这里会自动检测到，无需其他操作",
   "wbAccounts.dialog.openFullDisk": "打开完全磁盘访问",
   "wbAccounts.dialog.showInFinder": "在 Finder 中显示",

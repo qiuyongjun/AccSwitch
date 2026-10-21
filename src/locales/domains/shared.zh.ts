@@ -380,7 +380,7 @@ export const zh = {
   // 这些错误的产生者就是前端（拿不到路由 / 连不上本地服务 / 非 2xx），
   // 后端无从为它们提供码，因此直接走词表。
   "shared.api.unsupportedInWebui": "webui 模式暂不支持该操作: {cmd}",
-  "shared.api.unreachable": "无法连接 Buddy Switch 服务（{base}），请先运行 `buddy-switch`",
+  "shared.api.unreachable": "无法连接 AccSwitch 服务（{base}），请先运行 `buddy-switch`",
   "shared.api.requestFailed": "请求失败 ({status})",
   // ---- 权限检测（api.ts） ----
   "shared.api.webuiPermissionByProcess": "webui 模式由服务进程（终端启动）的权限决定，无需额外授权",

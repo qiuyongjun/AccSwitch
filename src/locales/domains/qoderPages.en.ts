@@ -257,5 +257,5 @@ export const en = {
   "qoder.page.settings.schedule.keepaliveTimesDesc": "Checks once at each of these times whether the token is close to expiry.",
   "qoder.page.settings.schedule.saveFailed": "Failed to save scheduled tasks",
   "qoder.page.settings.filtered":
-    "Only sections with real content are listed; check-in / gateway / permissions / log settings will appear once those features land (no empty shells are shown up front).",
+    "Only client-specific sections with real content are listed; General and Backup now live in App settings. Check-in / gateway / permissions / log settings will appear once those features land (no empty shells are shown up front).",
 } as const;

@@ -20,7 +20,7 @@ gen() {
 {
   "name": "@nextagentx/buddy-switch-$tag",
   "version": "$V",
-  "description": "Buddy Switch platform binary ($tag)",
+  "description": "AccSwitch platform binary ($tag)",
   "os": ["$os"],
   "cpu": ["$cpu"],
   "files": ["bin"],

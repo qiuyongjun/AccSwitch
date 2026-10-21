@@ -2,7 +2,7 @@
 # 纯命令行打 dmg（不依赖 Finder/AppleScript，CI 无头环境可用）
 # 用法：sh scripts/make-dmg.sh <版本> <arch> [.app 路径]
 #   arch: aarch64 | x64
-#   .app 路径默认 target/release/bundle/macos/BuddySwitch.app
+#   .app 路径默认 target/release/bundle/macos/AccSwitch.app
 #   DMG 内含「应用程序」文件夹链接，拖入即安装到 /Applications
 #
 # dmgbuild writes the Finder layout and invokes hdiutil under the hood.  Do
@@ -24,7 +24,7 @@ fi
 
 V=$1
 ARCH=$2
-APP=${3:-target/release/bundle/macos/BuddySwitch.app}
+APP=${3:-target/release/bundle/macos/AccSwitch.app}
 
 if [ -z "$V" ] || [ -z "$ARCH" ]; then
   usage
@@ -50,8 +50,8 @@ if [ ! -f "$SETTINGS" ]; then
   exit 1
 fi
 
-OUT="BuddySwitch_${V}_${ARCH}.dmg"
-TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/BuddySwitch-dmg.XXXXXX")
+OUT="AccSwitch_${V}_${ARCH}.dmg"
+TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/AccSwitch-dmg.XXXXXX")
 TMP_OUT="$TMP_DIR/$OUT"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -59,7 +59,7 @@ echo "打 dmg: $APP → $OUT"
 dmgbuild \
   -s "$SETTINGS" \
   -D "app=$APP" \
-  "Buddy Switch" \
+  "AccSwitch" \
   "$TMP_OUT"
 
 # Publish atomically after dmgbuild has completed.  A failed build therefore

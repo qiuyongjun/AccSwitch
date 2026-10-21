@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Monitor, Moon, Settings, Sun } from "lucide-react";
 
 import { ClientSettingsDialog } from "@/components/client-settings";
-import { DonateDialog } from "@/components/donate-dialog";
+import { BackupRestoreDialog, GeneralSettingsDialog } from "@/components/settings/global-settings-dialogs";
 import { AppSettingsDrawer } from "@/components/shell/app-settings-drawer";
 import { SkillManagerDialog } from "@/components/skill-manager";
 import {
@@ -27,8 +27,8 @@ import { cn } from "@/lib/utils";
  *
  * ## 为什么这里只做「驱动」，不重写业务
  *
- * 抽屉与三个弹层各是一整域实现（`AppSettingsDrawer` / `ClientSettingsDialog` /
- * `SkillManagerDialog` / `DonateDialog`），本组件只持有它们的 `open` 状态，
+ * 抽屉与四个弹层各是一整域实现（`AppSettingsDrawer` / `GeneralSettingsDialog` /
+ * `BackupRestoreDialog` / `ClientSettingsDialog` / `SkillManagerDialog`），本组件只持有它们的 `open` 状态，
  * 并在「从抽屉进弹层」时**先关抽屉**（两层同时开着会让 Esc 只关最上层，
  * 用户以为没反应）。内容均**懒挂载**（Radix 关闭即卸载）⇒ 不开就不取数。
  *
@@ -41,7 +41,8 @@ export function AppMenu() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [clientOpen, setClientOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  const [donateOpen, setDonateOpen] = useState(false);
+  const [generalSettingsOpen, setGeneralSettingsOpen] = useState(false);
+  const [backupRestoreOpen, setBackupRestoreOpen] = useState(false);
 
   /** 抽屉 → 弹层：先关抽屉，再开目标弹层（避免两层叠着）。 */
   const leaveDrawer = (open: (value: boolean) => void) => () => {
@@ -66,13 +67,15 @@ export function AppMenu() {
         onOpenChange={setDrawerOpen}
         onOpenClientSettings={leaveDrawer(setClientOpen)}
         onOpenSkills={leaveDrawer(setSkillsOpen)}
-        onOpenDonate={leaveDrawer(setDonateOpen)}
+        onOpenGeneralSettings={leaveDrawer(setGeneralSettingsOpen)}
+        onOpenBackupRestore={leaveDrawer(setBackupRestoreOpen)}
       />
 
-      {/* 三个受控弹层：内容懒挂载，关闭即卸载。 */}
+      {/* 四个受控弹层：内容懒挂载，关闭即卸载。 */}
+      <GeneralSettingsDialog open={generalSettingsOpen} onOpenChange={setGeneralSettingsOpen} />
+      <BackupRestoreDialog open={backupRestoreOpen} onOpenChange={setBackupRestoreOpen} />
       <ClientSettingsDialog open={clientOpen} onOpenChange={setClientOpen} />
       <SkillManagerDialog open={skillsOpen} onOpenChange={setSkillsOpen} />
-      <DonateDialog open={donateOpen} onOpenChange={setDonateOpen} />
     </>
   );
 }

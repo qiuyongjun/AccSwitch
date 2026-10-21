@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Buddy Switch 服务端镜像（webui + API 网关，headless）。
+# AccSwitch 服务端镜像（webui + API 网关，headless）。
 #
 # ## 这个镜像是什么 / 不是什么
 #

@@ -1,7 +1,7 @@
 [package]
 name = "buddy-switch-rust"
 version = "2026.10.201902"
-description = "BuddySwitch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
+description = "AccSwitch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
 authors = ["NextAgentX"]
 edition = "2021"
 

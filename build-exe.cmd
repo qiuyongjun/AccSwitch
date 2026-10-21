@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM  BuddySwitch 一键打包（双击即可）—— Windows NSIS 安装包 (.exe)
+REM  AccSwitch 一键打包（双击即可）—— Windows NSIS 安装包 (.exe)
 REM
 REM  等价于：  powershell -NoProfile -ExecutionPolicy Bypass ^
 REM             -File scripts\package-windows.ps1
@@ -12,7 +12,7 @@ setlocal
 cd /d "%~dp0"
 
 echo.
-echo === BuddySwitch 一键打包 ===
+echo === AccSwitch 一键打包 ===
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package-windows.ps1" %*

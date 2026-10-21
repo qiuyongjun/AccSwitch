@@ -3,8 +3,7 @@
  *
  * 归属文件：
  * `src/pages/SettingsPage.tsx`、`src/components/update-install-dialog.tsx`、
- * `src/components/donate-dialog.tsx`、`src/components/region-bar.tsx`、
- * `src/components/product-marks.tsx`
+ * `src/components/region-bar.tsx`、`src/components/product-marks.tsx`
  *
  * ⚠️ `src/components/settings-primitives.tsx` **不在本域**：它只收 props 的
  * `label`/`description`，本身没有文案（只有注释）。
@@ -118,7 +117,7 @@ export const zh = {
   "wbSettings.permission.okMsg": "认证目录可写，权限正常",
   "wbSettings.permission.guideTitle": "如何授权（拖拽方式）：",
   "wbSettings.permission.guideStep1": "点上方「打开完全磁盘访问」",
-  "wbSettings.permission.guideStep2": "再点「在 Finder 中显示」打开 BuddySwitch 所在位置",
+  "wbSettings.permission.guideStep2": "再点「在 Finder 中显示」打开 AccSwitch 所在位置",
   "wbSettings.permission.guideStep3Pre": "把",
   "wbSettings.permission.guideStep3Mid": "从 Finder",
   "wbSettings.permission.guideStep3Drag": "直接拖进",
@@ -273,15 +272,6 @@ export const zh = {
   "wbSettings.update.downloadingBusy": "下载中",
   "wbSettings.update.restartLater": "稍后重启",
   "wbSettings.update.openDownloadPage": "打开下载页",
-  "wbSettings.update.errorProxyHint": "若本机需要代理，可在「应用设置 → 更新代理」里填写后重试；也可以直接打开下载页手动安装。",
+  "wbSettings.update.errorProxyHint": "若本机需要代理，可在「应用设置 → 通用设置 → 更新代理」里填写后重试；也可以直接打开下载页手动安装。",
   "wbSettings.update.viewFullNotes": "查看完整发布说明",
-
-  // ---- 打赏弹框 ----
-  "wbSettings.donate.trigger": "请作者喝杯饮料",
-  "wbSettings.donate.title": "支持 Buddy Switch",
-  "wbSettings.donate.desc": "Buddy Switch 免费开源。如果它帮到了你，可以扫码请作者喝杯饮料。",
-  "wbSettings.donate.wechat": "微信支付",
-  "wbSettings.donate.alipay": "支付宝",
-  "wbSettings.donate.qrAlt": "{name}收款码",
-  "wbSettings.donate.repoHome": "项目主页",
 } as const;

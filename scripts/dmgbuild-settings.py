@@ -1,4 +1,4 @@
-"""dmgbuild settings for the Buddy Switch drag-to-Applications image.
+"""dmgbuild settings for the AccSwitch drag-to-Applications image.
 
 This file is evaluated by ``dmgbuild``.  Keep the image contents deliberately
 small: the app bundle and one Applications symlink are the only user-facing
@@ -11,7 +11,7 @@ import os
 
 application = defines.get("app")  # noqa: F821 - provided by dmgbuild
 if not application:
-    raise ValueError("dmgbuild requires -D app=/path/to/BuddySwitch.app")
+    raise ValueError("dmgbuild requires -D app=/path/to/AccSwitch.app")
 
 application = os.path.abspath(application)
 if not os.path.isdir(application):

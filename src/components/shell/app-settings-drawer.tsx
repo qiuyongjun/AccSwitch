@@ -1,7 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { AppSettingsGroups } from "@/components/app-settings";
 import { SettingsPlainSection } from "@/components/settings-primitives";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useT } from "@/lib/i18n";
@@ -16,15 +15,20 @@ import { useT } from "@/lib/i18n";
  * 本仓此前用的是 `DropdownMenu` + 四个 Dialog，形态与原型不同（同一个入口，两套交互）。
  * 本组件把它收回原型的形态：点齿轮 ⇒ 抽屉从右侧推入，标题「应用设置」。
  *
+ * ## 为什么全局设置是「入口 + 弹框」而不是平铺
+ *
+ * 「通用」与「备份与恢复」对所有客户端生效，本来就不属于某个客户端的设置页；
+ * 但它们内容较多，直接在抽屉里平铺会把抽屉撑得很长，并把「客户端设置 / Skill 管理」
+ * 这些真正属于抽屉的入口挤到很远。收成两行入口、点击开弹框，抽屉只负责导航。
+ *
  * ## 为什么正文是 `.dsec` + `.srow`（不是卡片）
  *
  * 原型这一层**没有卡片**：`<div class="dsec"><h4>…</h4><div class="srow">…</div>×4</div>`，
- * 行直接贴在抽屉底色上。故走 `AppSettingsGroups variant="plain"` —— 内容与设置页
- * **同一份实现**，只是外壳换成 `.dsec`（见 `settings-primitives.tsx`）。
+ * 行直接贴在抽屉底色上。故走 `SettingsPlainSection`（见 `settings-primitives.tsx`）。
  *
- * ## 本仓多出来的三个入口
+ * ## 本仓多出来的两个入口
  *
- * 原型的抽屉里只有应用级设置，没有「客户端设置 / Skill 管理 / 捐赠」—— 那三项是本仓
+ * 原型的抽屉里只有应用级设置，没有「客户端设置 / Skill 管理」—— 那两项是本仓
  * 自己的 L0 能力（原型里不存在对应页面）。它们**不能丢**（原先挂在 ⚙ 下拉菜单里），
  * 因此按原型同一套行原语（`.srow`：标签 + 说明 + 右侧控件）另起一个 `.dsec` 区块，
  * 而不是另造一种行样式。与「添加账号」抽屉把工具栏溢出项收进「更多操作」是同一手法。
@@ -68,7 +72,8 @@ export interface AppSettingsDrawerProps {
   onOpenChange: (open: boolean) => void;
   onOpenClientSettings: () => void;
   onOpenSkills: () => void;
-  onOpenDonate: () => void;
+  onOpenGeneralSettings: () => void;
+  onOpenBackupRestore: () => void;
 }
 
 export function AppSettingsDrawer({
@@ -76,7 +81,8 @@ export function AppSettingsDrawer({
   onOpenChange,
   onOpenClientSettings,
   onOpenSkills,
-  onOpenDonate,
+  onOpenGeneralSettings,
+  onOpenBackupRestore,
 }: AppSettingsDrawerProps) {
   const t = useT();
 
@@ -91,7 +97,18 @@ export function AppSettingsDrawer({
 
         {/* 原型 `.drawer-body`：`padding:16px` + `gap:16px`。 */}
         <div className="flex flex-col gap-4 overflow-y-auto p-4">
-          <AppSettingsGroups variant="plain" />
+          <SettingsPlainSection id="app-settings-global" title={t("appSettings.drawer.global")}>
+            <EntryRow
+              label={t("appSettings.global.general")}
+              description={t("appSettings.global.generalDesc")}
+              onClick={onOpenGeneralSettings}
+            />
+            <EntryRow
+              label={t("appSettings.global.backup")}
+              description={t("appSettings.global.backupDesc")}
+              onClick={onOpenBackupRestore}
+            />
+          </SettingsPlainSection>
 
           <SettingsPlainSection id="app-settings-more" title={t("appSettings.drawer.more")}>
             <EntryRow
@@ -103,11 +120,6 @@ export function AppSettingsDrawer({
               label={t("skillManager.entry")}
               description={t("skillManager.description")}
               onClick={onOpenSkills}
-            />
-            <EntryRow
-              label={t("wbSettings.donate.trigger")}
-              description={t("wbSettings.donate.desc")}
-              onClick={onOpenDonate}
             />
           </SettingsPlainSection>
         </div>

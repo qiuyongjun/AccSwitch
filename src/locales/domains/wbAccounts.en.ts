@@ -206,7 +206,7 @@ export const en = {
   "wbAccounts.dialog.hasBody": "Has content",
   "wbAccounts.dialog.permissionTitle": "How to grant access (3 steps):",
   "wbAccounts.dialog.permissionStep1": "Click \"Open Full Disk Access\" below",
-  "wbAccounts.dialog.permissionStep2": "Drag BuddySwitch.app from Finder into the panel list (drag it even without a prompt), then turn on its switch",
+  "wbAccounts.dialog.permissionStep2": "Drag AccSwitch.app from Finder into the panel list (drag it even without a prompt), then turn on its switch",
   "wbAccounts.dialog.permissionStep3": "Access is detected automatically after granting; no other action needed",
   "wbAccounts.dialog.openFullDisk": "Open Full Disk Access",
   "wbAccounts.dialog.showInFinder": "Show in Finder",

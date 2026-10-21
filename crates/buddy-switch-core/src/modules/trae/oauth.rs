@@ -1484,14 +1484,14 @@ fn build_response(content_type: &str, body: &str, method: &str) -> String {
     )
 }
 
-/// 应用展示名（三层命名里的「**展示名**」层：带空格的 `Buddy Switch`）。
+/// 应用展示名（三层命名里的「**展示名**」层：`AccSwitch`）。
 ///
 /// ⚠️ 本仓**刻意不做跨语言共享常量**，因此这个字面量在另外两处也各有一份载体，
 /// 三处必须同值：
 /// `src-tauri/src/tray.rs` 的 `DEFAULT_TOOLTIP`、
 /// `src/locales/domains/shell.zh.ts` / `shell.en.ts` 的 `app.name`。
 /// 按 i18n 约定它是**产品名，不译**。
-const APP_DISPLAY_NAME: &str = "Buddy Switch";
+const APP_DISPLAY_NAME: &str = "AccSwitch";
 
 /// 成功结果页：账号昵称 + 落库位置（应用 → 产品 → 区域）。
 ///
@@ -1509,7 +1509,7 @@ const APP_DISPLAY_NAME: &str = "Buddy Switch";
 /// - 没说**是哪个产品**——本应用同时管 WorkBuddy 与 Trae 两族账号。
 ///
 /// 用户的原话是「这里显示不对」（截图里圈着「国内版」）⇒ 页面必须自证身份：
-/// 「账号已添加到 Buddy Switch 的 Trae（国内版）账号库」。
+/// 「账号已添加到 AccSwitch 的 Trae（国内版）账号库」。
 /// 三段的顺序刻意是**由外到内**（应用 → 产品 → 区域），与用户在界面上选东西的
 /// 顺序一致（先选应用分区，再选区域）。
 fn success_page(account_view: &Value, variant: TraeVariant) -> String {
@@ -3683,7 +3683,7 @@ mod tests {
         // 现场（2026-09-24 用户报障）：只写「国内版」时用户读不出是哪个应用的哪个产品
         // —— 本应用的 WorkBuddy 分区同样有「国内版」。
         assert!(
-            named.contains("账号已添加到 Buddy Switch 的 Trae CN 账号库，可关闭此页面返回应用。"),
+            named.contains("账号已添加到 AccSwitch 的 Trae CN 账号库，可关闭此页面返回应用。"),
             "成功页必须写全「应用 → 区域（含产品名）」: {named}"
         );
         // ★ 反面：**不得**出现**程序位名**。
@@ -3709,7 +3709,7 @@ mod tests {
         assert!(empty.contains("未知账号"), "{empty}");
         // 区域随变体分家：国际版必须是「国际版」，且同样写全三段。
         assert!(
-            empty.contains("账号已添加到 Buddy Switch 的 Trae 账号库"),
+            empty.contains("账号已添加到 AccSwitch 的 Trae 账号库"),
             "{empty}"
         );
     }

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/icon-transparent.png" alt="Buddy Switch" width="120" />
+  <img src="public/icon-transparent.png" alt="AccSwitch" width="120" />
 </p>
 
-<h1 align="center">Buddy Switch</h1>
+<h1 align="center">AccSwitch</h1>
 
 <p align="center">
   <b>WorkBuddy · CodeBuddy · TraeWork · Qoder マルチアカウント管理ツール</b><br />
@@ -11,9 +11,9 @@
 
 <p align="center">
   <img alt="対応OS" src="https://img.shields.io/badge/%E5%AF%BE%E5%BF%9COS-macOS_%7C_Windows_%7C_Linux-2ea043" />
-  <a href="https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest"><img alt="最新版" src="https://img.shields.io/github/v/release/NextAgentX/qoder-trae-workbuddy-switch?label=%E6%9C%80%E6%96%B0%E7%89%88" /></a>
+  <a href="https://github.com/NextAgentX/AccSwitch/releases/latest"><img alt="最新版" src="https://img.shields.io/github/v/release/NextAgentX/AccSwitch?label=%E6%9C%80%E6%96%B0%E7%89%88" /></a>
   <a href="./LICENSE"><img alt="ライセンス" src="https://img.shields.io/badge/%E3%83%A9%E3%82%A4%E3%82%BB%E3%83%B3%E3%82%B9-PolyForm_Noncommercial-4c8bf5" /></a>
-  <a href="https://github.com/NextAgentX/qoder-trae-workbuddy-switch/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/NextAgentX/qoder-trae-workbuddy-switch?style=social" /></a>
+  <a href="https://github.com/NextAgentX/AccSwitch/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/NextAgentX/AccSwitch?style=social" /></a>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
   <a href="README.pt.md">Português</a>
 </p>
 
-# Buddy Switch
+# AccSwitch
 
 **ローカル完結**のマルチアカウント管理ツールです。**WorkBuddy / CodeBuddy / TraeWork / Qoder** の 4 製品ライン、**6 つのスコープ**のアカウントを 1 か所に集約し、QR・デバイスコードでのログイン、ワンクリックのアカウント切り替え、チェックインとクレジット、利用状況の集計、セッション複製の同期、そしてモデル枠を OpenAI / Anthropic 互換 API としてローカルの他ツールに開放します。
 
@@ -39,8 +39,8 @@
 | 🔌 **枠を他のツールにも** | OpenAI / Anthropic 互換エンドポイントとして公開し、Cursor・Claude Code・OpenWebUI にそのまま設定できます。 |
 
 <p align="center">
-  <a href="https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest"><img alt="ダウンロード" src="https://img.shields.io/badge/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89-Releases-2ea043?style=for-the-badge" /></a>
-  <a href="https://github.com/NextAgentX/qoder-trae-workbuddy-switch/stargazers"><img alt="Star で応援" src="https://img.shields.io/badge/Star_%E3%81%A7%E5%BF%9C%E6%8F%B4-Star-f5c542?style=for-the-badge" /></a>
+  <a href="https://github.com/NextAgentX/AccSwitch/releases/latest"><img alt="ダウンロード" src="https://img.shields.io/badge/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89-Releases-2ea043?style=for-the-badge" /></a>
+  <a href="https://github.com/NextAgentX/AccSwitch/stargazers"><img alt="Star で応援" src="https://img.shields.io/badge/Star_%E3%81%A7%E5%BF%9C%E6%8F%B4-Star-f5c542?style=for-the-badge" /></a>
   <a href="CONTRIBUTING.en.md"><img alt="コントリビュート" src="https://img.shields.io/badge/%E3%82%B3%E3%83%B3%E3%83%88%E3%83%AA%E3%83%93%E3%83%A5%E3%83%BC%E3%83%88-Pull_Request-4c8bf5?style=for-the-badge" /></a>
 </p>
 
@@ -197,10 +197,10 @@ flowchart TB
 
 | 形態 | 入手方法 | 説明 |
 | --- | --- | --- |
-| **デスクトップアプリ** | [GitHub Releases](https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest) からインストーラーを取得 | Tauri 製。日常利用に推奨 |
+| **デスクトップアプリ** | [GitHub Releases](https://github.com/NextAgentX/AccSwitch/releases/latest) からインストーラーを取得 | Tauri 製。日常利用に推奨 |
 | **webui** | ソースからビルド（下記） | デスクトップ版と同じフロントエンド成果物をローカル HTTP で配信 |
 | **Docker** | ビルド済みイメージ `ghcr.io/nextagentx/buddy-switch`（amd64 / arm64）を取得 | コンテナ内で動くのは **headless サーバー**（webui + API ゲートウェイ）で、デスクトップ版の切り替え機能は**ありません**。詳細は [Docker でのデプロイ](docs/guides/DOCKER.md) |
-| **オンラインデモ** | [GitHub Pages](https://nextagentx.github.io/qoder-trae-workbuddy-switch/) | 読み取り専用。アカウントや利用量はすべて架空のデータ |
+| **オンラインデモ** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | 読み取り専用。アカウントや利用量はすべて架空のデータ |
 
 > npm パッケージは未公開のため `npm i -g` ではインストールできません。webui は下記のソースビルドをご利用ください。
 >
@@ -212,10 +212,10 @@ flowchart TB
 
 | プラットフォーム | インストーラー | インストール |
 | --- | --- | --- |
-| macOS Apple Silicon（arm64） | `BuddySwitch_<バージョン>_aarch64.dmg` | DMG を開き `BuddySwitch.app` を「アプリケーション」へ |
-| macOS Intel（x86_64） | `BuddySwitch_<バージョン>_x86_64.dmg` | 同上 |
-| Windows x64 | `BuddySwitch_<バージョン>_x64-setup.exe` | インストーラーを実行 |
-| Linux x64 | `BuddySwitch_<バージョン>_amd64.deb` / `.AppImage` | `.deb` を導入、または AppImage に実行権限を付けて起動 |
+| macOS Apple Silicon（arm64） | `AccSwitch_<バージョン>_aarch64.dmg` | DMG を開き `AccSwitch.app` を「アプリケーション」へ |
+| macOS Intel（x86_64） | `AccSwitch_<バージョン>_x86_64.dmg` | 同上 |
+| Windows x64 | `AccSwitch_<バージョン>_x64-setup.exe` | インストーラーを実行 |
+| Linux x64 | `AccSwitch_<バージョン>_amd64.deb` / `.AppImage` | `.deb` を導入、または AppImage に実行権限を付けて起動 |
 
 **webui（ソースからビルド）**：フロントエンド成果物は**コンパイル時**にサーバーへ埋め込まれる（`rust-embed`）ため、順序を守る必要があります。
 
@@ -237,7 +237,7 @@ buddy-switch version      # バージョン
 <summary><b>macOS：「開発元を検証できません」／切り替え時に権限エラー</b></summary>
 
 - 開発元を検証できない場合：Finder でアプリを Control キーを押しながらクリック →「開く」、または「システム設定 → プライバシーとセキュリティ」で「このまま開く」。
-- アカウント切り替えはクライアントの認証ファイルに書き込むため、「システム設定 → プライバシーとセキュリティ」の **アプリの管理**（または **フルディスクアクセス**）で BuddySwitch を許可し、アプリを再起動してください。設定画面の「権限チェック」でいつでも確認できます。
+- アカウント切り替えはクライアントの認証ファイルに書き込むため、「システム設定 → プライバシーとセキュリティ」の **アプリの管理**（または **フルディスクアクセス**）で AccSwitch を許可し、アプリを再起動してください。設定画面の「権限チェック」でいつでも確認できます。
 - webui 形態では、サービスを起動した端末プロセスの権限に従います。
 
 </details>
@@ -421,7 +421,7 @@ npm/                     # npm パッケージ（未公開）
 
 | | |
 | --- | --- |
-| 🐞 **不具合を報告** | バージョンとログのスクリーンショットを添えて [Issue を作成](https://github.com/NextAgentX/qoder-trae-workbuddy-switch/issues/new) |
+| 🐞 **不具合を報告** | バージョンとログのスクリーンショットを添えて [Issue を作成](https://github.com/NextAgentX/AccSwitch/issues/new) |
 | 🧩 **プラットフォームを追加** | 差異は `src/lib/platforms/registry.ts` と `product.rs` に一度だけ宣言すればよく、ページ側は変更不要です。 |
 | 🌍 **翻訳の修正** | UI 文言は `src/locales/domains/*.zh.ts` ↔ `*.en.ts` が対になっています。8 言語の README 校訂も歓迎です。 |
 | 📸 **スクリーンショット更新** | 1 コマンドでライト/ダークの全画像を撮り直せます（`scripts/gen-readme-shots.mjs` の冒頭コメント参照）。 |
@@ -468,11 +468,11 @@ npm/                     # npm パッケージ（未公開）
 
 ## Star 推移
 
-<a href="https://www.star-history.com/?repos=NextAgentX%2Fqoder-trae-workbuddy-switch&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=NextAgentX%2FAccSwitch&type=date&legend=top-left">
 
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=NextAgentX/qoder-trae-workbuddy-switch&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=NextAgentX/qoder-trae-workbuddy-switch&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=NextAgentX/qoder-trae-workbuddy-switch&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&legend=top-left" />
  </picture>
 </a>

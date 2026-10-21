@@ -13,7 +13,7 @@
 // 仓库改名成 `qoder-trae-workbuddy-switch` 之后，症状是**最阴的一类**：
 //   `GET /qoder-trae-workbuddy-switch/`            → 200（index.html 正常返回）
 //   `GET /trae-workbuddy-switch/assets/index-*.js` → 404
-//   ⇒ `#root` 永远没有子节点，浏览器只显示 `<title>Buddy Switch`
+//   ⇒ `#root` 永远没有子节点，浏览器只显示 `<title>AccSwitch`
 //   ⇒ 构建、部署、`deploy-pages` 三步全绿，没有任何一步会报错
 //
 // 换句话说：**它坏得完全静默**，只能靠人去点开线上地址才看得见。所以这里把

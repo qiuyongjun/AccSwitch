@@ -1,4 +1,4 @@
-//! buddy-switch CLI：npm 安装形态的入口（展示名 `Buddy Switch`）。
+//! buddy-switch CLI：npm 安装形态的入口（展示名 `AccSwitch`）。
 //!
 //! ```bash
 //! buddy-switch              # 启动本地服务 + 打开浏览器 webui
@@ -390,7 +390,7 @@ fn current_account_snapshot() -> Option<serde_json::Value> {
 fn print_status() {
     let current = current_account_snapshot();
     let running = process::is_workbuddy_running();
-    println!("Buddy Switch v{}", update::APP_VERSION);
+    println!("AccSwitch v{}", update::APP_VERSION);
     println!("WorkBuddy 运行中: {}", if running { "是" } else { "否" });
     match current {
         Some(c) => {
@@ -442,7 +442,7 @@ async fn main() {
     match cmd {
         "status" => print_status(),
         "version" | "--version" | "-V" => {
-            println!("Buddy Switch {}", env!("CARGO_PKG_VERSION"));
+            println!("AccSwitch {}", env!("CARGO_PKG_VERSION"));
         }
         // P15 · 客户端 hook 调用的入口（与桌面宿主 `src-tauri/src/main.rs` 同一份实现）。
         // 走 core 的 `try_run_hook_cli` ⇒ 两个宿主的 hook 行为不可能分叉。
@@ -470,7 +470,7 @@ async fn serve(args: &[String]) {
         }
     };
 
-    println!("Buddy Switch v{}", update::APP_VERSION);
+    println!("AccSwitch v{}", update::APP_VERSION);
     println!("webui: http://{addr}");
     // ★ 对外监听时**必须明说**：webui 能读写账号库与网关 Key（见 docs/guides/DOCKER.md 的安全段），
     // 默认只绑回环正是为了「不声不响地把管理面暴露出去」这件事不发生。

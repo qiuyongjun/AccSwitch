@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "BuddySwitch",
+  "productName": "AccSwitch",
   "version": "2026.10.201902",
   "identifier": "com.trae.workbuddy.switch.app",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Buddy Switch",
+        "title": "AccSwitch",
         "width": 1000,
         "height": 720,
         "minWidth": 720,
@@ -50,9 +50,9 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgzNTE1NDY4Q0RBNDE2QTQKUldTa0ZxVE5hRlJSZzUvTVlOWlF5UklxTVE3MXkvL1E3OVZTRHNQVzdkZ0k2MHcwWkVXdjdzVFAK",
       "endpoints": [
-        "https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest/download/latest.json",
-        "https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest/download/latest-{{target}}-{{arch}}.json",
-        "https://github.com/NextAgentX/qoder-trae-workbuddy-switch/releases/latest/download/latest-macos-{{arch}}.json"
+        "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest.json",
+        "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest-{{target}}-{{arch}}.json",
+        "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest-macos-{{arch}}.json"
       ]
     }
   }

@@ -231,7 +231,7 @@ impl GatewayError {
             // 真正要做的是让该账号在本应用里重新取得**明文**凭据。
             GatewayError::EncryptedCredential { region } => format!(
                 "选中的{}账号凭据是 WorkBuddy 加密信封态，网关无法用它发起请求；\
-                 请在 Buddy Switch 中对该账号重新登录（或 OAuth 扫码添加）以取得明文凭据",
+                 请在 AccSwitch 中对该账号重新登录（或 OAuth 扫码添加）以取得明文凭据",
                 region_display(*region)
             ),
             GatewayError::RegionMismatch(mismatch) => mismatch.message(),

@@ -156,7 +156,7 @@ mod tests {
             "登录成功",
             &[
                 "账号 [Jackey] 登录成功".to_string(),
-                "账号已添加到 Buddy Switch 的 Trae CN 账号库，可关闭此页面返回应用。".to_string(),
+                "账号已添加到 AccSwitch 的 Trae CN 账号库，可关闭此页面返回应用。".to_string(),
             ],
         );
 

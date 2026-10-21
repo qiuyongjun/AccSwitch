@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  BuddySwitch 一键打包 —— Windows NSIS 安装包（.exe）。
+  AccSwitch 一键打包 —— Windows NSIS 安装包（.exe）。
 
 .DESCRIPTION
   一条命令走完「打版本戳 → 编译 → 打包 → 收集产物」全流程，产物落到 deliverables/。
@@ -77,7 +77,7 @@ $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Set-Location -LiteralPath $Root
 
 Write-Host ""
-Write-Host "BuddySwitch Windows 打包" -ForegroundColor Green
+Write-Host "AccSwitch Windows 打包" -ForegroundColor Green
 Write-Host ("仓库: {0}" -f $Root) -ForegroundColor DarkGray
 Write-Host ("模式: {0}" -f $Mode) -ForegroundColor DarkGray
 Write-Host ""

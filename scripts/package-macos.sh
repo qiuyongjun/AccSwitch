@@ -1,6 +1,6 @@
 #!/bin/bash
 # package-macos.sh
-# BuddySwitch 本地一键打包 —— macOS .app（含 fix-app 补 dist + 签名）
+# AccSwitch 本地一键打包 —— macOS .app（含 fix-app 补 dist + 签名）
 #
 # 用法：
 #   sh scripts/package-macos.sh                 # release .app
@@ -12,7 +12,7 @@
 #   - 检测 ~/.buddy-switch/buddy-switch-updater.key：有则生成 updater 签名产物；
 #     无则临时关掉 createUpdaterArtifacts，仅打本地 .app
 #   - 构建后执行 scripts/fix-app.sh（把前端 dist 补进 .app 并用证书/adhoc 签名，供 TCC 识别）
-#   - 产物复制到 deliverables/BuddySwitch.app
+#   - 产物复制到 deliverables/AccSwitch.app
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -54,13 +54,13 @@ fi
 # ---------- 4. 收集产物 ----------
 echo "[4/4] 收集产物 ..."
 VER="$(grep '"version"' package.json | head -1 | sed -E 's/.*"([0-9.]+)".*/\1/')"
-SRC="src-tauri/target/$MODE/bundle/macos/BuddySwitch.app"
-[ -d "$SRC" ] || SRC="target/$MODE/bundle/macos/BuddySwitch.app"
+SRC="src-tauri/target/$MODE/bundle/macos/AccSwitch.app"
+[ -d "$SRC" ] || SRC="target/$MODE/bundle/macos/AccSwitch.app"
 if [ -d "$SRC" ]; then
   mkdir -p deliverables
-  rm -rf "deliverables/BuddySwitch.app"
-  cp -R "$SRC" "deliverables/BuddySwitch.app"
-  echo "[ok] 已复制 -> deliverables/BuddySwitch.app (v$VER, $MODE)"
+  rm -rf "deliverables/AccSwitch.app"
+  cp -R "$SRC" "deliverables/AccSwitch.app"
+  echo "[ok] 已复制 -> deliverables/AccSwitch.app (v$VER, $MODE)"
 else
   echo "[warn] 未找到 $SRC，请检查构建输出。"
 fi

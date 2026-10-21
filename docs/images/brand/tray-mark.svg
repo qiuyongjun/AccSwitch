@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>AccSwitch tray mark</title>
+  <desc>单色托盘剪影：三张叠放账户卡，前卡内人像镂空，与 App 图标同一套几何、去掉底板。</desc>
+  <defs>
+    <!-- 前卡用实心白 + 人像镂空：菜单栏 template 只取 alpha，镂空处露出背景形成对比 -->
+    <mask id="card-hole" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect x="0" y="0" width="1024" height="1024" fill="#FFFFFF"/>
+      <g fill="#000000">
+        <circle cx="512" cy="424" r="58"/>
+        <path d="M 512 498 C 574 498 620 532 630 592 C 631 604 632 614 632 622 C 632 636 623 646 611 646 L 413 646 C 401 646 392 636 392 622 C 392 614 393 604 394 592 C 404 532 450 498 512 498 Z"/>
+      </g>
+    </mask>
+  </defs>
+  <g transform="translate(56 36)">
+    <g fill="none" stroke="#FFFFFF" stroke-width="64">
+      <g transform="translate(-56 -32) rotate(-13 512 508)" opacity=".55">
+        <rect x="302" y="258" width="420" height="500" rx="56"/>
+      </g>
+      <g transform="translate(-28 -16) rotate(-6.5 512 508)" opacity=".80">
+        <rect x="302" y="258" width="420" height="500" rx="56"/>
+      </g>
+    </g>
+    <rect x="302" y="258" width="420" height="500" rx="56" fill="#FFFFFF" mask="url(#card-hole)"/>
+  </g>
+</svg>

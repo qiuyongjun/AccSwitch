@@ -1,6 +1,6 @@
 # Docker 部署
 
-把 Buddy Switch 的**服务端形态**（webui + API 网关）跑在容器里。
+把 AccSwitch 的**服务端形态**（webui + API 网关）跑在容器里。
 
 ---
 

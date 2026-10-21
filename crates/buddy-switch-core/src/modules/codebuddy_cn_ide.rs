@@ -491,7 +491,7 @@ foreach ($hive in $unHives) {
     if (-not $dn) { return }
     $dnl = [string]$dn
     # 排除本工具自己的卸载项；其它工具的名字不列举（见 process::is_self_image_name）。
-    if ($dnl -match 'buddy-switch|BuddySwitch') { return }
+    if ($dnl -match 'buddy-switch|BuddySwitch|accswitch') { return }
     if ($dnl -notmatch 'CodeBuddy CN') { return }
     $icon = $_.GetValue('DisplayIcon')
     if ($icon) { $out += [string]$icon }
@@ -571,7 +571,10 @@ fn windows_cn_exe_path_resolved() -> Option<PathBuf> {
 fn linux_cmdline_is_codebuddy_cn(cmdline: &str) -> bool {
     let lower = cmdline.to_ascii_lowercase();
     // `buddy-switch` 按子串匹配，已覆盖所有以它结尾的同族名字（无需再列第二个）。
-    if lower.contains("buddy-switch") || lower.contains("buddyswitch") {
+    if lower.contains("accswitch")
+        || lower.contains("buddy-switch")
+        || lower.contains("buddyswitch")
+    {
         return false;
     }
     if lower.contains("crashpad") || lower.contains("--type=") {
@@ -1282,6 +1285,7 @@ mod tests {
             "/usr/bin/codebuddy-cn"
         )));
         assert!(!linux_cmdline_is_codebuddy_cn("/usr/bin/workbuddy-switch"));
+        assert!(!linux_cmdline_is_codebuddy_cn("/usr/bin/accswitch"));
         assert!(!linux_cmdline_is_codebuddy_cn(
             "/opt/codebuddy-cn/codebuddy-cn --type=gpu-process"
         ));

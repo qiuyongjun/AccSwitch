@@ -11,8 +11,8 @@ if [ ! -d dist ]; then
 fi
 
 for profile in debug release; do
-  APP="target/$profile/bundle/macos/BuddySwitch.app"
-  [ -d "$APP" ] || APP="src-tauri/target/$profile/bundle/macos/BuddySwitch.app"  # src-tauri 布局
+  APP="target/$profile/bundle/macos/AccSwitch.app"
+  [ -d "$APP" ] || APP="src-tauri/target/$profile/bundle/macos/AccSwitch.app"  # src-tauri 布局
   if [ -d "$APP" ]; then
     rm -rf "$APP/Contents/Resources/dist" 2>/dev/null || true
     cp -R dist "$APP/Contents/Resources/dist"

@@ -354,7 +354,7 @@ export const en = {
   "trae.page.settings.updatedAt": "Updated {time}",
   "trae.page.settings.restore": "Restore",
   "trae.page.settings.delete": "Delete",
-  "trae.page.settings.profilesFooter": "Snapshots live in Buddy Switch's own data directory, separate from the Trae client directory, so deleting one never touches the sign-in state currently in use.",
+  "trae.page.settings.profilesFooter": "Snapshots live in AccSwitch's own data directory, separate from the Trae client directory, so deleting one never touches the sign-in state currently in use.",
   "trae.page.settings.restoreTitle": "Restore this snapshot",
   "trae.page.settings.restoreBodyLead": "This overwrites the Trae client's current sign-in state with the “{slot}” snapshot. ",
   "trae.page.settings.restoreBodyStrong": "The current sign-in state is not saved automatically",

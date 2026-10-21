@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>AccSwitch</title>
+  <desc>账户叠卡：三张叠放的账户卡 + 薄荷绿人像，无底板，靠深色描边在浅色/深色背景上勾出轮廓。</desc>
+  <defs>
+    <linearGradient id="ink" x1="512" y1="340" x2="512" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="card-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#0F172A" flood-opacity=".18"/>
+    </filter>
+  </defs>
+  <!-- 无底板：叠卡整体放大 1.48 并居中，保证 30px 侧栏里仍有足够体量 -->
+  <g transform="translate(512 512) scale(1.48) translate(-464 -480)">
+    <g filter="url(#card-shadow)">
+      <g transform="translate(-56 -32) rotate(-13 512 508)">
+        <rect x="302" y="258" width="420" height="500" rx="56" fill="#C7D2DE" stroke="#0F172A" stroke-opacity=".55" stroke-width="18"/>
+      </g>
+      <g transform="translate(-28 -16) rotate(-6.5 512 508)">
+        <rect x="302" y="258" width="420" height="500" rx="56" fill="#E4EAF1" stroke="#0F172A" stroke-opacity=".60" stroke-width="18"/>
+      </g>
+      <rect x="302" y="258" width="420" height="500" rx="56" fill="#FFFFFF" stroke="#0F172A" stroke-opacity=".88" stroke-width="20"/>
+    </g>
+    <g fill="url(#ink)">
+      <circle cx="512" cy="424" r="58"/>
+      <path d="M 512 498 C 574 498 620 532 630 592 C 631 604 632 614 632 622 C 632 636 623 646 611 646 L 413 646 C 401 646 392 636 392 622 C 392 614 393 604 394 592 C 404 532 450 498 512 498 Z"/>
+    </g>
+  </g>
+</svg>

@@ -16,9 +16,9 @@ use tauri_plugin_opener::OpenerExt;
 
 const TRAY_ID: &str = "main-menu-bar";
 const MAIN_WINDOW_LABEL: &str = "main";
-/// 展示名统一为 `Buddy Switch`（带空格）；构建标识仍是 `BuddySwitch`
-/// （productName / .app / 安装包文件名），两者刻意不同名，详见 README 的命名约定。
-const DEFAULT_TOOLTIP: &str = "Buddy Switch";
+/// 展示名统一为 `AccSwitch`；构建标识仍是 `AccSwitch`
+/// （productName / .app / 安装包文件名）。
+const DEFAULT_TOOLTIP: &str = "AccSwitch";
 const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
 
 /// 系统自启注册的启动参数：仅携带该精确参数的启动进入静默托盘模式。
@@ -714,10 +714,10 @@ mod tests {
     #[test]
     fn app_bundle_path_from_packaged_exe() {
         use std::path::Path;
-        let exe = Path::new("/Applications/BuddySwitch.app/Contents/MacOS/buddy-switch-rust");
+        let exe = Path::new("/Applications/AccSwitch.app/Contents/MacOS/buddy-switch-rust");
         assert_eq!(
             super::app_bundle_path_from_exe(exe),
-            Some(Path::new("/Applications/BuddySwitch.app"))
+            Some(Path::new("/Applications/AccSwitch.app"))
         );
     }
 
@@ -730,7 +730,7 @@ mod tests {
         ))
         .is_none());
         assert!(super::app_bundle_path_from_exe(Path::new(
-            "/Applications/BuddySwitch.app/Contents/Resources/icon.icns"
+            "/Applications/AccSwitch.app/Contents/Resources/icon.icns"
         ))
         .is_none());
     }

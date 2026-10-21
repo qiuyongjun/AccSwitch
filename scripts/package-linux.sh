@@ -1,6 +1,6 @@
 #!/bin/bash
 # package-linux.sh
-# BuddySwitch 本地一键打包 —— Linux .deb + AppImage
+# AccSwitch 本地一键打包 —— Linux .deb + AppImage
 #
 # 用法：
 #   sh scripts/package-linux.sh                 # release .deb + AppImage

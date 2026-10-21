@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * BuddySwitch 打包版本戳 —— **唯一实现**。
+ * AccSwitch 打包版本戳 —— **唯一实现**。
  *
  * ## 为什么是 Node 而不是 bash
  *

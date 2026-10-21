@@ -1,16 +1,16 @@
 /**
- * 设置页 **9 项子导航**（P7 §3.9）—— 数据驱动。
+ * 设置页 **7 项子导航** —— 数据驱动。
  *
  * ## 为什么数据驱动
  *
- * 9 项的名字 / 图标 / 顺序只在这里声明一次，页面按 `active` 渲染对应分区。
+ * 7 项的名字 / 图标 / 顺序只在这里声明一次，页面按 `active` 渲染对应分区。
  * 加一项 = 加一行（§4.2 同一思路），不需要在页面里再写一遍 `if`。
  *
- * ## 9 项从哪来（§3.9）
+ * ## 为什么没有「通用」与「备份与恢复」
  *
- * 设置的真实内容是 **WB 7 组 + Trae 10 组**，6 项装不下，逐项核对后收敛为 9 项：
- * `通用 / 账号与登录 / 签到与积分 / 网关 / 计划任务 / 客户端 / 权限与诊断 / 日志 / 备份与恢复`。
- * 其中「备份与恢复」（第 9 项）是 P7 新增。
+ * 这两项对所有客户端生效，不属于某个客户端的设置页；它们统一放在顶栏 ⚙
+ * 「应用设置」抽屉里，点击打开弹框（`global-settings-dialogs.tsx`）。
+ * 子导航只保留与当前客户端相关的分区，避免同一份全局设置在每个客户端页重复出现。
  *
  * ## 为什么不做成「可折叠 + 记住位置」
  *
@@ -24,30 +24,28 @@
  * 原型只有一个 `viewSettings`（`buddy-switch-prototype.html:3230`），靠
  * `r.cap && p.capabilities.includes(r.cap)` 做平台差异 ⇒ **子导航表本身没有平台分支**。
  * 本仓照此办理：WorkBuddy 设置页与 Trae 设置页**接同一个 `SETTINGS_SUBNAV`**，
- * 各自渲染自己的内容（§3.9 归位表：Trae 的 10 组已全部落进这 9 项）。
+ * 各自渲染自己的内容（§3.9 归位表：Trae 的 10 组已全部落进这 7 项；
+ * 其中通用与备份属于全局设置，见 `global-settings-dialogs.tsx`）。
  * 若某天真出现「无处安放」的项，再按 D12 走平台专属子项，而不是在这里写 `if`。
  */
 
 import { SideSubnav, type SideSubnavItem } from "@/components/shell/side-subnav";
 import { useT } from "@/lib/i18n";
 
-/** 9 个设置分区的标识。 */
+/** 7 个设置分区的标识。 */
 export type SettingsSubnavId =
-  | "general"
   | "account"
   | "checkin"
   | "gateway"
   | "schedule"
   | "client"
   | "diagnostics"
-  | "logs"
-  | "backup";
+  | "logs";
 
 export type SettingsSubnavItem = SideSubnavItem<SettingsSubnavId>;
 
 /** 唯一的一份子导航表（顺序即展示顺序）。 */
 export const SETTINGS_SUBNAV: readonly SettingsSubnavItem[] = [
-  { id: "general", labelKey: "settings.subnav.general" },
   { id: "account", labelKey: "settings.subnav.account" },
   { id: "checkin", labelKey: "settings.subnav.checkin" },
   { id: "gateway", labelKey: "settings.subnav.gateway" },
@@ -55,12 +53,13 @@ export const SETTINGS_SUBNAV: readonly SettingsSubnavItem[] = [
   { id: "client", labelKey: "settings.subnav.client" },
   { id: "diagnostics", labelKey: "settings.subnav.diagnostics" },
   { id: "logs", labelKey: "settings.subnav.logs" },
-  { id: "backup", labelKey: "settings.subnav.backup" },
 ];
 
-/** 从 URL 段解析设置分区（非法值 fail-closed 回 `general`，不把任意串塞进 state）。 */
+/** 从 URL 段解析设置分区（非法值 fail-closed 回第一项，不把任意串塞进 state）。 */
 export function parseSettingsSubnav(raw: string | null): SettingsSubnavId {
-  return SETTINGS_SUBNAV.some((item) => item.id === raw) ? (raw as SettingsSubnavId) : "general";
+  return SETTINGS_SUBNAV.some((item) => item.id === raw)
+    ? (raw as SettingsSubnavId)
+    : SETTINGS_SUBNAV[0].id;
 }
 
 interface Props {

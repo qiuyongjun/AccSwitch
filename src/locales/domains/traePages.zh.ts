@@ -369,7 +369,7 @@ export const zh = {
   "trae.page.settings.updatedAt": "更新于 {time}",
   "trae.page.settings.restore": "恢复",
   "trae.page.settings.delete": "删除",
-  "trae.page.settings.profilesFooter": "快照保存在 Buddy Switch 自己的数据目录下，与 Trae 客户端目录分离，因此删除快照不会影响正在使用的登录态。",
+  "trae.page.settings.profilesFooter": "快照保存在 AccSwitch 自己的数据目录下，与 Trae 客户端目录分离，因此删除快照不会影响正在使用的登录态。",
   "trae.page.settings.restoreTitle": "恢复到该快照",
   "trae.page.settings.restoreBodyLead": "将用「{slot}」的快照覆盖 Trae 客户端当前的登录态。",
   "trae.page.settings.restoreBodyStrong": "当前登录态不会被自动保存",

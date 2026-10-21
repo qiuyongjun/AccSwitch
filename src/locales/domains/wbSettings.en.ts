@@ -111,7 +111,7 @@ export const en = {
   "wbSettings.permission.okMsg": "The auth directory is writable; permissions are fine",
   "wbSettings.permission.guideTitle": "How to grant access (drag and drop):",
   "wbSettings.permission.guideStep1": "Click \"Open Full Disk Access\" above",
-  "wbSettings.permission.guideStep2": "Then click \"Reveal in Finder\" to open the folder containing BuddySwitch",
+  "wbSettings.permission.guideStep2": "Then click \"Reveal in Finder\" to open the folder containing AccSwitch",
   "wbSettings.permission.guideStep3Pre": "Drag",
   "wbSettings.permission.guideStep3Mid": "straight from Finder",
   "wbSettings.permission.guideStep3Drag": "into",
@@ -266,15 +266,6 @@ export const en = {
   "wbSettings.update.downloadingBusy": "Downloading",
   "wbSettings.update.restartLater": "Restart later",
   "wbSettings.update.openDownloadPage": "Open download page",
-  "wbSettings.update.errorProxyHint": "If this machine needs a proxy, set it in App settings → Update proxy and retry; you can also open the download page and install manually.",
+  "wbSettings.update.errorProxyHint": "If this machine needs a proxy, set it in App settings → General settings → Update proxy and retry; you can also open the download page and install manually.",
   "wbSettings.update.viewFullNotes": "View full release notes",
-
-  // ---- Donate dialog ----
-  "wbSettings.donate.trigger": "Buy the author a drink",
-  "wbSettings.donate.title": "Support Buddy Switch",
-  "wbSettings.donate.desc": "Buddy Switch is free and open source. If it helped you, you can scan the code to buy the author a drink.",
-  "wbSettings.donate.wechat": "WeChat Pay",
-  "wbSettings.donate.alipay": "Alipay",
-  "wbSettings.donate.qrAlt": "{name} QR code",
-  "wbSettings.donate.repoHome": "Project home",
 };

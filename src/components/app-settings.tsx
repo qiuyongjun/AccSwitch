@@ -57,12 +57,15 @@ import { useAccountsStore } from "@/stores/accounts";
  */
 
 /**
- * 版式变体 —— 同一份内容有两种出口（原型里也是两处渲染）：
+ * 版式变体 —— 同一份内容有两种排布：
  *
  * - `card`（默认）：设置页的 `<section class="card">`，标题在 `.card-head` 里。
- * - `plain`：顶栏齿轮抽屉的 `.dsec`，标题是 11.5px muted 的 `h4`，行直接贴抽屉底色。
+ * - `plain`：无卡片外壳的平铺分组，标题是 11.5px muted 的 `h4`，行直接贴容器底色。
  *
- * ★ 用参数而不是复制一份组件：这五块**含取数**（`getGithubConfig` / `getLaunchAtLoginEnabled`），
+ * 当前唯一出口是顶栏 ⚙「应用设置」→「通用设置」弹框，用默认 `card`；`plain` 分支
+ * 已无调用方（原顶栏抽屉直出设置时使用）。
+ *
+ * ★ 用参数而不是复制一份组件：这些块**含取数**（`getGithubConfig` / `getLaunchAtLoginEnabled`），
  * 复制一份就会长成两份会各自漂移的实现 —— 正是本模块当初要消灭的病。
  */
 export type AppSettingsVariant = "card" | "plain";
@@ -677,16 +680,13 @@ function ScopeVisibilityCard() {
 }
 
 /**
- * 五个应用级设置块，**门禁与原先设置页逐条对齐**。
+ * 六个应用级设置块，**门禁与原先设置页逐条对齐**。
  *
- * 门禁必须留在这里而不是交给调用方：本模块同时被设置页与顶栏 ⚙「应用设置」抽屉引用，
- * 把判断写在页面上会让两条路径各写一遍 —— 这正是当初 `settings-primitives`
- * 出现漂移的同一种病。
+ * 门禁必须留在这里而不是交给调用方：本模块现在由顶栏 ⚙「应用设置」抽屉里的
+ * 「通用设置」弹框渲染（`global-settings-dialogs.tsx`）。把判断写在调用方会让
+ * 后续新增出口各写一遍 —— 这正是当初 `settings-primitives` 出现漂移的同一种病。
  *
  * 顺序把**语言放在最前**：它改的是其余所有文案的语言，用户在找「设置」时最可能先要它。
- *
- * ★ `variant` 由调用方给：设置页传 `card`（默认），抽屉传 `plain`。**内容只有一份**，
- * 两个出口不会各长一套。
  */
 export function AppSettingsGroups({ variant = "card" }: { variant?: AppSettingsVariant } = {}) {
   return (
@@ -695,8 +695,8 @@ export function AppSettingsGroups({ variant = "card" }: { variant?: AppSettingsV
       <AppearanceCard variant={variant} />
       <ShortcutsCard variant={variant} />
       {api.isDesktop() || api.isDemoMode() ? <StartupCard variant={variant} /> : null}
-      {api.isWebui() && !api.isDemoMode() ? null : <UpdateCard variant={variant} />}
       <ScopeVisibilityCard />
+      {api.isWebui() && !api.isDemoMode() ? null : <UpdateCard variant={variant} />}
     </>
   );
 }

@@ -7,13 +7,13 @@
  *
  * 译文约定（全仓一致）：
  * - 术语与客户端一致：account / check-in / credits / token / gateway / profile。
- * - **产品名不译**（WorkBuddy / Trae / Buddy Switch）。
+ * - **产品名不译**（WorkBuddy / Trae / AccSwitch）。
  * - 中文的顿号、书名号按英文习惯改为逗号与引号 —— 照搬标点是最常见的「机翻味」。
  * - 语态用祈使/陈述，不堆砌 Please；长度尽量控制在中文的两倍内，避免挤破 220px 侧栏。
  */
 export const en = {
   // ---- App shell / sidebar ----
-  "app.name": "Buddy Switch",
+  "app.name": "AccSwitch",
   "app.demoBadge": "Demo",
   "product.workbuddy": "WorkBuddy",
   /* issue #44: "TraeWork" is the retired legacy program line (each region now ships a single
@@ -126,8 +126,13 @@ export const en = {
   "undo.undone": "Restored",
   "undo.failedTitle": "Undo failed",
 
-  // ---- App-level settings (settings page "General" + top-bar gear drawer; one implementation, two shells) ----
+  // ---- App-level settings (global entries in the top-bar gear drawer + their dialogs) ----
+  "appSettings.drawer.global": "Global settings",
   "appSettings.drawer.more": "More",
+  "appSettings.global.general": "General settings",
+  "appSettings.global.generalDesc": "Language, appearance, shortcuts, startup and updates",
+  "appSettings.global.backup": "Backup & restore",
+  "appSettings.global.backupDesc": "Export, import and automatic backups",
 
   "appSettings.appearance.title": "Appearance",
   "appSettings.appearance.theme.label": "Theme",
@@ -184,9 +189,8 @@ export const en = {
   /* The settings entry opens the notes dialog first instead of downloading (see UPDATE-NOTES-ARCH.md). */
   "appSettings.update.viewNotes": "View release notes",
 
-  // ---- Settings sub-nav (P7 §3.9: 9 items, the 9th is "Backup & restore") ----
+  // ---- Settings sub-nav (§3.9: 7 client sections; General / Backup are global, in the gear drawer dialogs) ----
   "settings.subnav.aria": "Settings sections",
-  "settings.subnav.general": "General",
   "settings.subnav.account": "Accounts & sign-in",
   "settings.subnav.checkin": "Check-in & credits",
   "settings.subnav.gateway": "Gateway",
@@ -194,7 +198,6 @@ export const en = {
   "settings.subnav.client": "Client",
   "settings.subnav.diagnostics": "Permissions & diagnostics",
   "settings.subnav.logs": "Logs",
-  "settings.subnav.backup": "Backup & restore",
 
   // ---- Gateway workspace subnav (PLAN §3.9: 6 items, shared by both product lines) ----
   "gateway.subnav.aria": "Gateway sections",

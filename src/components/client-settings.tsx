@@ -22,7 +22,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -64,8 +63,9 @@ import { cn } from "@/lib/utils";
  * 1. **路径由后端唯一决定**：槽位路径来自 `list_client_settings_slots`，前端**不拼路径**。
  * 2. **写前判进程**：客户端运行中写入会被其内存态覆盖 ⇒ 后端直接拒绝（错误码
  *    `client.settings.process_running`），前端只如实呈现，不做「仍尝试写入」。
- * 3. **格式保持 + 自动备份**：键值编辑走点号路径 patch，后端只改目标键那一行并在写前
- *    备份；本面板**不提供**「整文件覆盖」入口（那会抹掉用户手改的排版）。
+ * 3. **格式保持 + 自动备份**：顶层值直接就地编辑，保存仍走点号路径 patch；后端按原
+ *    排版只改目标键并在写前备份；本面板**不提供**「整文件覆盖」入口
+ *    （那会抹掉用户手改的排版）。
  *
  * ## 形态与 `SkillManagerDialog` 同构
  *
@@ -84,13 +84,20 @@ export function ClientSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
-        <DialogHeader>
+      {/* 页头固定、正文滚到底（同全局设置弹框）：避免内层滚动区下方留白，
+          也避免正文把弹框撑出视口后底部被裁。 */}
+      <DialogContent
+        flush
+        className="grid max-h-[86vh] grid-rows-[auto_minmax(0,1fr)] sm:max-w-3xl"
+      >
+        <DialogHeader className="border-b border-border px-5 py-4 pr-12">
           <DialogTitle>{t("clientSettings.title")}</DialogTitle>
           <DialogDescription>{t("clientSettings.description")}</DialogDescription>
         </DialogHeader>
-        {/* Dialog 内容默认卸载 ⇒ 面板内的取数只在打开时发生（懒挂载）。 */}
-        <ClientSettingsPanel />
+        <div className="min-h-0 overflow-y-auto px-5 py-4">
+          {/* Dialog 内容默认卸载 ⇒ 面板内的取数只在打开时发生（懒挂载）。 */}
+          <ClientSettingsPanel />
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -98,6 +105,27 @@ export function ClientSettingsDialog({
 
 /** 面板内的一次性提示（写入 / 恢复 / 比对的结果与错误）。 */
 type Notice = { type: "ok" | "err"; text: string };
+
+/** 顶层值一律完整展开：对象/数组缩进，标量保持单行 JSON 原文。 */
+function prettyRawValue(value: unknown, compact: string): string {
+  return typeof value === "object" && value !== null
+    ? JSON.stringify(value, null, 2)
+    : compact;
+}
+
+type ParsedRawValue =
+  | { ok: true; value: unknown }
+  | { ok: false; reason: string };
+
+/** 空文本按旧编辑器语义视为空字符串；其余必须是合法 JSON。 */
+function parseRawValue(text: string): ParsedRawValue {
+  if (text.trim() === "") return { ok: true, value: "" };
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch (cause) {
+    return { ok: false, reason: api.asError(cause) };
+  }
+}
 
 /** 槽位展示名：后端只给 i18n 键（`displayKey`），文案在词表里。 */
 function slotLabel(t: ReturnType<typeof useT>, slot: { displayKey: string }): string {
@@ -135,9 +163,15 @@ function ClientSettingsPanel() {
   const [readError, setReadError] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
 
-  const [editKey, setEditKey] = useState("");
-  const [editValue, setEditValue] = useState("");
-  const [saving, setSaving] = useState(false);
+  /** 未保存的行内草稿（键 → JSON 文本）；缺省表示沿用文件里的值。 */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  /** 行内保存结果（成功/失败都贴在对应键下方，避免提示跑到弹窗底部看不见）。 */
+  const [rowNotice, setRowNotice] = useState<{
+    key: string;
+    type: "ok" | "err";
+    text: string;
+  } | null>(null);
 
   const [backups, setBackups] = useState<ClientSettingsBackupsResponse | null>(null);
   const [backupsLoading, setBackupsLoading] = useState(false);
@@ -193,9 +227,9 @@ function ClientSettingsPanel() {
         const next = await api.readClientSettings(slot);
         if (seq !== requestSeq.current) return;
         setRead(next);
-        // 编辑框预填第一个键，省一次输入；值留空由用户填。
-        setEditKey(next.keyOrder[0] ?? "");
-        setEditValue("");
+        // 新数据到达即丢弃旧草稿，避免把上一份文件的行内修改带过去。
+        setDrafts({});
+        setRowNotice(null);
       } catch (cause) {
         if (seq !== requestSeq.current) return;
         setRead(null);
@@ -227,44 +261,43 @@ function ClientSettingsPanel() {
     return keys.map((key) => ({ key, value: obj[key] }));
   }, [read]);
 
-  async function onSave() {
-    if (!selected || saving) return;
-    const key = editKey.trim();
-    if (!key) {
-      setNotice({ type: "err", text: t("clientSettings.edit.emptyKey") });
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = editValue.trim() === "" ? "" : JSON.parse(editValue);
-    } catch (cause) {
-      setNotice({
+  async function saveValue(key: string, draftText: string) {
+    if (!selected || savingKey) return;
+    const parsed = parseRawValue(draftText);
+    if (!parsed.ok) {
+      setRowNotice({
+        key,
         type: "err",
-        text: t("clientSettings.edit.invalidJson", { message: api.asError(cause) }),
+        text: t("clientSettings.edit.invalidJson", { message: parsed.reason }),
       });
       return;
     }
-    setSaving(true);
+    setSavingKey(key);
     setNotice(null);
+    setRowNotice(null);
     try {
-      const result = await api.patchClientSettings(selected, { [key]: parsed });
+      const result = await api.patchClientSettings(selected, { [key]: parsed.value });
+      let message: string;
       if (!result.changed) {
-        setNotice({ type: "ok", text: t("clientSettings.edit.unchanged") });
+        message = t("clientSettings.edit.unchanged");
       } else {
         const backupText = result.backup
           ? t("clientSettings.edit.backup", { path: result.backup })
           : t("clientSettings.edit.noBackup");
-        setNotice({
-          type: "ok",
-          text: `${t("clientSettings.edit.done", { keys: result.keys.join(", ") })} · ${backupText}`,
-        });
+        message = `${t("clientSettings.edit.done", { keys: result.keys.join(", ") })} · ${backupText}`;
       }
       await loadRead(selected);
       await loadBackups(selected);
+      // 放在重载之后：`loadRead` 会清空行内提示。
+      setRowNotice({ key, type: "ok", text: message });
     } catch (cause) {
-      setNotice({ type: "err", text: t("clientSettings.edit.failed", { message: api.asError(cause) }) });
+      setRowNotice({
+        key,
+        type: "err",
+        text: t("clientSettings.edit.failed", { message: api.asError(cause) }),
+      });
     } finally {
-      setSaving(false);
+      setSavingKey(null);
     }
   }
 
@@ -319,7 +352,7 @@ function ClientSettingsPanel() {
   const running = read?.running ?? false;
 
   return (
-    <div className="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
+    <div className="space-y-4">
       {/* webui 直连远程服务端：明确标注「操作的是服务端机器上的文件」。 */}
       {api.isWebui() && !api.isDemoMode() ? (
         <Alert variant="warning">
@@ -421,7 +454,7 @@ function ClientSettingsPanel() {
         <Skeleton className="h-40 w-full rounded-xl" />
       ) : read ? (
         <>
-          {/* 当前键值（顶层） */}
+          {/* 当前键值（顶层）：一律完整展开，就地编辑 */}
           <section className="min-w-0 space-y-2">
             <div className="flex items-center justify-between px-1">
               <h3 className="text-[13px] font-medium leading-5">{t("clientSettings.raw")}</h3>
@@ -429,32 +462,108 @@ function ClientSettingsPanel() {
                 {t("clientSettings.keys", { n: topLevel.length })}
               </span>
             </div>
+            <p className="px-1 text-xs leading-4 text-muted-foreground/75">
+              {t("clientSettings.raw.hint")}
+            </p>
             <Card className="gap-0 overflow-hidden rounded-xl py-0 shadow-none">
               {topLevel.length === 0 ? (
                 <p className="px-4 py-3 text-xs text-muted-foreground">
                   {t("clientSettings.keys", { n: 0 })}
                 </p>
               ) : (
-                topLevel.map((entry, index) => (
-                  <SettingsFieldRow
-                    key={entry.key}
-                    className={cn(index === topLevel.length - 1 && "border-b-0")}
-                    label={<span className="font-mono text-xs">{entry.key}</span>}
-                  >
-                    <button
-                      type="button"
-                      className="max-w-full truncate rounded px-1 font-mono text-xs text-muted-foreground hover:text-foreground"
-                      title={JSON.stringify(entry.value)}
-                      onClick={() => {
-                        // 点一行即把键预填进编辑器（值也一并带入，便于微调）。
-                        setEditKey(entry.key);
-                        setEditValue(JSON.stringify(entry.value));
-                      }}
+                topLevel.map((entry, index) => {
+                  const initialText = prettyRawValue(entry.value, JSON.stringify(entry.value));
+                  const valueText = drafts[entry.key] ?? initialText;
+                  const dirty = valueText !== initialText;
+                  const parsed = dirty ? parseRawValue(valueText) : null;
+                  const invalid = parsed !== null && !parsed.ok;
+                  const rowSaving = savingKey === entry.key;
+                  const result = rowNotice?.key === entry.key ? rowNotice : null;
+                  return (
+                    <SettingsFieldRow
+                      key={entry.key}
+                      stacked
+                      className={cn(index === topLevel.length - 1 && "border-b-0")}
+                      label={<span className="break-all font-mono text-xs">{entry.key}</span>}
                     >
-                      {JSON.stringify(entry.value)}
-                    </button>
-                  </SettingsFieldRow>
-                ))
+                      <div className="w-full min-w-0 space-y-1.5">
+                        <Textarea
+                          value={valueText}
+                          onChange={(event) => {
+                            setDrafts((prev) => ({ ...prev, [entry.key]: event.target.value }));
+                            setRowNotice((prev) => (prev?.key === entry.key ? null : prev));
+                          }}
+                          aria-label={entry.key}
+                          aria-invalid={invalid || undefined}
+                          className="min-h-9 resize-none rounded-lg border-border bg-muted/40 px-2.5 py-2 font-mono text-xs leading-5 shadow-none"
+                          spellCheck={false}
+                          autoComplete="off"
+                          disabled={savingKey !== null}
+                        />
+                        {parsed && !parsed.ok ? (
+                          <p className="text-xs leading-4 text-destructive">
+                            {t("clientSettings.edit.invalidJson", { message: parsed.reason })}
+                          </p>
+                        ) : null}
+                        {dirty || result ? (
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              {result ? (
+                                <p
+                                  className={cn(
+                                    "break-words text-xs leading-4",
+                                    result.type === "err" ? "text-destructive" : "text-success",
+                                  )}
+                                >
+                                  {result.text}
+                                </p>
+                              ) : null}
+                            </div>
+                            {dirty ? (
+                              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 px-2 text-xs text-muted-foreground"
+                                  disabled={savingKey !== null}
+                                  onClick={() => {
+                                    setDrafts((prev) => {
+                                      const next = { ...prev };
+                                      delete next[entry.key];
+                                      return next;
+                                    });
+                                    setRowNotice((prev) =>
+                                      prev?.key === entry.key ? null : prev,
+                                    );
+                                  }}
+                                >
+                                  {t("clientSettings.raw.reset")}
+                                </Button>
+                                <DemoAction>
+                                  <Button
+                                    size="sm"
+                                    className="h-7 px-2 text-xs"
+                                    disabled={invalid || savingKey !== null}
+                                    onClick={() => void saveValue(entry.key, valueText)}
+                                  >
+                                    {rowSaving ? (
+                                      <Loader2 className="animate-spin" />
+                                    ) : (
+                                      <Save />
+                                    )}
+                                    {rowSaving
+                                      ? t("clientSettings.edit.saving")
+                                      : t("clientSettings.edit.save")}
+                                  </Button>
+                                </DemoAction>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </SettingsFieldRow>
+                  );
+                })
               )}
             </Card>
             <div className="px-1">
@@ -472,56 +581,6 @@ function ClientSettingsPanel() {
                 {read.text}
               </pre>
             ) : null}
-          </section>
-
-          {/* 键值编辑（格式保持 + 写前备份由后端保证） */}
-          <section className="min-w-0 space-y-2">
-            <div className="px-1">
-              <h3 className="text-[13px] font-medium leading-5">{t("clientSettings.edit.title")}</h3>
-              <p className="mt-0.5 text-xs leading-4 text-muted-foreground/75">
-                {t("clientSettings.edit.hint")}
-              </p>
-            </div>
-            <Card className="min-w-0 gap-0 overflow-hidden rounded-xl p-4 shadow-none">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="min-w-0 space-y-1">
-                  <label htmlFor="client-settings-key" className="text-xs text-muted-foreground">
-                    {t("clientSettings.edit.key")}
-                  </label>
-                  <Input
-                    id="client-settings-key"
-                    value={editKey}
-                    onChange={(event) => setEditKey(event.target.value)}
-                    placeholder={t("clientSettings.edit.keyPlaceholder")}
-                    className="font-mono text-xs"
-                    spellCheck={false}
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="min-w-0 space-y-1">
-                  <label htmlFor="client-settings-value" className="text-xs text-muted-foreground">
-                    {t("clientSettings.edit.value")}
-                  </label>
-                  <Textarea
-                    id="client-settings-value"
-                    value={editValue}
-                    onChange={(event) => setEditValue(event.target.value)}
-                    placeholder={t("clientSettings.edit.valuePlaceholder")}
-                    className="min-h-9 font-mono text-xs"
-                    spellCheck={false}
-                    autoComplete="off"
-                  />
-                </div>
-              </div>
-              <div className="mt-3 flex justify-end">
-                <DemoAction>
-                  <Button size="sm" onClick={() => void onSave()} disabled={saving}>
-                    {saving ? <Loader2 className="animate-spin" /> : <Save />}
-                    {saving ? t("clientSettings.edit.saving") : t("clientSettings.edit.save")}
-                  </Button>
-                </DemoAction>
-              </div>
-            </Card>
           </section>
 
           {/* 备份点 + 恢复 */}

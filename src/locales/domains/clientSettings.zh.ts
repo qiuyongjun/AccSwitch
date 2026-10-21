@@ -21,7 +21,7 @@ export const zh = {
   "clientSettings.entry": "客户端设置",
   "clientSettings.title": "上游客户端设置",
   "clientSettings.description":
-    "统一托管被代理客户端自身的 settings.json：读取、键值编辑、备份、恢复与跨槽位比对。",
+    "统一托管被代理客户端自身的 settings.json：读取、就地编辑、备份、恢复与跨槽位比对。",
   "clientSettings.webuiNote":
     "当前为远程（webui）模式：读写的是服务端机器上的客户端配置文件，不是本机。",
 
@@ -62,26 +62,21 @@ export const zh = {
     "找不到该槽位的 settings.json，无法读取或编辑。安装并至少运行一次该客户端后，这里会出现内容。",
 
   "clientSettings.keys": "共 {n} 个键",
-  "clientSettings.raw": "原文",
+  "clientSettings.raw": "键值",
+  "clientSettings.raw.hint":
+    "所有值已完整展开，可直接修改；保存时会保持原排版、只改目标键，并在写入前自动备份。",
   "clientSettings.raw.show": "查看原文",
   "clientSettings.raw.hide": "收起原文",
+  "clientSettings.raw.reset": "还原",
 
-  "clientSettings.edit.title": "键值编辑",
-  "clientSettings.edit.hint":
-    "键支持点号路径（如 claw.channels.wechatmp.enabled）；写入会**保持原排版**，只改目标键那一行，并在写入前自动备份。",
-  "clientSettings.edit.key": "键",
-  "clientSettings.edit.keyPlaceholder": "点号路径，如 http.proxy",
-  "clientSettings.edit.value": "新值",
-  "clientSettings.edit.valuePlaceholder": "JSON 值，如 \"\" 或 true 或 {\"a\":1}",
-  "clientSettings.edit.save": "写入",
-  "clientSettings.edit.saving": "写入中…",
-  "clientSettings.edit.done": "已写入 {keys}",
+  "clientSettings.edit.save": "保存",
+  "clientSettings.edit.saving": "保存中…",
+  "clientSettings.edit.done": "已保存 {keys}",
   "clientSettings.edit.unchanged": "内容与现状相同，未写入、未备份",
-  "clientSettings.edit.invalidJson": "新值不是合法 JSON：{message}",
-  "clientSettings.edit.emptyKey": "请先填写要编辑的键",
+  "clientSettings.edit.invalidJson": "值不是合法 JSON：{message}",
   "clientSettings.edit.backup": "改前原文已备份到 {path}",
   "clientSettings.edit.noBackup": "本次未产生备份（无实际改写或备份失败）",
-  "clientSettings.edit.failed": "写入失败：{message}",
+  "clientSettings.edit.failed": "保存失败：{message}",
 
   "clientSettings.backups.title": "备份点",
   "clientSettings.backups.count": "共 {n} 个",

@@ -207,7 +207,11 @@ fn image_name_from_path_str(s: &str) -> &str {
 /// 对应的护栏见单测 `workbuddy_image_name_is_exact_not_substring`。
 pub(crate) fn is_self_image_name(name: &str) -> bool {
     let stem = image_stem(image_name_from_path_str(name));
-    stem.eq_ignore_ascii_case("buddy-switch") || stem.eq_ignore_ascii_case("BuddySwitch")
+    // 旧名保留：改名前的安装仍可能在同一台机器上运行，排除方向必须包含它，
+    // 否则旧进程会被当成 WorkBuddy 误杀。
+    stem.eq_ignore_ascii_case("accswitch")
+        || stem.eq_ignore_ascii_case("buddy-switch")
+        || stem.eq_ignore_ascii_case("BuddySwitch")
 }
 
 /// 精确匹配该 region 的 WorkBuddy / CodeBuddy **映像**（禁止子串命中
@@ -687,7 +691,7 @@ foreach ($hive in $unHives) {
     $dnl = [string]$dn
     # 排除本工具自己的卸载项。其它工具的名字**不在这里列举** —— 下方 Rust 侧
     # 按「精确等于区域映像名」收口，任何第三方工具都进不来（见 is_self_image_name）。
-    if ($dnl -match 'buddy-switch|BuddySwitch') { return }
+    if ($dnl -match 'buddy-switch|BuddySwitch|accswitch') { return }
     if ($dnl -notmatch '__PRODUCT_REGEX__') { return }
     $icon = $_.GetValue('DisplayIcon')
     if ($icon) { $out += [string]$icon }
@@ -780,7 +784,7 @@ pub fn windows_workbuddy_exe_path() -> Option<PathBuf> {
 // - 一律用 `ps -axo pid=,args=` 全量输出，在 Rust 内做**大小写敏感**子串匹配；
 //   不直接裸用 pgrep/pkill 字符串（pgrep -f 是大小写不敏感子串匹配，会把命令行
 //   里恰好引用路径的无关进程一并命中，实测不可靠）。
-// - 排除自身 pid 与 args 含 `buddy-switch` / `BuddySwitch` 的 PID（自排除；
+// - 排除自身 pid 与 args 含 `accswitch` / `buddy-switch` / `BuddySwitch` 的 PID（自排除；
 //   前者按子串匹配，已覆盖所有以它结尾的同族名字，无需逐一列举）。
 // - 「主进程（GUI）」= argv 含 `<app>/Contents/MacOS/`，仅用于 footer「运行中」
 //   语义与启动成功校验；「包内任意进程」= argv 含 `<app>`（含 Contents/MacOS 与
@@ -857,7 +861,7 @@ fn ps_row_matches_any(args: &str, patterns: &[String]) -> bool {
 }
 
 /// 从 `ps -axo pid=,args=` 全量输出中收集命中模式的 (pid, args)。
-/// 过滤：排除自身 pid；排除 args 含 `buddy-switch` / `BuddySwitch` 的 PID
+/// 过滤：排除自身 pid；排除 args 含 `accswitch` / `buddy-switch` / `BuddySwitch` 的 PID
 /// （`buddy-switch` 按子串匹配，已覆盖所有以它结尾的同族名字，无需逐一列举）。
 /// 结果按 pid 去重。残留误杀面仅剩「用户进程的 args 主动引用目标 .app 路径」
 /// 这一刻意场景（对齐 Windows 契约记录的残余风险）。
@@ -876,7 +880,11 @@ pub(crate) fn filter_ps_rows(
         if pid == self_pid {
             continue;
         }
-        if args.contains("buddy-switch") || args.contains("BuddySwitch") {
+        if args.contains("accswitch")
+            || args.contains("AccSwitch")
+            || args.contains("buddy-switch")
+            || args.contains("BuddySwitch")
+        {
             continue;
         }
         if !ps_row_matches_any(&args, patterns) {
@@ -1721,10 +1729,14 @@ mod tests {
 
     #[test]
     fn self_image_names_are_detected() {
+        assert!(is_self_image_name("AccSwitch"));
+        assert!(is_self_image_name("AccSwitch.exe"));
+        assert!(is_self_image_name("accswitch.exe"));
         assert!(is_self_image_name("buddy-switch"));
         assert!(is_self_image_name("buddy-switch.exe"));
         assert!(is_self_image_name("BUDDY-SWITCH.EXE"));
         assert!(is_self_image_name("BuddySwitch"));
+        assert!(is_self_image_name(r"C:\apps\AccSwitch.exe"));
         assert!(is_self_image_name(r"C:\apps\buddy-switch.exe"));
         assert!(!is_self_image_name("WorkBuddy.exe"));
         assert!(!is_self_image_name("WorkBuddy"));
@@ -1836,6 +1848,7 @@ mod tests {
 1004|crashpad_handler|C:\\x\\crashpad_handler.exe
 1005|CodeBuddy|
 1006|WorkBuddy Helper|
+1007|AccSwitch|C:\\Program Files\\AccSwitch\\AccSwitch.exe
 ";
         let kept = filter_windows_workbuddy_rows(&parse_windows_process_rows(stdout));
         let pids: Vec<u32> = kept.iter().map(|r| r.pid).collect();
@@ -1866,6 +1879,7 @@ mod tests {
         let csv = "\
 \"workbuddy-switch.exe\",\"4400\",\"Console\",\"1\",\"10,000 K\"
 \"buddy-switch.exe\",\"4401\",\"Console\",\"1\",\"8,000 K\"
+\"AccSwitch.exe\",\"4402\",\"Console\",\"1\",\"12,000 K\"
 ";
         let kept = filter_windows_workbuddy_rows(&parse_tasklist_csv(csv));
         assert!(kept.is_empty());
@@ -2236,7 +2250,8 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
              5002 /Applications/workbuddy.app/Contents/MacOS/WorkBuddy\n\
              5003 /bin/zsh -c 'echo WORKBUDDY.APP/CONTENTS/MACOS mention'\n\
              5004 /Applications/CodeBuddy.app/Contents/MacOS/CodeBuddy\n\
-             5005 /opt/tool/buddy-switch/helper run\n"
+             5005 /opt/tool/buddy-switch/helper run\n\
+             5006 /Applications/AccSwitch.app/Contents/MacOS/AccSwitch\n"
         );
         let patterns = macos_main_patterns(None);
         let kept = filter_ps_rows(&stdout, &patterns, self_pid);

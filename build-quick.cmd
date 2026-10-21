@@ -5,7 +5,7 @@ REM 控制台编码不必管：被调用的 package-windows.ps1 会自己把控制台切到 UTF-8，
 REM 退出后回到 936，两边的中文都能正常显示。
 setlocal enabledelayedexpansion
 REM ============================================================================
-REM  BuddySwitch 快速打包（自测用）—— 双击即可出一个 NSIS 安装包
+REM  AccSwitch 快速打包（自测用）—— 双击即可出一个 NSIS 安装包
 REM
 REM  正式发布请用 build-exe.cmd；这个脚本面向「我要赶紧装一个试试」：
 REM    - 默认跳过 tsc 全量类型检查与前端 API 契约门禁（只跑 vite build），
@@ -72,7 +72,7 @@ exit /b 0
 
 :run
 echo.
-echo === BuddySwitch 快速打包 ===
+echo === AccSwitch 快速打包 ===
 echo.
 
 REM 正在运行的客户端会锁住 target\release\buddy-switch*.exe，链接阶段会报 LNK1104。

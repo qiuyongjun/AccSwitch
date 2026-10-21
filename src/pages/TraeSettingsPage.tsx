@@ -23,8 +23,6 @@ import { toast } from "sonner";
 import { DemoAction } from "@/components/demo-action";
 import { TimesEditor } from "@/components/schedule-times-editor";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
-import { AppSettingsGroups } from "@/components/app-settings";
-import { BackupSection } from "@/components/settings/backup-section";
 // 设置子导航**与 WorkBuddy 设置页共用同一张表 / 同一个解析函数**（PLAN §3.9、D12）。
 import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1052,7 +1050,7 @@ export default function TraeSettingsPage() {
   const [resetReport, setResetReport] = useState<TraeDeviceResetReport | null>(null);
 
   /**
-   * ★ 子导航选中项：**初值从 URL 读**（`?section=client`），非法值 fail-closed 回 `general`。
+   * ★ 子导航选中项：**初值从 URL 读**（`?section=client`），非法值 fail-closed 回第一项。
    *
    * 与 WorkBuddy 设置页接**同一个** `parseSettingsSubnav`（`settings-subnav.tsx`）——
    * 两平台同一件事只有一份实现，不存在「一边认 `?section=`、另一边认别的」。
@@ -1449,6 +1447,35 @@ export default function TraeSettingsPage() {
           </CardContent>
         </SettingsGroup>
 
+        {/* ---- 关于：Trae 官方控制台入口 ----
+             原先放在「通用」分区；通用已迁到全局设置抽屉，但这一组讲的是当前客户端，
+             因此留在「客户端」而不是跟着全局设置走。 */}
+        <SettingsGroup id="trae-settings-about" title={t("trae.page.settings.aboutGroup")}>
+          <CardContent className="space-y-0 p-0">
+          <SettingsRow className="flex-wrap gap-y-2">
+            <div className="min-w-0">
+              <div className="text-[12.5px] font-[550] leading-4">{t("trae.page.settings.aboutTitle")}</div>
+              <p className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground">
+                {t("trae.page.settings.aboutDesc")}
+              </p>
+            </div>
+            {consoleBase ? (
+              <Button variant="ghost" size="sm" asChild>
+                <a href={consoleBase} target="_blank" rel="noreferrer">
+                  <ExternalLink />
+                  {consoleBase.replace(/^https?:\/\//, "")}
+                </a>
+              </Button>
+            ) : (
+              // 域未知时**不给死链**：宁可少一枚按钮，也不把用户导到可能错的站。
+              <span className="text-[11.5px] text-muted-foreground">
+                {t("trae.page.settings.aboutUnknownSite")}
+              </span>
+            )}
+          </SettingsRow>
+          </CardContent>
+        </SettingsGroup>
+
           </>
         )}
 
@@ -1722,40 +1749,6 @@ export default function TraeSettingsPage() {
              `TraeApiServicePage`，本页只呈现请求日志）。 */}
         {section === "gateway" && <GatewayLogsSection />}
 
-        {/* ---- 通用：应用级设置（与 WorkBuddy 共用同一份实现）+ 关于 ---- */}
-        {section === "general" && (
-          <>
-        <AppSettingsGroups />
-        <SettingsGroup id="trae-settings-about" title={t("trae.page.settings.aboutGroup")}>
-          <CardContent className="space-y-0 p-0">
-          <SettingsRow className="flex-wrap gap-y-2">
-            <div className="min-w-0">
-              <div className="text-[12.5px] font-[550] leading-4">{t("trae.page.settings.aboutTitle")}</div>
-              <p className="mt-0.5 text-[11.5px] leading-4 text-muted-foreground">
-                {t("trae.page.settings.aboutDesc")}
-              </p>
-            </div>
-            {consoleBase ? (
-              <Button variant="ghost" size="sm" asChild>
-                <a href={consoleBase} target="_blank" rel="noreferrer">
-                  <ExternalLink />
-                  {consoleBase.replace(/^https?:\/\//, "")}
-                </a>
-              </Button>
-            ) : (
-              // 域未知时**不给死链**：宁可少一枚按钮，也不把用户导到可能错的站。
-              <span className="text-[11.5px] text-muted-foreground">
-                {t("trae.page.settings.aboutUnknownSite")}
-              </span>
-            )}
-          </SettingsRow>
-          </CardContent>
-        </SettingsGroup>
-          </>
-        )}
-
-        {/* ---- 备份与恢复（第 9 项；与 WorkBuddy 共用同一组件）---- */}
-        {section === "backup" && <BackupSection />}
         </div>
       </div>
 

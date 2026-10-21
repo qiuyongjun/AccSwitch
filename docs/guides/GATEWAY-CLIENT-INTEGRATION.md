@@ -1,6 +1,6 @@
 # 网关接入指南：客户端接入 + 上游扩展
 
-> 适用版本：`Buddy Switch` 当前主线（网关 crate `buddy-switch-gateway`）。
+> 适用版本：`AccSwitch` 当前主线（网关 crate `buddy-switch-gateway`）。
 > 本文只写**能核实**的内容。凡是本仓没有证据、只能靠外部文档的，一律显式标注「以官方文档为准 / 未在本仓验证」，**不编造配置片段** —— 编错的配置比没有说明更糟：用户会以为网关坏了。
 
 ---
@@ -233,7 +233,7 @@ model = "<从 /v1/models 复制的模型 id>"
 model_provider = "buddy_switch"
 
 [model_providers.buddy_switch]
-name = "Buddy Switch"
+name = "AccSwitch"
 base_url = "http://127.0.0.1:57891/v1"
 env_key = "BUDDY_SWITCH_KEY"
 wire_api = "responses"
@@ -246,7 +246,7 @@ model = "<从 /v1/models 复制的模型 id>"
 model_provider = "buddy_switch_trae"
 
 [model_providers.buddy_switch_trae]
-name = "Buddy Switch (Trae)"
+name = "AccSwitch (Trae)"
 base_url = "http://127.0.0.1:57894/v1"
 env_key = "BUDDY_SWITCH_KEY"
 wire_api = "chat"
@@ -357,7 +357,7 @@ hermes model      # 交互式：选「自定义端点」→ 填 Base URL + API K
 2. **设置 → 模型 → Add a custom provider**
 3. 填：
    - Provider ID：小写，如 `buddy-switch`（**创建后不可改名**）
-   - 显示名称：`Buddy Switch`
+   - 显示名称：`AccSwitch`
    - Base URL：`http://127.0.0.1:57891/v1`
    - API 协议：`openai-completions`（接 WB 网关也可选 `openai-responses`；**接 Trae 网关不能选 `openai-responses`**，Trae 没有 `/v1/responses`）
    - 模型：点 **Fetch available models**（走 `GET /models`）→ 勾选保存
@@ -448,7 +448,7 @@ export CODEBUDDY_SMALL_FAST_MODEL="<模型 id>"
   "models": [
     {
       "id": "<从 /v1/models 复制的模型 id>",
-      "name": "Buddy Switch",
+      "name": "AccSwitch",
       "vendor": "OpenAI",
       "url": "http://127.0.0.1:57891/v1/chat/completions",
       "apiKey": "${BUDDY_SWITCH_KEY}",

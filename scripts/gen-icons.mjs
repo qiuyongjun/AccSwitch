@@ -11,7 +11,8 @@
  *   2. `tauri icon` 生成基础全套：png / icns / ico / Square* / StoreLogo / android / ios
  *   3. 强制同步 `icon.png` = 源图（托盘图标与圆角脚本都以它为输入，必须确保是新图）
  *   4. 运行 `gen-windows-rounded-icon.py`，把 Windows 侧图标烘焙成 macOS 风格圆角
- *   5. 运行 `gen-tray-icon.py`，生成 macOS 菜单栏单色模板（template image）
+ *   5. 运行 `gen-tray-icon.py`，生成 macOS 菜单栏单色模板（template image）与
+ *      Windows / Linux 彩色托盘图标（模板形状取自 `tray-mark.png`，不是整枚 App 图标）
  *   6. 运行 `gen-public-icons.py`，同步 `public/` 下的前端图标（侧栏标记 + favicon）
  *   7. 校验关键产物齐备，并打印清单
  *
@@ -27,9 +28,9 @@
  * 依赖：Node（本项目自带）+ Pillow（`python -m pip install Pillow`）。
  * 可用 BUDDY_SWITCH_PYTHON 指定解释器路径。
  *
- * 注意：`tray-icon-template.rgba` 是 **单色剪影**，由 `gen-tray-icon.py` 从源图生成，
- * **不是彩色图标的等比缩小**。运行时真正生效的是 `.rgba`，PNG 只是预览——
- * 手工改 PNG 不会影响运行，且下次跑本脚本会被静默覆盖。
+ * 注意：`tray-icon-template.rgba` 是 **单色剪影**，形状取自 `docs/images/brand/tray-mark.png`
+ * （与 App 图标同一套几何、去掉底板），**不是彩色图标的等比缩小**。运行时真正生效的是
+ * `.rgba`，PNG 只是预览——手工改 PNG 不会影响运行，且下次跑本脚本会被静默覆盖。
  * 填充色为白色：macOS 菜单栏走 template image 只取 alpha、忽略 RGB；
  * Windows 通知区按 RGB 原样显示（深色任务栏需要白），故同一份产物两端通用。
  * 该文件被 `tray.rs` 以 `include_bytes!` 引用，且有 `&[u8; 36 * 36 * 4]` 的编译期长度断言。
@@ -152,8 +153,12 @@ function main() {
   execFileSync(python, [ROUNDED_SCRIPT], { cwd: ROOT, stdio: "inherit" });
 
   // ---------- 5. macOS 菜单栏单色模板 ----------
-  console.log("[gen-icons] 4/6 生成 macOS 菜单栏单色模板（template image）...");
-  execFileSync(python, [TRAY_SCRIPT, input], { cwd: ROOT, stdio: "inherit" });
+  console.log("[gen-icons] 4/6 生成托盘图标（macOS 单色模板 + 彩色）...");
+  execFileSync(
+    python,
+    [TRAY_SCRIPT, input, path.join(ROOT, "docs", "images", "brand", "tray-mark.png")],
+    { cwd: ROOT, stdio: "inherit" },
+  );
 
   // ---------- 6. public/ 前端图标 ----------
   // `tauri icon` 不管 public/，缺这一步会留下「安装包图标是新的、侧栏与 favicon 是旧的」。
@@ -179,9 +184,9 @@ function main() {
     `[gen-icons] 完成 ✓ 前端图标已写入 ${path.relative(ROOT, path.join(ROOT, "public"))}（${REQUIRED_PUBLIC.join(" / ")}）`,
   );
   console.log(
-    "\n[gen-icons] 提示：托盘用的是单色剪影（白色填充），由 gen-tray-icon.py 从源图生成；\n" +
+    "\n[gen-icons] 提示：托盘用的是单色剪影（白色填充），形状取自 docs/images/brand/tray-mark.png；\n" +
       "            macOS 只取 alpha 着色、Windows 按 RGB 显示，tray.rs 对尺寸有编译期断言，勿改 36x36。\n" +
-      "            改托盘图标要改 gen-tray-icon.py，不要手改产物（会被本脚本覆盖）。",
+      "            改托盘图标要改 tray-mark.svg / tray-mark.png，不要手改产物（会被本脚本覆盖）。",
   );
 }
 

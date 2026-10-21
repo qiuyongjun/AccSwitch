@@ -67,7 +67,7 @@ class ErrorBoundaryImpl extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // 不吞：控制台（开发时）与详情面板（桌面端唯一出口）都要留下痕迹。
-    console.error("[Buddy Switch] 渲染异常已被错误边界接住：", error, info);
+    console.error("[AccSwitch] 渲染异常已被错误边界接住：", error, info);
     this.setState({ info });
   }
 

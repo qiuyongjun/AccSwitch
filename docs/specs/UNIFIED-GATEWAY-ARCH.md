@@ -421,7 +421,7 @@ model = "wb-cn:deepseek-v4.1-flash"
 model_provider = "buddy_unified"
 
 [model_providers.buddy_unified]
-name = "Buddy Switch (Unified)"
+name = "AccSwitch (Unified)"
 base_url = "http://127.0.0.1:57892/v1"
 env_key = "BUDDY_SWITCH_KEY"      # 变量名，不是 Key 本身
 wire_api = "responses"            # ⚠️ 用 trae-* 时必须改成 "chat"（Trae 无 /v1/responses）

@@ -76,7 +76,7 @@ pub const TRAE_HOOK_EVENTS: &[&str] = &[
 pub const HOOK_TIMEOUT_SECONDS: u64 = 3;
 
 /// 客户端侧显示的来源名（出现在客户端的 hook 列表里）。
-pub const HOOK_STATUS_MESSAGE: &str = "Buddy Switch";
+pub const HOOK_STATUS_MESSAGE: &str = "AccSwitch";
 
 /// 一个客户端对 hook 配置的**格式档位**。
 ///
@@ -151,7 +151,11 @@ pub fn hook_command(exe: &Path, source: &str) -> String {
 /// **不锚**在路径上（用户可以把应用装到任何地方、也可以改名后再改名回来）。
 pub fn is_our_hook(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    (lower.contains("buddyswitch") || lower.contains("buddy-switch"))
+    // 旧名保留：改名前的安装仍可能留着旧路径的 hook，卸载/重装要认得出并替换，
+    // 否则同一客户端里会同时挂两条 hook。
+    (lower.contains("accswitch")
+        || lower.contains("buddyswitch")
+        || lower.contains("buddy-switch"))
         && lower.contains(" hook")
         && lower.contains("--source")
 }
@@ -392,7 +396,7 @@ mod tests {
     use super::*;
 
     const CMD: &str =
-        "\"C:\\Program Files\\Buddy Switch\\BuddySwitch.exe\" hook --source workbuddy";
+        "\"C:\\Program Files\\AccSwitch\\AccSwitch.exe\" hook --source workbuddy";
 
     fn others_hook() -> Value {
         json!({
@@ -644,17 +648,21 @@ mod tests {
     #[test]
     fn our_hook_detection_is_specific() {
         assert!(is_our_hook(CMD));
+        // 改名前的旧路径仍要认得：否则旧 hook 清不掉，会和新的同名挂两条。
+        assert!(is_our_hook(
+            "\"C:\\Program Files\\Buddy Switch\\BuddySwitch.exe\" hook --source workbuddy"
+        ));
         assert!(is_our_hook("\"/opt/buddy-switch\" hook --source workbuddy"));
         assert!(!is_our_hook("/usr/bin/python3 /home/u/other.py"));
         assert!(!is_our_hook("agent-studio-runtime hook --source workbuddy"));
-        assert!(!is_our_hook("\"C:\\x\\BuddySwitch.exe\" --version"));
+        assert!(!is_our_hook("\"C:\\x\\AccSwitch.exe\" --version"));
     }
 
     /// `hook_command` 对含空格的路径加引号（Windows 安装目录的常态）。
     #[test]
     fn hook_command_quotes_the_executable_path() {
         let command = hook_command(
-            Path::new("C:\\Program Files\\Buddy Switch\\BuddySwitch.exe"),
+            Path::new("C:\\Program Files\\AccSwitch\\AccSwitch.exe"),
             "workbuddy",
         );
         assert!(

@@ -338,7 +338,7 @@ export const en = {
 
   "shared.api.unsupportedInWebui": "Not supported in webui mode: {cmd}",
   "shared.api.unreachable":
-    "Cannot reach the Buddy Switch service ({base}). Start it with `buddy-switch` first.",
+    "Cannot reach the AccSwitch service ({base}). Start it with `buddy-switch` first.",
   "shared.api.requestFailed": "Request failed ({status})",
   "shared.api.webuiPermissionByProcess":
     "In webui mode permissions come from the service process (started in a terminal); no extra authorization is needed",

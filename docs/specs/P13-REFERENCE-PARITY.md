@@ -37,7 +37,7 @@
 
 三句话：
 
-1. **两仓是同一产品的两条分叉，不是上下游**（本仓 `NextAgentX/qoder-trae-workbuddy-switch`，参考 `changexbc/workbuddy-switch`）。
+1. **两仓是同一产品的两条分叉，不是上下游**（本仓 `NextAgentX/AccSwitch`，参考 `changexbc/workbuddy-switch`）。
    **功能表逐条对得上，真正的差集只有 4 处** —— 且其中 **3 处本仓 `PLAN.md` 已经写成目标，只是没落地**。
    ⇒ 本方案的多数条目**不是新增功能，而是「把已拍板的设计做完」**。
 2. **最该先做的不是参考的大功能，而是两件「小而硬」的事**：
@@ -97,7 +97,7 @@
 
 | 项 | 本仓现状 | 证据【本地实测】 |
 |:---|:---|:---|
-| P7 全局备份 | ✅ 已落地（`BackupSection` 在设置子导航第 9 项） | `src/components/settings/settings-subnav.tsx:62`；`src/components/settings/backup-section.tsx` |
+| P7 全局备份 | ✅ 已落地（`BackupSection` 在顶栏 ⚙「应用设置」→「备份与恢复」弹框；2026-10-21 起不再占客户端设置子导航） | `src/components/settings/global-settings-dialogs.tsx`；`src/components/settings/backup-section.tsx` |
 | P8 会话工作台 | ✅ 已落地：**含**内容指纹、组状态四态、关联图、**增量同步（加法）**、**分歧处理（覆盖 + 备份复核）** | `crates/buddy-switch-core/src/modules/session.rs:370,390,410,505,723`；`src/lib/session-replicas.ts:63,96`；`src/pages/SessionsPage.tsx` |
 | P9 桌面悬浮窗 | ⚠️ 窗口/UI/托盘/可见性 ✅；**数据源接近空转**（≤1 行、恒 `running`） | `src-tauri/src/companion.rs`；`src-tauri/src/commands.rs:2969-2997` |
 | P11 模型禁用 + 接入说明 | ✅ 已落地 | `COVERAGE-REPORT.md` 第六轮；`src/components/gateway/model-table.tsx` |

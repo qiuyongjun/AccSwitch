@@ -31,10 +31,11 @@ const host = process.env.TAURI_DEV_HOST;
 //   ① CI（`.github/workflows/pages.yml`）显式传 `VITE_BASE=/<github.event.repository.name>/`；
 //   ② 本地 `npm run build:demo` 用 `GITHUB_REPOSITORY` 兜底，再退回下面的常量；
 //   ③ `scripts/check-pages-base.cjs` 把「workflow 必须按仓库名传 base」钉成门禁。
+// 2026-10-21 仓库再次改名（`qoder-trae-workbuddy-switch` → `AccSwitch`），兜底常量随之更新。
 // @ts-expect-error process is a nodejs global
 const pagesRepoSlug =
   // @ts-expect-error process is a nodejs global
-  process.env.GITHUB_REPOSITORY?.split("/")[1] || "qoder-trae-workbuddy-switch";
+  process.env.GITHUB_REPOSITORY?.split("/")[1] || "AccSwitch";
 // @ts-expect-error process is a nodejs global
 const base =
   process.env.VITE_BASE ??

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type ElementType } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, Coffee, GitBranch, LayoutDashboard, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
+import { ArrowUp, GitBranch, LayoutDashboard, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -8,7 +8,6 @@ import * as api from "@/lib/api";
 import type { UpdateInfo } from "@/lib/types";
 import { PageFallback } from "@/components/page-fallback";
 import { AppIconMark, StatusDot } from "@/components/product-marks";
-import { DonateDialog } from "@/components/donate-dialog";
 import { TopBar } from "@/components/shell/top-bar";
 import { UpdateInstallDialog } from "@/components/update-install-dialog";
 import { CommandPalette } from "@/components/command-palette/command-palette";
@@ -366,57 +365,14 @@ function CompanionToggle() {
 }
 
 /**
- * 侧栏底部的打赏入口（**版本号上方**）。
- *
- * ## 为什么在侧栏底部，而不是只留在顶栏 ⚙ 菜单
- *
- * 打赏是「顺手支持一下」的动作，没人会去翻设置菜单找它；侧栏底部常驻可见，
- * 紧贴版本号放着，语义正好是「这个应用免费开源，可以请作者喝饮料」。
- * 顶栏 ⚙ 菜单里那一项**保留**（与「更新」弹层同款：同一弹层允许两个入口，
- * 各自持有自己的 `open`），因此这里**不**再复制一份收款码 UI。
- *
- * ## 为什么是「图标 + 文字」的整行按钮，不是无文字图标
- *
- * 侧栏底部已经有状态圆点与更新按钮两处图标入口，再加一枚无文字图标，
- * 用户只能靠猜。整行按钮语义自明。
- *
- * ## 弹层仍是**受控**的
- *
- * `DonateDialog` 自己不带触发按钮（与顶栏 ⚙ 菜单共用同一份实现），
- * 入口只负责持有 `open` 状态 —— 收款码只有一处实现。
- */
-function SidebarDonate() {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-
-  return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        /* 左内边距与 `navLinkClass` 同为 `px-2.5` ⇒ 图标与上面 5 个导航项对齐。
-           ⚠️ 不要改成无文字图标：侧栏底部已有两枚图标入口，再加一枚只能靠猜。 */
-        className="h-8 w-full justify-start gap-2.5 rounded-[10px] px-2.5 text-[12.5px] font-normal text-sidebar-foreground/70 hover:bg-foreground/[0.06] hover:text-sidebar-foreground"
-        onClick={() => setOpen(true)}
-      >
-        <Coffee className="size-3.5" aria-hidden="true" />
-        {t("wbSettings.donate.trigger")}
-      </Button>
-      <DonateDialog open={open} onOpenChange={setOpen} />
-    </>
-  );
-}
-
-/**
  * 侧栏底部的应用信息。
  *
- * 这里展示的是**本应用**（Buddy Switch）的版本，而不是所管理客户端的版本：
+ * 这里展示的是**本应用**（AccSwitch）的版本，而不是所管理客户端的版本：
  * `status.version` 来自 `update::APP_VERSION`，此前挂在「WorkBuddy」名下会让人
  * 误以为它是 WorkBuddy 客户端的版本号。状态圆点跟随当前选中的产品。
  *
  * **只负责内容**：底部区块的边框、上间距与纵向间隔归 `Layout` 里那个
- * `<section>` —— 同一块里还要放打赏入口（`SidebarDonate`），而它在 webui 下
+ * `<section>` —— 同一块里还要放品牌行（应用名），而它在 webui 下
  * **仍然显示**（版本行则不显示），把容器留在 `Layout` 才能只写一处。
  * webui 下整行不渲染（没有桌面运行态可展示）。
  */
@@ -795,32 +751,8 @@ function Layout() {
       />
 
       <div className="flex min-h-0 flex-1">
-        {/* ══ 侧栏（L2 目的地）：品牌 + 导航 + 版本行。不随产品换血（§3.2） ══ */}
+        {/* ══ 侧栏（L2 目的地）：导航 + 底部品牌/版本行。不随产品换血（§3.2） ══ */}
         <aside className="flex min-h-0 w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 pb-3 pt-3.5">
-          {/* 品牌块（原型 `.brand` / `.brand-mark`，`demo.css:136-141`）：32px 图标底 + 双行文案。
-              ⚠️ 图标必须带 `primary 18%` 底色 —— 原型不是「裸图标」（此前写 15%，偏淡）。*/}
-          <div className="flex items-center gap-2.5 px-1.5 pb-4">
-            <span className="grid size-8 shrink-0 place-items-center rounded-[10px] bg-primary/18 text-primary">
-              <AppIconMark size={17} />
-            </span>
-            <div className="min-w-0">
-              {/* 字重 650 / 字距 -.01em 对齐原型 `.brand-text b`（`demo.css:143`）。
-                  字体走 body 继承 —— 原型全站统一 `ui-sans-serif`，不另设展示字体。 */}
-              <div className="truncate text-[13.5px] font-[650] leading-5 tracking-[-0.01em] text-sidebar-foreground">
-                Buddy Switch
-              </div>
-              {demoModeEnabled ? (
-                <Badge variant="secondary" className="mt-0.5 h-4 border-0 px-1.5 text-[10px] text-sidebar-foreground/60 shadow-none">
-                  {t("app.demoBadge")}
-                </Badge>
-              ) : (
-                <div className="truncate text-[10.5px] leading-4 text-muted-foreground">
-                  {t("sidebar.brand.tagline")}
-                </div>
-              )}
-            </div>
-          </div>
-
           <nav
             className="flex min-h-0 flex-1 flex-col gap-[3px]"
             aria-label={t("product.navAria", { product: t(platformDescriptor(product).labelKey) })}
@@ -857,11 +789,28 @@ function Layout() {
             ))}
           </nav>
 
-          {/* 侧栏底部区块：**打赏入口在版本号上方**。
-              打赏在 webui 下**也显示**（版本行不显示），因此容器放在这里、
+          {/* 侧栏底部区块：**品牌行（应用名）**在上，版本行在下。
+              品牌行在 webui 下**也显示**（版本行不显示），因此容器放在这里、
               由两个子项共用边框与上间距，而不是塞进 `AppFooter`。 */}
           <section className="mt-auto flex flex-col gap-2.5 border-t border-sidebar-border pt-3">
-            <SidebarDonate />
+            <div className="flex items-center gap-2.5 px-1.5">
+              <AppIconMark size={26} />
+              <div className="min-w-0 flex-1">
+                {/* 字重 650 / 字距 -.01em 对齐原型 `.brand-text b`（`demo.css:143`）。 */}
+                <div className="truncate text-[13.5px] font-[650] leading-5 tracking-[-0.01em] text-sidebar-foreground">
+                  {t("app.name")}
+                </div>
+                {demoModeEnabled ? (
+                  <Badge variant="secondary" className="mt-0.5 h-4 border-0 px-1.5 text-[10px] text-sidebar-foreground/60 shadow-none">
+                    {t("app.demoBadge")}
+                  </Badge>
+                ) : (
+                  <div className="truncate text-[10.5px] leading-4 text-muted-foreground">
+                    {t("sidebar.brand.tagline")}
+                  </div>
+                )}
+              </div>
+            </div>
             {api.isWebui() && !demoModeEnabled ? null : (
               <AppFooter product={product} running={running} version={appVersion} />
             )}

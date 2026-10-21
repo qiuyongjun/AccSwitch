@@ -44,7 +44,7 @@ jobs:
                   "update_os": "macos",
                   "update_arch": "aarch64",
                   "update_bundle": "macos",
-                  "update_archive_name": "BuddySwitch-macos-aarch64.app.tar.gz",
+                  "update_archive_name": "AccSwitch-macos-aarch64.app.tar.gz",
               },
               {
                   "name": "mac-x64",
@@ -56,7 +56,7 @@ jobs:
                   "update_os": "macos",
                   "update_arch": "x86_64",
                   "update_bundle": "macos",
-                  "update_archive_name": "BuddySwitch-macos-x86_64.app.tar.gz",
+                  "update_archive_name": "AccSwitch-macos-x86_64.app.tar.gz",
               },
               {
                   "name": "win-x64",
@@ -68,7 +68,7 @@ jobs:
                   "update_os": "windows",
                   "update_arch": "x86_64",
                   "update_bundle": "nsis",
-                  "update_archive_name": "BuddySwitch-windows-x86_64-setup.exe",
+                  "update_archive_name": "AccSwitch-windows-x86_64-setup.exe",
               },
               {
                   "name": "linux-x64",
@@ -207,7 +207,7 @@ jobs:
       #
       # ⚠️ 必须**不带 `--print`** 调用。`--print` 是 printOnly：只打印、不写入任何
       # 版本载体。只取一个变量而不落盘时，Tauri 会继续用仓库里 committed 的旧版本
-      # 命名产物（`BuddySwitch_<旧版本>_x64-setup.exe`），而后续断言/清单用的是新算出的
+      # 命名产物（`AccSwitch_<旧版本>_x64-setup.exe`），而后续断言/清单用的是新算出的
       # 值 → Windows 的 `Build desktop app` 里的陈旧包守卫必然触发 `exit 1`。
       # 放在这里（而非打包那一步）是为了让「server 二进制 / 桌面 App / updater 清单」
       # 三步拿到**同一个** VER —— VER 经 GITHUB_ENV 向后传递。
@@ -304,13 +304,13 @@ jobs:
           echo "bundle after build:"
           find "$BUNDLE_ROOT" -type f | sort || true
           if [ "${{ matrix.bundles }}" = "nsis" ]; then
-            STALE=$(find "$BUNDLE_ROOT" -type f -name '*-setup.exe' ! -name "BuddySwitch_${VER}_x64-setup.exe" || true)
+            STALE=$(find "$BUNDLE_ROOT" -type f -name '*-setup.exe' ! -name "AccSwitch_${VER}_x64-setup.exe" || true)
             if [ -n "$STALE" ]; then
               echo "error: stale Windows installer still present:" >&2
               printf '%s\n' "$STALE" >&2
               exit 1
             fi
-            test -f "$BUNDLE_ROOT/nsis/BuddySwitch_${VER}_x64-setup.exe"
+            test -f "$BUNDLE_ROOT/nsis/AccSwitch_${VER}_x64-setup.exe"
           fi
           find "$BUNDLE_ROOT" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' \
@@ -318,8 +318,8 @@ jobs:
             -exec cp {} dist-bin/ \;
           # mac：纯命令行打 dmg（CI 无 Finder，Tauri 自带的 bundle_dmg.sh 会失败）
           if [ "${{ matrix.bundles }}" = "app" ]; then
-            sh scripts/make-dmg.sh "$VER" "${{ matrix.update_arch }}" "target/${{ matrix.target }}/release/bundle/macos/BuddySwitch.app"
-            cp "BuddySwitch_${VER}_${{ matrix.update_arch }}.dmg" dist-bin/
+            sh scripts/make-dmg.sh "$VER" "${{ matrix.update_arch }}" "target/${{ matrix.target }}/release/bundle/macos/AccSwitch.app"
+            cp "AccSwitch_${VER}_${{ matrix.update_arch }}.dmg" dist-bin/
           fi
 
       - name: Generate updater manifest
@@ -340,7 +340,7 @@ jobs:
           echo "updater bundle dir: $BUNDLE_DIR (version $VER)"
           ls -la "$BUNDLE_DIR" || true
           if [ "$UPDATE_OS" = "windows" ]; then
-            ARCHIVE="$BUNDLE_DIR/BuddySwitch_${VER}_x64-setup.exe"
+            ARCHIVE="$BUNDLE_DIR/AccSwitch_${VER}_x64-setup.exe"
           else
             ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz' | sort)"
             COUNT=$(printf '%s\n' "$ARCHIVE" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -357,7 +357,7 @@ jobs:
           cp "$ARCHIVE" "dist-bin/$UPDATE_ARCHIVE_NAME"
           cp "$ARCHIVE.sig" "dist-bin/$UPDATE_ARCHIVE_NAME.sig"
           if [ "$UPDATE_OS" = "windows" ]; then
-            cmp -s "dist-bin/$UPDATE_ARCHIVE_NAME" "dist-bin/BuddySwitch_${VER}_x64-setup.exe"
+            cmp -s "dist-bin/$UPDATE_ARCHIVE_NAME" "dist-bin/AccSwitch_${VER}_x64-setup.exe"
           fi
           UPDATE_VERSION="$VER" sh scripts/gen-update-json.sh
           MANIFEST="$BUNDLE_DIR/latest-${UPDATE_OS}-${UPDATE_ARCH}.json"
@@ -485,7 +485,7 @@ jobs:
       # 它的归属取决于 npm 通道是否开启：
       #   - 开（PUBLISH_NPM=true）：二进制已随平台包发到 npm registry，这里是**中转物**，
       #     按小写前缀 `buddy-switch-` 精确剔除，Release 只留桌面 App + updater 清单
-      #     （桌面产物都是 `BuddySwitch…` 大写开头，不会误删）。
+      #     （桌面产物都是 `AccSwitch…` 大写开头，不会误删）。
       #   - 关（当前默认）：npm 发不出去，那这份二进制就是**唯一的 webui 分发渠道** ——
       #     必须留在 Release 里让用户直接下载，否则 webui 形态等于没有发布途径。
       # ⚠️ 别改成无条件保留：桌面端走 Tauri updater，与这些裸二进制无关，
