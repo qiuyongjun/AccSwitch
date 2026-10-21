@@ -153,10 +153,14 @@ function main() {
   execFileSync(python, [ROUNDED_SCRIPT], { cwd: ROOT, stdio: "inherit" });
 
   // ---------- 5. macOS 菜单栏单色模板 ----------
-  console.log("[gen-icons] 4/6 生成托盘图标（macOS 单色模板 + 彩色）...");
+  console.log("[gen-icons] 4/6 生成托盘图标（macOS 单色模板 + 彩色白底）...");
   execFileSync(
     python,
-    [TRAY_SCRIPT, input, path.join(ROOT, "docs", "images", "brand", "tray-mark.png")],
+    [
+      TRAY_SCRIPT,
+      path.join(ICONS_DIR, "icon-windows.png"),
+      path.join(ROOT, "docs", "images", "brand", "tray-mark.png"),
+    ],
     { cwd: ROOT, stdio: "inherit" },
   );
 

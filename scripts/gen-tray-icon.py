@@ -13,8 +13,9 @@
     `docs/images/brand/tray-mark.png`（与 App 图标同一套几何、去掉底板），
     RGB 一律填白色（`INK`）。不能直接把整枚 App 图标塞进菜单栏——
     那会得到一块实心圆角方块，既重又糊；alpha 才是形状的唯一来源。
-  - `tray-icon-color.{png,rgba}`：32x32，直接使用 App 图标（含底板与圆角），
-    保留源图的真实颜色与 alpha。Windows / Linux 托盘本就允许彩色应用图标。
+  - `tray-icon-color.{png,rgba}`：32x32，直接使用 Windows 白底 App 图标
+    （`src-tauri/icons/icon-windows.png`，含白底板与圆角）。品牌 logo 本身无底板，
+    透明底在浅色任务栏里只剩细描边，视觉上明显偏小；白底与任务栏/标题栏图标一致。
   - 每个变体各写一份 `.rgba` 原始字节（`tray.rs` 用 `include_bytes!` 直接引用）
     与同名 `.png`（仅供预览/替换）。
 
@@ -27,7 +28,8 @@
 也会在下次跑本脚本时被静默覆盖 —— 要改就改 `INK`、托盘符号源图或 App 图标源图。
 
 用法：python scripts/gen-tray-icon.py [源图路径] [托盘符号路径]
-      默认 `docs/images/brand/logo.png` + `docs/images/brand/tray-mark.png`。
+      默认 `src-tauri/icons/icon-windows.png` + `docs/images/brand/tray-mark.png`。
+      源图须由 `gen-windows-rounded-icon.py` 先产出（白底 + 圆角）。
 """
 
 import sys
@@ -150,7 +152,7 @@ def report(name: str, raw: bytes, size: int, note: str) -> None:
 
 
 def main() -> None:
-    src = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else BRAND / "logo.png"
+    src = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ICONS / "icon-windows.png"
     mark = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else BRAND / "tray-mark.png"
     for path, label in ((src, "源图"), (mark, "托盘符号")):
         if not path.is_file():
@@ -168,7 +170,7 @@ def main() -> None:
         SIZE,
     )
 
-    # Windows / Linux：32x32 彩色，RGB 原样生效。
+    # Windows / Linux：32x32 彩色，RGB 原样生效（白底 App 图标，与任务栏一致）。
     source = color_source(src)
     color = build_color(source)
     color_png = ICONS / "tray-icon-color.png"
