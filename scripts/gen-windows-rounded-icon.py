@@ -4,6 +4,10 @@
 macOS applies a squircle mask to square app icons. Windows shows the bitmap as-is,
 so icon.ico and the Store/Start-menu Square*.png files need transparent corners.
 
+The brand logo is deliberately plate-less (transparent corners, RGB=0). Applying
+the rounded mask directly would make those transparent pixels opaque black, so the
+source is flattened onto white first — Windows icons get a white rounded plate.
+
 Does not touch icon.png / icon.icns / 32x32.png / 128x128.png (macOS + Linux).
 """
 
@@ -27,6 +31,13 @@ WINDOWS_PNGS = {
 }
 
 
+def flatten_white(im: Image.Image) -> Image.Image:
+    """透明像素压到白底，避免圆角遮罩把 RGB=0 的透明区变成黑块。"""
+    background = Image.new("RGBA", im.size, (255, 255, 255, 255))
+    background.alpha_composite(im)
+    return background
+
+
 def rounded(im: Image.Image, radius_ratio: float = RADIUS_RATIO) -> Image.Image:
     im = im.convert("RGBA")
     w, h = im.size
@@ -44,7 +55,7 @@ def rounded(im: Image.Image, radius_ratio: float = RADIUS_RATIO) -> Image.Image:
 
 def main() -> None:
     src = Image.open(ROOT / "icon.png").convert("RGBA")
-    rounded_src = rounded(src)
+    rounded_src = rounded(flatten_white(src))
     rounded_src.save(ROOT / "icon-windows.png", "PNG")
     rounded_src.save(
         ROOT / "icon.ico",
