@@ -1041,6 +1041,8 @@ impl Pool {
     /// 算法见 [`pick::pick_with_preference`]。
     ///
     /// `excluded` 是**用户显式排除**的 uid（硬约束：自动选号、兜底、偏好都跳过）；
+    /// `allowed` 是**本密钥的允许名单**（issue #76；`None` = 全部账号）——
+    /// 与 `excluded` 同层，来源不同（一个是全局排除，一个是这一把 Key 的授权范围）；
     /// `mode` 只决定「在合格候选里挑谁」（加权 / 积分择优 / 随机）。
     pub fn pick_account(
         &mut self,
@@ -1051,6 +1053,7 @@ impl Pool {
         mode: PickMode,
         seed: u64,
         preferred: Option<&str>,
+        allowed: Option<&HashSet<String>>,
     ) -> Option<String> {
         let policy = self.policy();
         // 与模型冷却同一处惰性清理：窗口外的失败记录与已关闸的条目不该无限增长。
@@ -1061,6 +1064,9 @@ impl Pool {
             model,
             tried,
             excluded: &excluded,
+            // ★ issue #76：本密钥的允许名单（`None` = 全部账号）。
+            //   分组由调用方展开成 uid 后再传进来 —— 池条目不认识「分组」这个概念。
+            allowed,
             mode,
             seed,
         };
@@ -1170,7 +1176,11 @@ impl Pool {
     pub fn is_usable_for(&self, uid: &str, now_ms: i64, model: &str) -> bool {
         let policy = self.policy();
         let excluded = self.excluded_keys();
-        pick::is_usable(&self.entries, &policy, uid, now_ms, model, &excluded)
+        // ★ issue #76：`is_usable_for` 问的是「账号本身还能不能用」——
+        //   **不带** Key 白名单（那是「这一把 Key 允不允许用它」，两个问题）。
+        //   白名单只在选号入口（`pick_account`）生效，这里若也判，
+        //   「复活」按钮会把白名单外的账号判成不可恢复（语义混淆）。
+        pick::is_usable(&self.entries, &policy, uid, now_ms, model, &excluded, None)
     }
 
     /// 申请在途额度；返回是否成功（失败表示该号已占满）。
@@ -2712,7 +2722,8 @@ mod tests {
                 &HashSet::new(),
                 PickMode::Weighted,
                 1,
-                None
+                None,
+                None,
             ),
             Some("u1".to_string()),
             "也应当能被选到 —— 这才是「恢复」按钮的意义"
@@ -3390,6 +3401,7 @@ mod tests {
                 PickMode::Weighted,
                 1,
                 None,
+                None,
             )
             .expect("有候选");
         tried.insert(first.clone());
@@ -3404,6 +3416,7 @@ mod tests {
                 &tried,
                 PickMode::Weighted,
                 2,
+                None,
                 None,
             )
             .expect("仍有候选");
@@ -3435,6 +3448,7 @@ mod tests {
                 PickMode::Weighted,
                 1,
                 Some("poor"),
+                None,
             )
             .expect("有候选");
         assert_eq!(picked, "poor", "偏好账号可用时必须优先选中");
@@ -3450,6 +3464,7 @@ mod tests {
                 PickMode::Weighted,
                 2,
                 Some("poor"),
+                None,
             )
             .expect("仍有候选");
         assert_ne!(picked, "poor", "已试过的偏好必须被跳过");
@@ -3464,6 +3479,7 @@ mod tests {
                 PickMode::Weighted,
                 3,
                 Some("no-such"),
+                None,
             )
             .expect("偏好不存在也必须回落到自动择优");
         assert!(
@@ -3480,7 +3496,8 @@ mod tests {
                 &HashSet::new(),
                 PickMode::Weighted,
                 4,
-                None
+                None,
+                None,
             )
             .is_some(),
             "无偏好时行为不变"
