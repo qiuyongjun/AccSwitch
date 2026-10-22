@@ -41,6 +41,7 @@ pub async fn handler(
         record.id.clone(),
         record.policy(),
         state.key_usage.clone(),
+        "wb",
     ));
     // ★ 归属域由 API Key 决定；前缀策略走产品线那一套（统一入口走 `AlreadyResolved`）。
     let allow_reroute = state.config_snapshot().await.allow_model_region_prefix;
@@ -185,6 +186,7 @@ pub async fn responses_for_region(
                 RequestMeta {
                     endpoint: "/v1/responses",
                     key_id: key.as_deref().map(|actor| actor.key_id.clone()),
+                    key_scope: key.as_deref().map(|actor| actor.scope),
                     method: "POST",
                     region,
                     account: failure.account,
@@ -218,6 +220,7 @@ pub async fn responses_for_region(
                     RequestMeta {
                         endpoint: "/v1/responses",
                         key_id: key.as_deref().map(|actor| actor.key_id.clone()),
+                        key_scope: key.as_deref().map(|actor| actor.scope),
                         method: "POST",
                         region,
                         account,
@@ -258,6 +261,7 @@ pub async fn responses_for_region(
                         RequestMeta {
                             endpoint: "/v1/responses",
                             key_id: key.as_deref().map(|actor| actor.key_id.clone()),
+                            key_scope: key.as_deref().map(|actor| actor.scope),
                             method: "POST",
                             region,
                             account,
@@ -291,6 +295,7 @@ pub async fn responses_for_region(
                     RequestMeta {
                         endpoint: "/v1/responses",
                         key_id: key.as_deref().map(|actor| actor.key_id.clone()),
+                        key_scope: key.as_deref().map(|actor| actor.scope),
                         method: "POST",
                         region,
                         account,
