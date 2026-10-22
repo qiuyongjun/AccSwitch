@@ -2763,6 +2763,38 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
       const scope = String((args as { scope?: unknown } | undefined)?.scope ?? "");
       return scope.startsWith("trae") ? demoTraeAccounts() : { accounts: demoAccounts };
     }
+    /* 成长任务中心（仅 WB·CN）。演示站要能渲染「成长任务」页签，否则 build:demo 报错。
+       刻意给一份**混合状态**的数据：已领 / 可领 / 进行中 / 不可自动点亮各一条 ——
+       只有一条全绿的数据会让页面的分支在演示下永远走不到。 */
+    case "growth_tasks_list": {
+      const demoGrowthTasks = [
+        { taskCode: "chat_5", title: "累计完成 5 次对话", description: "在工作台与 Buddy 对话 5 次", credit: 100, energy: 0, target: 5, current: 5, progress: "5/5", acceptStatus: "accepted", locked: false, claimed: false, claimable: true, autoable: true, actionDesc: "补报 5 条对话活跃事件（按差额）" },
+        { taskCode: "RichMeow_Chat", title: "在桌面端对话 1 次", description: "使用 WorkBuddy 桌面端完成一次对话", credit: 100, energy: 5, target: 1, current: 0, progress: "0/1", acceptStatus: "accepted", locked: false, claimed: false, claimable: false, autoable: true, actionDesc: "桌面端完整对话事件链（6 事件，含成功回执）" },
+        { taskCode: "first_buddy", title: "领养第一只 Buddy", description: "完成首次领养", credit: 300, energy: 8, target: 1, current: 1, progress: "1/1", acceptStatus: "claimed", locked: false, claimed: true, claimable: false, autoable: true, actionDesc: "前置上报 → 同意协议 → 领取首只 Buddy" },
+        { taskCode: "expert_5", title: "使用 5 位平台专家", description: "召唤并使用平台专家", credit: 100, energy: 5, target: 5, current: 2, progress: "2/5", acceptStatus: "accepted", locked: false, claimed: false, claimable: false, autoable: false, actionDesc: "" },
+      ];
+      return {
+        ok: true,
+        tasks: demoGrowthTasks,
+        total: demoGrowthTasks.length,
+        claimable: 1,
+        claimed: 1,
+        autoable: 2,
+        account: activeAccount.nickname,
+      };
+    }
+    /* 卡片提示：任务摘要扫描。演示站要能同时看到「可领」与「可自动」两种标签，
+       所以给前两个账号各挂一种；其余账号不出现（= 没有提示标签）。 */
+    case "growth_tasks_scan": {
+      const accounts: Record<string, unknown> = {};
+      demoAccounts.slice(0, 2).forEach((account, index) => {
+        accounts[account.id] =
+          index === 0
+            ? { ok: true, total: 4, claimable: 1, autoable: 2, claimed: 1, idle: false, message: null }
+            : { ok: true, total: 4, claimable: 0, autoable: 1, claimed: 3, idle: false, message: null };
+      });
+      return { ok: true, cached: true, updatedAt: Date.now(), accounts };
+    }
     /* P5 T03：`credits` 是 WorkBuddy / Trae **共用**的参数化命令（靠 `scope` 区分平台），
        演示数据也必须按 scope 分 —— 否则 Trae 页面在演示模式下会拿到 WB 的积分形状。 */
     case "credits": {

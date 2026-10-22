@@ -42,8 +42,11 @@ pub mod diagnostics;
 pub mod credit_usage;
 pub mod credits;
 pub mod cst;
+// 成长任务中心：任务列表 / 报名 / 行为事件链点亮 / 领奖（纯事件类任务，零对话消耗）。
+// 与 `cat`（夜猫子）、`school`（校园季）、`travel`（猫猫旅行）并列且**互不重叠**。
 pub mod error_code;
 pub mod export_import;
+pub mod growth_tasks;
 pub mod identity;
 pub mod proxy_kpi_view;
 // JetBrains IDE（IDEA / PyCharm）内 CodeBuddy 插件账号切换（secret-storage.xml）。

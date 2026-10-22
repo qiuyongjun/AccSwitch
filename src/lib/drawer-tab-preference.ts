@@ -33,8 +33,21 @@ import { useCallback, useSyncExternalStore } from "react";
  */
 export const DRAWER_TAB_KEY_PREFIX = "buddy-switch:v1:drawer-tab:";
 
-/** 五枚页签的稳定 id（与 Radix `Tabs` 的 `value` 逐字一致）。 */
-export const DRAWER_TABS = ["overview", "credits", "checkin", "credential", "snapshot"] as const;
+/**
+ * 六枚页签的稳定 id（与 Radix `Tabs` 的 `value` 逐字一致）。
+ *
+ * `tasks`（成长任务中心）紧跟在 `checkin` 之后 —— 两者同属「成长域」的账号级动作。
+ * 它只在 **WorkBuddy 国内版**账号上出现（国际版与 Trae / Qoder 没有这套成长体系），
+ * 不存在的页签由 `resolveDrawerTab` 按可用列表回落，因此记忆值不需要额外迁移。
+ */
+export const DRAWER_TABS = [
+  "overview",
+  "credits",
+  "checkin",
+  "tasks",
+  "credential",
+  "snapshot",
+] as const;
 
 export type DrawerTab = (typeof DRAWER_TABS)[number];
 

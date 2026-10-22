@@ -26,6 +26,7 @@
 | 把 Codex / Claude Code / 其它客户端接到网关 | [`guides/GATEWAY-CLIENT-INTEGRATION.md`](guides/GATEWAY-CLIENT-INTEGRATION.md) |
 | 改网关（路由 / 换号 / 错误信封 / 命名空间） | [`specs/UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) + [`specs/P11-ARCH.md`](specs/P11-ARCH.md) + [`specs/P12-ARCH.md`](specs/P12-ARCH.md) |
 | 改前端某个页面 | [`specs/PLAN.md`](specs/PLAN.md) 对应 §3.x + 该期 `P*-ARCH.md` |
+| 加一个可自动完成的成长任务 / 改事件链 | [`specs/GROWTH-TASKS.md`](specs/GROWTH-TASKS.md) |
 | 新增一个平台 / 产品线 | [`specs/P5-ARCH.md`](specs/P5-ARCH.md) + [`specs/UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) §11 |
 | 用词拿不准（region / scope / 作用域…） | [`specs/VOCABULARY.md`](specs/VOCABULARY.md)（**冻结，不许自创**） |
 | 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D46） |
@@ -70,6 +71,7 @@
 | [`P13-REFERENCE-PARITY.md`](specs/P13-REFERENCE-PARITY.md) | 参考实现对齐：把可纳入的能力排进期次 |
 | [`P14-TASKS.md`](specs/P14-TASKS.md) | 会话跨客户端 + 关联表升级（取证版任务拆分） |
 | [`P15-SPIKE-RESULTS.md`](specs/P15-SPIKE-RESULTS.md) | 外部 Agent 会话监听 spike 结论（S1–S4 已落地） |
+| [`GROWTH-TASKS.md`](specs/GROWTH-TASKS.md) | 成长任务中心：客户端指纹矩阵 / 逐任务判据 / 点亮→回读→领奖流程 |
 
 ### 产品线与平台
 

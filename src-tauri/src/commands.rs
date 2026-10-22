@@ -9,9 +9,9 @@ use std::sync::Mutex;
 
 use buddy_switch_core::modules::{
     account, app_prefs, auth_file, backup, cache, capability, checkin, client_limits,
-    client_settings, config, credit_usage, credits, diagnostics, export_import, migrate, oauth,
-    process, programs, qoder, refresh, region::Region, region::RegionFilter, rotate, session,
-    skill, switch, token_daily, token_stats, trae, travel, update, vscode_session,
+    client_settings, config, credit_usage, credits, diagnostics, export_import, growth_tasks,
+    migrate, oauth, process, programs, qoder, refresh, region::Region, region::RegionFilter,
+    rotate, session, skill, switch, token_daily, token_stats, trae, travel, update, vscode_session,
 };
 use tauri::{Emitter, Manager};
 // P5 §2.5 第 (2) 条：capability **默认拒绝**。表数据只在 core（`product_spec`），本文件只查表。
@@ -691,6 +691,129 @@ pub async fn checkin_status(scope: String, account_id: Option<String>) -> Result
         }
         Product::Qoder => qoder_scope_not_applicable(),
     }
+}
+
+/// 解析「WB 单账号 + CN」这条组合，供成长任务 5 个命令复用。
+///
+/// 三件事一次做完，避免每个命令各写一遍（写漏 `ensure_supported` 就会在 Global 上
+/// 打出一串没意义的 404）：
+/// 1. `scope` → 平台/区域（Qoder / Trae 直接拒绝，Trae 没有这套成长体系）；
+/// 2. 取账号（不存在立即失败，不要带着空 Bearer 去打上游）；
+/// 3. 区域闸门（Global 无成长任务，早失败比空列表诚实）。
+fn resolve_growth_account(
+    scope: &str,
+    account_id: Option<&str>,
+) -> Result<(Region, Value), String> {
+    let scope = resolve_scope_param(Some(scope))?;
+    match scope.product() {
+        Product::Workbuddy => {
+            let region = require_wb_region(scope)?;
+            // 区域闸门**先于**取账号：国际版没有这套成长体系，先查账号会让用户看到
+            // 一句误导性的「账号不存在」（账号其实好好的，只是这套接口不存在）。
+            if region != Region::Cn {
+                return Err("国际版暂无成长任务体系".to_string());
+            }
+            let account_id = account_id.unwrap_or_default();
+            let account = account::find_account_for(region, account_id)
+                .ok_or_else(|| "账号不存在".to_string())?;
+            Ok((region, account))
+        }
+        Product::Trae => Err("Trae 没有成长任务体系".to_string()),
+        // 不复用 `qoder_scope_not_applicable()`：那句文案写着「只服务 WorkBuddy / Trae」，
+        // 而本端点**连 Trae 都不服务**，照抄会给用户指错方向。
+        Product::Qoder => Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string()),
+    }
+}
+
+/// 成长任务：任务列表（`GET /v2/activity/growth/tasks`）。
+///
+/// 返回 `{ok, tasks[], total, claimable, claimed, autoable}`；每个任务带 `autoable`
+/// 标记，前端据此决定是否显示「执行」按钮（不可自动的任务只展示进度）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_list(scope: String, account_id: Option<String>) -> Result<Value, String> {
+    let (region, account) = resolve_growth_account(&scope, account_id.as_deref())?;
+    Ok(growth_tasks::list_tasks_for(region, &account).await)
+}
+
+/// 成长任务：批量报名（`accept_status: not_accepted → accepted`）。
+///
+/// 报名**不产生进度**，只是把任务纳入「进行中」；真正的进度来自行为事件上报。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_accept(
+    scope: String,
+    account_id: Option<String>,
+    codes: Vec<String>,
+) -> Result<Value, String> {
+    let (region, account) = resolve_growth_account(&scope, account_id.as_deref())?;
+    Ok(growth_tasks::accept_tasks_for(region, &account, &codes).await)
+}
+
+/// 成长任务：领取单个任务奖励（Web 域优先，404/405 回落 chat 域）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_claim(
+    scope: String,
+    account_id: Option<String>,
+    code: String,
+) -> Result<Value, String> {
+    let (region, account) = resolve_growth_account(&scope, account_id.as_deref())?;
+    let (ok, outcome, message) = growth_tasks::claim_task_for(region, &account, &code).await;
+    Ok(json!({
+        "ok": ok,
+        "message": message,
+        "credit": outcome.credit,
+        "energy": outcome.energy,
+        "alreadyClaimed": outcome.already_claimed,
+    }))
+}
+
+/// 成长任务：只领不点亮 —— 把所有「已达标未领取」的奖励一次收完。
+///
+/// 与 [`growth_tasks_auto`] 分开是刻意的：领奖无副作用，点亮会发行为事件、调主题 API。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_claim_all(
+    scope: String,
+    account_id: Option<String>,
+) -> Result<Value, String> {
+    let (region, account) = resolve_growth_account(&scope, account_id.as_deref())?;
+    Ok(growth_tasks::claim_all_for(region, &account).await)
+}
+
+/// 成长任务：单账号「一键完成」—— 报名 → 逐任务点亮 → 回读 → 领奖。
+///
+/// ⚠️ **耗时可观**（含异步计分轮询，最坏数十秒）。前端必须给出进行中状态并禁用重复点击；
+/// 后端的同账号互斥闸只是兜底（[`growth_tasks::run_auto_for`] 内部持有）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_auto(scope: String, account_id: Option<String>) -> Result<Value, String> {
+    let (region, account) = resolve_growth_account(&scope, account_id.as_deref())?;
+    Ok(growth_tasks::run_auto_for(region, &account).await)
+}
+
+/// 成长任务：任务摘要扫描（账号卡片上的「可领 / 可自动」提示标签）。
+///
+/// - `account_id` 为空 ⇒ 扫全部 CN 账号（账号间串行 + 限速，首次较慢）；
+/// - 给了 `account_id` ⇒ 只刷这一个账号（跑完任务后刷单卡，不为一张卡重扫全表）；
+/// - `force = false` 且缓存未过期 ⇒ **零上游请求**，直接返回缓存（TTL 10 分钟）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn growth_tasks_scan(
+    scope: String,
+    force: Option<bool>,
+    account_id: Option<String>,
+) -> Result<Value, String> {
+    let scope = resolve_scope_param(Some(&scope))?;
+    let region = match scope.product() {
+        Product::Workbuddy => require_wb_region(scope)?,
+        Product::Trae => return Err("Trae 没有成长任务体系".to_string()),
+        Product::Qoder => return Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string()),
+    };
+    if region != Region::Cn {
+        return Err("国际版暂无成长任务体系".to_string());
+    }
+    Ok(growth_tasks::scan_for(
+        region,
+        account_id.as_deref().filter(|id| !id.is_empty()),
+        force.unwrap_or(false),
+    )
+    .await)
 }
 
 /// ★ 参数化命令：在系统文件管理器中打开**该作用域客户端**的数据目录 —— `scope` 同时决定
@@ -4136,7 +4259,8 @@ mod command_threading_tests {
 mod parameterized_scope_tests {
     use super::{
         accounts_export, accounts_export_to_path, accounts_import, accounts_import_local,
-        build_open_data_dir, checkin_status, credits,
+        build_open_data_dir, checkin_status, credits, growth_tasks_auto, growth_tasks_claim,
+        growth_tasks_list,
     };
 
     #[test]
@@ -4195,6 +4319,32 @@ mod parameterized_scope_tests {
         assert!(error.contains("wb-cn"), "{error}");
         assert!(error.contains("trae-global"), "{error}");
         assert!(accounts_import_local(String::new()).await.is_err());
+    }
+
+    /// 成长任务 5 命令：未知 scope 与**非 CN 区域**都必须在取账号 / 打上游之前失败。
+    ///
+    /// 与 server 侧 `parameterized_account_commands_reject_unknown_scope` +
+    /// `growth_task_routes_reject_non_cn_scopes` 互为镜像。
+    ///
+    /// 区域那条尤其值得单独断言：`wb-global` 是**合法作用域**，若只在
+    /// `growth_tasks::ensure_supported` 里拦，用户会先看到「账号不存在」
+    /// （账号其实没问题，是这套接口在国际版不存在）。
+    #[tokio::test]
+    async fn growth_task_commands_reject_unknown_and_global_scope() {
+        let error = growth_tasks_list("trae-glboal".to_string(), None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("wb-cn"), "{error}");
+
+        let error = growth_tasks_auto("wb-global".to_string(), None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("国际版"), "{error}");
+
+        let error = growth_tasks_claim("qoder-cn".to_string(), None, "chat_5".to_string())
+            .await
+            .unwrap_err();
+        assert!(error.contains("WorkBuddy"), "{error}");
     }
 }
 

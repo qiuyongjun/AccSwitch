@@ -379,6 +379,15 @@ pub fn run() {
             commands::accounts_paste_credential,
             commands::credits,
             commands::checkin_status,
+            // 成长任务中心（纯事件上报类任务）：列表 / 报名 / 领奖 / 一键完成。
+            // 与 `checkin` 同族 —— 都是「成长域」的账号级动作，故紧邻注册。
+            commands::growth_tasks_list,
+            commands::growth_tasks_accept,
+            commands::growth_tasks_claim,
+            commands::growth_tasks_claim_all,
+            commands::growth_tasks_auto,
+            // 卡片提示：批量 / 单账号任务摘要（带 10 分钟落盘缓存，避免为每张卡各打一次上游）。
+            commands::growth_tasks_scan,
             commands::open_data_dir,
             // 缓存清理（「清除缓存」）：`cache_scan` 只读量体积，`cache_clear` 按类别删。
             commands::cache_scan,

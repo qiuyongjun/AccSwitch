@@ -3,6 +3,7 @@ import { ArrowRight, Check, Download, Info, Loader2, MessageSquare, Pencil, Refr
 
 import { avatarTone, formatCredits } from "@/components/account-card";
 import { AccountGroupPicker } from "@/components/account-group-picker";
+import { GrowthTasksPanel } from "@/components/growth-tasks-panel";
 import type { AccountRefreshKind } from "@/lib/account-refresh";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -283,6 +284,22 @@ export interface AccountDetailDrawerProps {
   actions?: DetailActions | null;
   /** 签到历史（近 7 天）；`null` / 空数组 = 不渲染该区块。 */
   checkinHistory?: DetailCheckinHistoryRow[] | null;
+  /**
+   * ★ 成长任务中心（仅 **WorkBuddy 国内版**）。
+   *
+   * 传「账号定位」而不是数据：任务列表只在**切到该页签时**才有意义，
+   * 让账号页为每个账号预先拉一遍把它们撑成常态开销（详见 `growth-tasks-panel.tsx` 文件头）。
+   *
+   * ⚠️ 不传 / `null` = **不渲染该页签**。国际版没有这套成长体系，Trae / Qoder 也没有 ——
+   * 画一个永远拉不到数据的页签，比没有这个功能坏得多。
+   */
+  growthTasks?: { scope: string; accountId: string } | null;
+  /**
+   * 成长任务面板跑完一次动作后的通知（用于刷新列表卡片上的「可领 N」标签）。
+   *
+   * 由页面注入；不注入也完全可用 —— 只是卡片标签要等下次整页扫描才更新。
+   */
+  onGrowthTasksChanged?: () => void;
 }
 
 function packTone(pack: DetailPack): string {
@@ -333,6 +350,8 @@ export function AccountDetailDrawer({
   extClientLabel,
   actions = null,
   checkinHistory = null,
+  growthTasks = null,
+  onGrowthTasksChanged,
 }: AccountDetailDrawerProps) {
   const t = useT();
   const [editing, setEditing] = useState(false);
@@ -448,6 +467,9 @@ export function AccountDetailDrawer({
   const availableTabs: DrawerTab[] = ["overview"];
   if (packs.length > 0) availableTabs.push("credits");
   if (checkin || (checkinHistory && checkinHistory.length > 0)) availableTabs.push("checkin");
+  // 成长任务：调用方注入账号定位才出现（仅 WB·CN）。**不依赖**其它区块是否为空 ——
+  // 任务列表与积分 / 签到是独立数据源，没有积分明细也一样能领任务奖励。
+  if (growthTasks) availableTabs.push("tasks");
   if (hasActions) availableTabs.push("credential");
   if (snapshots.length > 0) availableTabs.push("snapshot");
 
@@ -720,9 +742,10 @@ export function AccountDetailDrawer({
               }}
               className="min-h-0"
             >
-              {/* 页签最多五个（含「快照」），抽屉又窄 ⇒ 必须**不换行**：
-                  `inline-flex` 默认允许折行，五个页签会在 300px 里挤成两排（快照孤零零掉到第二行）。
-                  改成 nowrap + 横向滚动：一行排开，实在放不下时能滑，而不是折行。 */}
+              {/* 页签最多六个（含「快照」与「任务」），抽屉又窄 ⇒ 必须**不换行**：
+                  `inline-flex` 默认允许折行，页签会挤成两排。
+                  改成 nowrap + 横向滚动：一行排开，实在放不下时能滑，而不是折行。
+                  ⚠️「任务」页签只在 WB·CN 出现，其它账号仍是五枚。 */}
               <TabsList className="max-w-full flex-nowrap overflow-x-auto">
                 {availableTabs.map((tab) => (
                   <TabsTrigger key={tab} value={tab}>
@@ -935,6 +958,18 @@ export function AccountDetailDrawer({
               )}
 
                               </TabsContent>
+              )}
+
+              {/* 成长任务（仅 WB·CN）：面板自带取数与进行中态 —— 任务列表不参与
+                  列表页的排序 / 筛选，没必要由页面预取（见面板文件头）。 */}
+              {growthTasks && (
+                <TabsContent value="tasks" className="space-y-3 pt-1">
+                  <GrowthTasksPanel
+                    scope={growthTasks.scope}
+                    accountId={growthTasks.accountId}
+                    onChanged={onGrowthTasksChanged}
+                  />
+                </TabsContent>
               )}
 
               {hasActions && (

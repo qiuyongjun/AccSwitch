@@ -18,9 +18,9 @@ use serde_json::{json, Value};
 
 use buddy_switch_core::modules::{
     account, auth_file, backup, checkin, client_limits, client_settings, config, credit_usage,
-    credits, diagnostics, export_import, migrate, oauth, process, programs, qoder, refresh,
-    region::Region, region::RegionFilter, rotate, schedule, scheduler, session, skill, switch,
-    token_daily, token_stats, trae, travel, update, vscode_session,
+    credits, diagnostics, export_import, growth_tasks, migrate, oauth, process, programs, qoder,
+    refresh, region::Region, region::RegionFilter, rotate, schedule, scheduler, session, skill,
+    switch, token_daily, token_stats, trae, travel, update, vscode_session,
 };
 use buddy_switch_gateway::unified::UnifiedGatewayConfig;
 use buddy_switch_gateway::GatewayProduct;
@@ -262,6 +262,17 @@ fn api_routes() -> Router {
         .route("/api/client-settings/diff", post(api_client_settings_diff))
         .route("/api/migrate/account", post(api_migrate_account))
         .route("/api/checkin/status", get(api_checkin_status))
+        // 成长任务中心（与 `src-tauri/src/commands.rs::growth_tasks_*` 一一对应）：
+        // 路径对齐命令名（`growth_tasks_list` → `/api/growth-tasks/list`）。
+        .route("/api/growth-tasks/list", post(api_growth_tasks_list))
+        .route("/api/growth-tasks/accept", post(api_growth_tasks_accept))
+        .route("/api/growth-tasks/claim", post(api_growth_tasks_claim))
+        .route(
+            "/api/growth-tasks/claim-all",
+            post(api_growth_tasks_claim_all),
+        )
+        .route("/api/growth-tasks/auto", post(api_growth_tasks_auto))
+        .route("/api/growth-tasks/scan", post(api_growth_tasks_scan))
         .route("/api/credits", post(api_credits))
         .route("/api/credits/stats", get(api_credit_statistics))
         .route("/api/token-stats", get(api_token_statistics))
@@ -1360,6 +1371,134 @@ async fn api_credits_query(Json(body): Json<Value>) -> Response {
         },
         Product::Qoder => qoder_scope_not_applicable(),
     }
+}
+
+/// 解析「WB 单账号 + CN」组合，供成长任务 5 个 handler 复用。
+///
+/// 与 `src-tauri/src/commands.rs::resolve_growth_account` **同款**（两宿主刻意不去重）。
+/// 走到 `Err` 时调用方一律按 400 返回 —— 这些都是「请求本身不成立」，不是服务端故障。
+fn resolve_growth_account(body: &Value) -> Result<(Region, Value), String> {
+    let scope = resolve_scope_param(body.get("scope").and_then(Value::as_str))?;
+    match scope.product() {
+        Product::Workbuddy => {
+            let region = require_wb_region(scope)?;
+            // 区域闸门**先于**取账号：国际版没有这套成长体系，先查账号会让用户看到
+            // 一句误导性的「账号不存在」（账号其实好好的，只是这套接口不存在）。
+            if region != Region::Cn {
+                return Err("国际版暂无成长任务体系".to_string());
+            }
+            let id = body.get("accountId").and_then(Value::as_str).unwrap_or("");
+            let account =
+                account::find_account_for(region, id).ok_or_else(|| "账号不存在".to_string())?;
+            Ok((region, account))
+        }
+        Product::Trae => Err("Trae 没有成长任务体系".to_string()),
+        Product::Qoder => Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string()),
+    }
+}
+
+/// POST /api/growth-tasks/list —— 任务列表（含 `autoable` 标记与进度）。
+async fn api_growth_tasks_list(Json(body): Json<Value>) -> Response {
+    let (region, account) = match resolve_growth_account(&body) {
+        Ok(pair) => pair,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    json_ok(growth_tasks::list_tasks_for(region, &account).await)
+}
+
+/// POST /api/growth-tasks/accept —— 批量报名（`{codes: [...]}`）。
+async fn api_growth_tasks_accept(Json(body): Json<Value>) -> Response {
+    let (region, account) = match resolve_growth_account(&body) {
+        Ok(pair) => pair,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    let codes: Vec<String> = body
+        .get("codes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    json_ok(growth_tasks::accept_tasks_for(region, &account, &codes).await)
+}
+
+/// POST /api/growth-tasks/claim —— 领取单个任务奖励（`{code: "..."}`）。
+async fn api_growth_tasks_claim(Json(body): Json<Value>) -> Response {
+    let (region, account) = match resolve_growth_account(&body) {
+        Ok(pair) => pair,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    let Some(code) = body.get("code").and_then(Value::as_str) else {
+        return json_err("缺少任务码".to_string(), StatusCode::BAD_REQUEST);
+    };
+    let (ok, outcome, message) = growth_tasks::claim_task_for(region, &account, code).await;
+    json_ok(json!({
+        "ok": ok,
+        "message": message,
+        "credit": outcome.credit,
+        "energy": outcome.energy,
+        "alreadyClaimed": outcome.already_claimed,
+    }))
+}
+
+/// POST /api/growth-tasks/claim-all —— 只领不点亮（把可领的奖励一次收完）。
+async fn api_growth_tasks_claim_all(Json(body): Json<Value>) -> Response {
+    let (region, account) = match resolve_growth_account(&body) {
+        Ok(pair) => pair,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    json_ok(growth_tasks::claim_all_for(region, &account).await)
+}
+
+/// POST /api/growth-tasks/auto —— 单账号「一键完成」（耗时可观，含异步计分轮询）。
+async fn api_growth_tasks_auto(Json(body): Json<Value>) -> Response {
+    let (region, account) = match resolve_growth_account(&body) {
+        Ok(pair) => pair,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    json_ok(growth_tasks::run_auto_for(region, &account).await)
+}
+
+/// POST /api/growth-tasks/scan —— 任务摘要（账号卡片提示标签）。
+///
+/// `{scope, force?, accountId?}`：`accountId` 为空扫全部账号；给了就只刷这一个。
+/// `force=false` 且缓存未过期时零上游请求。
+async fn api_growth_tasks_scan(Json(body): Json<Value>) -> Response {
+    let scope = match resolve_scope_param(body.get("scope").and_then(Value::as_str)) {
+        Ok(scope) => scope,
+        Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+    };
+    let region = match scope.product() {
+        Product::Workbuddy => match require_wb_region(scope) {
+            Ok(region) => region,
+            Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+        },
+        Product::Trae => {
+            return json_err("Trae 没有成长任务体系".to_string(), StatusCode::BAD_REQUEST)
+        }
+        Product::Qoder => {
+            return json_err(
+                "成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string(),
+                StatusCode::BAD_REQUEST,
+            )
+        }
+    };
+    if region != Region::Cn {
+        return json_err("国际版暂无成长任务体系".to_string(), StatusCode::BAD_REQUEST);
+    }
+    let account_id = body
+        .get("accountId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty());
+    let force = body
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json_ok(growth_tasks::scan_for(region, account_id, force).await)
 }
 
 /// POST /api/checkin/status/query —— 参数化签到状态查询（`scope` 决定平台与区域）。
@@ -6426,6 +6565,12 @@ mod tests {
             "/api/data-dir/open",
             "/api/credits/query",
             "/api/checkin/status/query",
+            // 成长任务 5 路由同款：`scope` 是必填维度，未知 / 缺失一律 400。
+            "/api/growth-tasks/list",
+            "/api/growth-tasks/accept",
+            "/api/growth-tasks/claim",
+            "/api/growth-tasks/claim-all",
+            "/api/growth-tasks/auto",
         ] {
             // 未知 / 拼错的作用域 ⇒ 400（`resolve_scope_param` 在落盘之前失败）。
             let (status, body) = call_api(
@@ -6449,6 +6594,40 @@ mod tests {
                 "{uri} 缺 scope 必须 400: {body}"
             );
         }
+    }
+
+    /// 成长任务的**区域闸门**：国际版与 Qoder 作用域必须 400 且给出可读原因。
+    ///
+    /// 可证伪：把 `resolve_growth_account` 里的 Global / Qoder 分支改成「照常取账号」，
+    /// 本测试立即变红 —— 那正是「在 `www.workbuddy.ai` 上打出一串无意义 404」的缺陷形态。
+    #[tokio::test]
+    async fn growth_task_routes_reject_non_cn_scopes() {
+        let _guard = test_guard();
+        isolated_home();
+
+        let (status, body) = call_api(
+            Method::POST,
+            "/api/growth-tasks/list",
+            Some(json!({"scope": "wb-global", "accountId": "x"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("国际版"),
+            "Global 的错误文案必须说明「国际版无成长体系」: {body}"
+        );
+
+        let (status, body) = call_api(
+            Method::POST,
+            "/api/growth-tasks/auto",
+            Some(json!({"scope": "qoder-cn", "accountId": "x"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("WorkBuddy"),
+            "Qoder 的错误文案必须指向只有 WorkBuddy 有成长任务: {body}"
+        );
     }
 }
 

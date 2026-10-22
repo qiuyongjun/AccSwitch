@@ -51,8 +51,11 @@ import { ExtSessionDrawer } from "@/components/sessions/ext-session-drawer";
 import * as api from "@/lib/api";
 // ★ B5：`checkinCreditsOf` 是**值**（从条目/raw 里取积分字段），`CheckinStatusEntry` 是**类型**。
 import { checkinCreditsOf } from "@/lib/api";
-import type { CheckinStatusEntry } from "@/lib/api";
+import type { CheckinStatusEntry, GrowthTaskSummary } from "@/lib/api";
 import { accountSearchText } from "@/lib/account-search";
+/* 详情抽屉「最近使用」一行：相对时间给读感、绝对时刻挂 `title` —— 与先前卡片同一套口径
+   （`formatRelativeTime` 是共享实现，见 `lib/catalog-source.ts`）。 */
+import { formatAbsoluteTime, formatRelativeTime } from "@/lib/catalog-source";
 import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
 import {
   filterAccounts,
@@ -327,6 +330,13 @@ function RegionPanel({ region }: { region: Region }) {
   const [switchConfig, setSwitchConfig] = useState<SwitchConfig | null>(null);
   /** 账号 id -> 今日旅行状态（undefined=查询中/未知） */
   const [travelMap, setTravelMap] = useState<Record<string, TravelStatus>>({});
+  /**
+   * 账号 id -> 成长任务摘要（卡片上的「可领 N」/「可自动 N」提示标签）。
+   *
+   * 缺席 = 还没扫到 / 该号取不到任务 ⇒ **不挂标签**（绝不写「可领 0」）。
+   * 数据来自**一次批量扫描**（后端 10 分钟落盘缓存），不是每张卡各查一次。
+   */
+  const [growthHints, setGrowthHints] = useState<Record<string, GrowthTaskSummary>>({});
   /**
    * 「今日 Token」按账号聚合（`get_account_token_today`）：`uid -> 明细`。
    *
@@ -859,6 +869,46 @@ function RegionPanel({ region }: { region: Region }) {
       cancelled = true;
     };
   }, [accounts, region, autoCheckinConfig?.enabled]);
+
+  /**
+   * 批量扫一次成长任务摘要（卡片提示标签）。
+   *
+   * 为什么放在「账号列表就绪后」而不是每张卡各自请求：每卡一次 = 打开账号页就打
+   * N 次上游；批量 + 后端缓存后，绝大多数打开是**零**上游请求。
+   * 只服务 CN（国际版没有成长任务体系，打了也只会拿到错误）。
+   */
+  useEffect(() => {
+    if (region !== "cn") return;
+    if (!accounts.length) return;
+    let cancelled = false;
+    void api
+      .growthTasksScan(scope)
+      .then((res) => {
+        if (!cancelled && res.ok) setGrowthHints((prev) => ({ ...prev, ...res.accounts }));
+      })
+      .catch(() => {
+        // 提示标签是**辅助信息**：扫不到就不挂标签，绝不为它弹错误打断用户。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts, region, scope]);
+
+  /**
+   * 刷**单个**账号的任务摘要（抽屉里跑完「一键完成 / 领取」后调用）。
+   *
+   * 必须有这条：否则用户领完奖励关掉抽屉，卡片上还挂着「可领 1」——
+   * 而重扫全表只为了纠正一张卡，代价又太大。
+   */
+  async function refreshGrowthHint(accountId: string) {
+    if (region !== "cn") return;
+    try {
+      const res = await api.growthTasksScan(scope, { force: true, accountId });
+      if (res.ok) setGrowthHints((prev) => ({ ...prev, ...res.accounts }));
+    } catch {
+      // 同上：辅助信息，失败不打扰；下次整页扫描会自己纠正。
+    }
+  }
 
   async function loadTravelMap(accountIds: string[], isStale?: () => boolean) {
     const next = await fetchTravelMap(accountIds, region, isStale);
@@ -1659,6 +1709,17 @@ function RegionPanel({ region }: { region: Region }) {
             {account.needsRelogin ? t("wbAccounts.card.needRelogin") : t("wbAccounts.card.tokenExpired")}
           </Badge>
         )}
+        {/* 成长任务提示：与卡片同一份摘要（`growthHints`），口径不会两处漂移。
+            可领优先于可自动（后端保证两者互斥），零值不渲染。 */}
+        {(growthHints[account.id]?.claimable ?? 0) > 0 ? (
+          <Badge variant="success" className="rounded-md px-1.5 py-0 text-[11px] font-medium">
+            {t("wbAccounts.card.growthClaimable", { n: growthHints[account.id].claimable })}
+          </Badge>
+        ) : (growthHints[account.id]?.autoable ?? 0) > 0 ? (
+          <Badge variant="info" className="rounded-md px-1.5 py-0 text-[11px] font-medium">
+            {t("wbAccounts.card.growthAutoable", { n: growthHints[account.id].autoable })}
+          </Badge>
+        ) : null}
       </div>
     );
   }
@@ -1818,6 +1879,19 @@ function RegionPanel({ region }: { region: Region }) {
                   : checkinMap[detail.id] === false
                     ? t("wbAccounts.card.notCheckedIn")
                     : "—",
+            },
+            /* ★ 2026-10-22：卡片指标行瘦身后不再显示「最近使用」，该信息**下沉到这里** ——
+               它是「这个号多久没动了」的唯一去处（排序选项只给顺序，不给数值）。 */
+            {
+              label: t("wbAccounts.detail.lastUsed"),
+              value:
+                typeof detail.lastUsedAt === "number" && detail.lastUsedAt > 0
+                  ? formatRelativeTime(detail.lastUsedAt, t) ?? "—"
+                  : t("wbAccounts.detail.neverUsed"),
+              title:
+                typeof detail.lastUsedAt === "number" && detail.lastUsedAt > 0
+                  ? formatAbsoluteTime(detail.lastUsedAt)
+                  : undefined,
             },
           ],
         },
@@ -2392,8 +2466,7 @@ function RegionPanel({ region }: { region: Region }) {
                               }}
                               todayCheckedIn={checkinMap[a.id]}
                               travelStatus={travelMap[a.id]}
-                              todayTokens={a.uid ? tokenTodayMap.get(a.uid) : undefined}
-                              todayTokensTruncated={tokenTodayTruncated}
+                              growthHint={growthHints[a.id]}
                               credit={creditMap[a.id]}
                               creditLoading={creditLoadingMap[a.id]}
                               creditPriority={a.id === priorityAccountId}
@@ -2795,6 +2868,12 @@ function RegionPanel({ region }: { region: Region }) {
         actions={detailActions}
         /* ★ 「签到历史（近 7 天）」（原型 :3428）：日期 / 结果来自签到日志，金额来自积分统计（缺失「—」）。 */
         checkinHistory={detailCheckinHistory}
+        /* ★ 成长任务中心：**只在 WorkBuddy 国内版**注入 —— 国际版没有这套成长体系
+           （后端 `growth_tasks` 对 Global 直接返回「暂无」），Trae / Qoder 更没有。
+           注入的是「账号定位」而非数据：任务列表由面板在切到页签时自取。 */
+        growthTasks={detail && scope === "wb-cn" ? { scope, accountId: detail.id } : null}
+        /* 跑完任务后刷**这一张卡**的提示标签（不重扫全表）。 */
+        onGrowthTasksChanged={detail ? () => void refreshGrowthHint(detail.id) : undefined}
         // ★ B5：签到积分（**有数据才渲染**；查询未回来 / 失败时为 `null`）。
         checkin={
           detail && checkinDetailMap[detail.id]

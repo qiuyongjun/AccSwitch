@@ -449,6 +449,14 @@ pub fn credit_usage_snapshots_file() -> PathBuf {
     store_dir().join("credit_usage_snapshots.json")
 }
 
+/// 成长任务摘要的落盘缓存（账号卡片上的「可领 / 可自动」提示标签读它）。
+///
+/// **为什么要落盘**：摘要要按账号逐个打上游（每号一次请求），不缓存的话每次打开账号页
+/// 都是 N 次请求；缓存后绝大多数打开是零请求。坏文件一律当空表（同 `reward_gate`）。
+pub fn growth_tasks_cache_file() -> PathBuf {
+    store_dir().join("growth_tasks_cache.json")
+}
+
 pub fn official_usage_cache_file() -> PathBuf {
     store_dir().join("official_usage_cache.json")
 }

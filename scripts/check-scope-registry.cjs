@@ -1907,17 +1907,65 @@ check("★ P4 分组选项按平台数据：两页都有 group（WB 有 groupNam
   return `WB ${wb[0].replace(/availableGroups:\s*/, "= ")} · Trae ${trae[0].replace(/availableGroups:\s*/, "= ")}`;
 });
 
-check("★ 「今日 Token」诚实边界：卡片指标行三项齐备，—/≥ 由唯一实现承担", () => {
+check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最近使用**不进卡**（诚实实现仍共用）", () => {
   /* 参见 `AccountTokenTodayResponse` 的三条红线：缺席 ⇒ 「—」（**非 0**）；被裁剪 ⇒ 下界 `≥N`；
      真实 0 照常渲染。卡片与表格**必须**共用同一份实现，否则两处口径会漂移。
-     变异：删掉任一项 / 去掉 `≥` 或「—」分支 / 换掉共享 `formatDate` ⇒ 本条变红。 */
-  const card = readCode("src/components/account-card.tsx");
-  for (const key of [
-    "wbAccounts.card.metric.credits",
-    "wbAccounts.card.metric.todayTokens",
-    "wbAccounts.card.metric.lastUsedTip",
+     变异：删掉 `formatTodayTokens` / 去掉 `≥` 或「—」分支 ⇒ 本条变红。
+
+     ★ 2026-10-22 用户要求卡片瘦身（腾出 chips 行的空间给成长任务标签）：
+       - 「今日用量」与「最近使用」**移出卡片**（前者的正式去处是用量统计页与详情抽屉的
+         「今日 Token」指标块，后者下沉到详情抽屉「最近使用」一行）；
+       - 「临期积分」与「优先」两枚标签从 chips 行**移到指标行**，紧跟总积分。
+     ⇒ 判据同步改成新契约，且仍能证伪：
+       ① 指标行必须只由「积分」+ {@link expiringNote} + {@link priorityNote} 组成（且是文字）；
+       ② 这三项的位置若被改回 chips 行（用户明确不要的形态）⇒ 红；
+       ③ 今日用量若被塞回卡片（信息重复，且卡上不可比较）⇒ 红；
+       ④ 最近使用若从**所有**界面消失（卡片删了、抽屉也没接）⇒ 红。 */
+  const card = stripComments(readCode("src/components/account-card.tsx"));
+  if (!card.includes("wbAccounts.card.metric.credits")) {
+    throw new Error("账号卡片指标行缺少「积分」项");
+  }
+  /* ① 指标行内容：积分 → 临期 → 优先（顺序即读法：先看还有多少，再看哪些要过期/是否优先号）。
+     ⚠️ 2026-10-22 晚些时候（用户第二轮反馈）：临期/优先在该行里必须是**文字**，不是徽章 ——
+     徽章与上一行 chips（已签到 / 任务 / 旅行）同高同底，两行会糊成一层，还与左边的
+     积分数字「文字 vs 色块」不搭。变异：把 `<Badge>` 塞回指标行 ⇒ 本条变红。 */
+  const metricsRow = /const metricsRow = \(([\s\S]{0,2000}?)\n  \);/.exec(card);
+  if (!metricsRow) throw new Error("找不到 `metricsRow` —— 卡片指标行的唯一实现没了");
+  const row = metricsRow[1];
+  for (const part of ["metric.credits", "{expiringNote}", "{priorityNote}"]) {
+    if (!row.includes(part)) throw new Error(`指标行缺少「${part}」（应为「积分 + 临期 + 优先」）`);
+  }
+  if (row.indexOf("{expiringNote}") > row.indexOf("{priorityNote}")) {
+    throw new Error("指标行里「临期」必须排在「优先」之前（先读到「哪些要过期」，再读到「优先号」）");
+  }
+  if (/<Badge/.test(row)) {
+    throw new Error("指标行里出现了徽章 —— 该行只允许文字（徽章留给 chips 行的状态标签）");
+  }
+  /* 两条文字各自的**唯一**字色分级：临期 = warning（要花掉的）、优先 = primary（规则相关）。
+     变异：两边换成同一个色 / 改回 muted ⇒ 本条变红（读的时候区分不出来）。 */
+  for (const [head, tone, label] of [
+    ["const expiringNote", "text-warning", "临期"],
+    ["const priorityNote", "text-primary", "优先"],
   ]) {
-    if (!card.includes(key)) throw new Error(`账号卡片指标行缺少「${key}」`);
+    const at = card.indexOf(head);
+    if (at < 0) throw new Error(`找不到 \`${head}\` —— 指标行的「${label}」项没了`);
+    if (!card.slice(at, at + 1200).includes(tone)) {
+      throw new Error(`「${label}」缺少字色分级 \`${tone}\`（该行只靠字色区分轻重）`);
+    }
+  }
+  /* ② 两枚标签不得退回 chips 行。 */
+  const chips = /const statusChips = \(([\s\S]*?)\n  \);/.exec(card);
+  if (!chips) throw new Error("找不到 `statusChips`");
+  for (const part of ["expiringNote", "priorityNote"]) {
+    if (chips[1].includes(part)) {
+      throw new Error(`\`${part}\` 又回到了 chips 行 —— 2026-10-22 已移到指标行（紧跟积分）`);
+    }
+  }
+  /* ③ 今日用量 / 最近使用**不得**回到卡片（各自的正式界面见文件头注释）。 */
+  for (const key of ["wbAccounts.card.metric.todayTokens", "wbAccounts.card.metric.lastUsedTip"]) {
+    if (card.includes(`"${key}"`)) {
+      throw new Error(`账号卡片又渲染了「${key}」—— 今日用量在用量页/抽屉，最近使用在抽屉`);
+    }
   }
   if (!/export function formatTodayTokens\(/.test(card)) {
     throw new Error("缺少 `formatTodayTokens` —— 卡片/表格的诚实口径必须共用一份实现");
@@ -1936,13 +1984,16 @@ check("★ 「今日 Token」诚实边界：卡片指标行三项齐备，—/�
   if (!/export function todayTokensBreakdown\(/.test(card)) {
     throw new Error("缺少 `todayTokensBreakdown` —— 明细（客户端 / 网关分开）必须与 headline 同源");
   }
-  if (!/account\.lastUsedAt/.test(card)) throw new Error("账号卡片未读取 `AccountMeta.lastUsedAt`");
-  /* 第三格：原型是**相对时间**（`2 分钟前`），且复用共享 `formatRelativeTime`
-     （`lib/catalog-source.ts`）—— 不许在本组件里另写一份相对时间格式化。 */
-  if (!/formatRelativeTime\(lastUsedAt, t\)/.test(card)) {
-    throw new Error("「最后使用」未经共享 `formatRelativeTime` 渲染（另写一份会与网关口径漂移）");
+  /* ④ 最近使用必须仍有界面：详情抽屉的「最近使用」一行 + 共享 `formatRelativeTime`。
+     变异：连抽屉一起删（信息彻底消失）/ 另写一份相对时间 ⇒ 红。 */
+  const page = readCode(WB_PAGE);
+  if (!page.includes("wbAccounts.detail.lastUsed")) {
+    throw new Error("详情抽屉未接「最近使用」—— 卡片删掉后这条信息就彻底没有去处了");
   }
-  return "三项齐备 · 缺席「—」/ 裁剪「≥」由 formatTodayTokens 统一承担 · 双桶重叠由 todayTokensBreakdown 披露 · lastUsedAt 走 formatRelativeTime";
+  if (!/formatRelativeTime\(detail\.lastUsedAt, t\)/.test(page)) {
+    throw new Error("抽屉「最近使用」未经共享 `formatRelativeTime` 渲染（另写一份会与网关口径漂移）");
+  }
+  return "指标行=积分+临期+优先 · chips 行只留账号状态 · 今日用量/最近使用不进卡（今日在用量页+抽屉、最近用在抽屉）· —/≥/重叠披露仍由共享实现承担";
 });
 
 check("★ 「今日 Token」命令两端接线：路由 + 调用 + 命令名 + 结果类型", () => {

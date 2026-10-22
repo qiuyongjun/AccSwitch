@@ -161,6 +161,12 @@ const DEMO_READ_COMMANDS = new Set([
   "accounts_list",
   "credits",
   "checkin_status",
+  // 成长任务中心的**只读**列表（演示站需渲染该页签，否则 build:demo 报错）。
+  // ⚠️ accept / claim / claim_all / auto 都是**写**操作（会向上游上报事件），
+  // 一律不进这里 —— 演示模式下由 `DemoAction` 统一提示不可操作。
+  "growth_tasks_list",
+  // 卡片提示的**只读**摘要扫描（演示站需渲染卡片标签，否则 build:demo 报错）。
+  "growth_tasks_scan",
   "get_codebuddy_cli_status", "get_codebuddy_cn_ide_status", "get_checkin_status",
   // 编辑器内 CodeBuddy 插件（VS Code / JetBrains）的**只读**状态。
   // ⚠️ switch / detect 是动作（detect 会读本机 secret），一律不进这里。
@@ -291,6 +297,16 @@ const ROUTES: Record<string, Route> = {
   // / `get_trae_checkin_status`（Trae）保留为别名（见 ALIASES）。本路由对齐**桌面端单账号**
   // 契约，webui 的批量语义仍走旧 `GET /api/checkin/status`。
   checkin_status: { method: "POST", path: "/api/checkin/status/query" },
+  // 成长任务中心（**仅 WB·CN**）：路径与命令名一一对应（`growth_tasks_list` →
+  // `/api/growth-tasks/list`）。五个端点两宿主同形，故走统一 `call()`，不需要
+  // `getCheckinStatusMap` 那种「webui 批量 / 桌面逐个」的分叉。
+  growth_tasks_list: { method: "POST", path: "/api/growth-tasks/list" },
+  growth_tasks_accept: { method: "POST", path: "/api/growth-tasks/accept" },
+  growth_tasks_claim: { method: "POST", path: "/api/growth-tasks/claim" },
+  growth_tasks_claim_all: { method: "POST", path: "/api/growth-tasks/claim-all" },
+  growth_tasks_auto: { method: "POST", path: "/api/growth-tasks/auto" },
+  // 卡片提示：批量 / 单账号任务摘要（后端有 10 分钟落盘缓存，命中即零上游请求）。
+  growth_tasks_scan: { method: "POST", path: "/api/growth-tasks/scan" },
   get_codebuddy_cli_status: { method: "GET", path: "/api/codebuddy-cli/status" },
   install_codebuddy_cli_helper: { method: "POST", path: "/api/codebuddy-cli/install-helper" },
   switch_codebuddy_cli_account: { method: "POST", path: "/api/codebuddy-cli/switch" },
@@ -3628,3 +3644,165 @@ export function setAgentHookEnabled(enabled: boolean): Promise<AgentHookToggleRe
 }
 
 export type { TraeGatewayLogEntry, TraeGatewayStatus };
+
+// ---------------------------------------------------------------------------
+// 成长任务中心（仅 WorkBuddy · CN）
+// ---------------------------------------------------------------------------
+//
+// 五个命令两宿主**同形**（桌面 `tauri::command` 与 webui `/api/growth-tasks/*` 返回同一
+// 结构），故这里直接走统一 `call()`，不需要 `getCheckinStatusMap` 那种批量分叉。
+//
+// 语义要点（来自上游实测，读代码前先知道这三条）：
+// 1. `accept` 只是报名，**不产生进度**；进度由行为事件上报点亮。
+// 2. 上报 200 ≠ 计分，且计分异步 —— `growth_tasks_auto` 内部会轮询回读再领，
+//    最坏耗时数十秒，调用方必须显示进行中状态并禁用重复点击。
+// 3. 已有 `claimed` / 进度达标的任务会被跳过，重复点不会重复扣资源（幂等）。
+
+/** 单个成长任务的视图（字段名与后端 `list_tasks_for` 输出逐字一致）。 */
+export interface GrowthTaskItem {
+  taskCode: string;
+  title: string;
+  description: string;
+  /** 奖励积分。 */
+  credit: number;
+  /** 奖励能量。 */
+  energy: number;
+  target: number;
+  current: number;
+  /** 已格式化进度，如 `3/5` / `已领取` / `—`。 */
+  progress: string;
+  acceptStatus: string;
+  locked: boolean;
+  claimed: boolean;
+  /** 进度达标且未领取 ⇒ 显示「领取」。 */
+  claimable: boolean;
+  /** 本工具能自动点亮（否则只展示进度）。 */
+  autoable: boolean;
+  /** 自动化的做法说明（`autoable` 时有值）。 */
+  actionDesc: string;
+}
+
+export interface GrowthTasksView {
+  ok: boolean;
+  message?: string;
+  tasks: GrowthTaskItem[];
+  total?: number;
+  claimable?: number;
+  claimed?: number;
+  autoable?: number;
+  account?: string;
+}
+
+/** 单任务执行结果（`auto` / `claim_all` 的 `results[]`）。 */
+export interface GrowthTaskRunResult {
+  taskCode: string;
+  title: string;
+  /**
+   * `claimed` 已领取 / `progressed` 已点亮但上游计分未落定 /
+   * `skipped` 无需处理（已领 / 未解锁 / 同组事件已发过）/ `failed` 失败。
+   */
+  status: "claimed" | "progressed" | "skipped" | "failed";
+  message: string;
+  credit: number;
+  energy: number;
+}
+
+export interface GrowthTaskAutoResult {
+  ok: boolean;
+  message?: string;
+  account?: string;
+  results: GrowthTaskRunResult[];
+  claimed?: number;
+  credit?: number;
+  energy?: number;
+}
+
+export interface GrowthTaskClaimResult {
+  ok: boolean;
+  message: string;
+  credit: number;
+  energy: number;
+  alreadyClaimed: boolean;
+}
+
+/** 拉取任务列表（只读）。 */
+export function growthTasksList(scope: string, accountId: string): Promise<GrowthTasksView> {
+  return call<GrowthTasksView>("growth_tasks_list", { scope, accountId });
+}
+
+/** 批量报名（不产生进度，只是把任务纳入「进行中」）。 */
+export function growthTasksAccept(
+  scope: string,
+  accountId: string,
+  codes: string[],
+): Promise<{ ok: boolean; message: string }> {
+  return call("growth_tasks_accept", { scope, accountId, codes });
+}
+
+/** 领取单个任务奖励。 */
+export function growthTasksClaim(
+  scope: string,
+  accountId: string,
+  code: string,
+): Promise<GrowthTaskClaimResult> {
+  return call<GrowthTaskClaimResult>("growth_tasks_claim", { scope, accountId, code });
+}
+
+/** 只领不点亮：把当前所有「已达标未领取」的奖励一次收完。 */
+export function growthTasksClaimAll(scope: string, accountId: string): Promise<GrowthTaskAutoResult> {
+  return call<GrowthTaskAutoResult>("growth_tasks_claim_all", { scope, accountId });
+}
+
+/**
+ * 单账号「一键完成」：报名 → 逐任务点亮 → 回读 → 领奖。
+ *
+ * ⚠️ 耗时可观（含异步计分轮询）。UI 必须显示进行中并禁用重复点击 ——
+ * 后端虽有同账号互斥闸兜底，但让用户等一个「点了没反应」的按钮更糟。
+ */
+export function growthTasksAuto(scope: string, accountId: string): Promise<GrowthTaskAutoResult> {
+  return call<GrowthTaskAutoResult>("growth_tasks_auto", { scope, accountId });
+}
+
+/**
+ * 单账号任务摘要（账号卡片上的「可领 / 可自动」提示标签）。
+ *
+ * 三个计数器**互斥**：可领的任务不同时算「可自动」。`idle` 为真时不挂标签。
+ */
+export interface GrowthTaskSummary {
+  ok: boolean;
+  total: number;
+  claimable: number;
+  autoable: number;
+  claimed: number;
+  /** 没有可领也没有可自动 ⇒ 卡片不挂标签。 */
+  idle: boolean;
+  /** `ok:false` 时的原因（凭证失效 / 企业号无成长体系等）。 */
+  message?: string | null;
+}
+
+export interface GrowthTasksScanResult {
+  ok: boolean;
+  /** 本次是否直接命中了后端缓存（`true` = 零上游请求）。 */
+  cached?: boolean;
+  updatedAt?: number;
+  /** 账号 id → 摘要。取不到的账号**不出现在这里**（不是 `ok:true` 的空摘要）。 */
+  accounts: Record<string, GrowthTaskSummary>;
+  message?: string;
+}
+
+/**
+ * 扫描任务摘要。
+ *
+ * - 不传 `accountId` ⇒ 扫全部 CN 账号（首次较慢，账号间串行限速）；
+ * - 传 `accountId` ⇒ **只刷这一个**（跑完任务后刷单卡，不为一张卡重扫全表）；
+ * - `force=false` 且后端缓存未过期 ⇒ 零上游请求。
+ */
+export function growthTasksScan(
+  scope: string,
+  options?: { force?: boolean; accountId?: string },
+): Promise<GrowthTasksScanResult> {
+  const args: Record<string, unknown> = { scope };
+  if (options?.force) args.force = true;
+  if (options?.accountId) args.accountId = options.accountId;
+  return call<GrowthTasksScanResult>("growth_tasks_scan", args);
+}

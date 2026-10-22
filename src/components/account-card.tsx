@@ -1,4 +1,4 @@
-import { Ban, Check, CircleCheck, Coins, Loader2, PlaneTakeoff, QrCode } from "lucide-react";
+import { Ban, Check, CircleCheck, Coins, Loader2, PlaneTakeoff, QrCode, Sparkles, Trophy } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 // P0 · 程序位表（含「计划新增 / 尚未支持」态）—— 展示侧镜像，与后端 `programs.rs` 逐字对齐。
@@ -15,9 +15,10 @@ import { compactTokens, exactTokens } from "@/components/usage/format";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
 import { summarizeExpiring } from "@/lib/credit-expiry";
-import { formatAbsoluteTime, formatRelativeTime } from "@/lib/catalog-source";
+import { formatAbsoluteTime } from "@/lib/catalog-source";
 import { useT, type Translate } from "@/lib/i18n";
 import type { AccountMeta, AccountTokenTodayEntry, CreditExpiry, TravelStatus } from "@/lib/types";
+import type { GrowthTaskSummary } from "@/lib/api";
 
 /**
  * ★ 程序位按钮三态的视觉规格 —— **逐值对齐原型 `.prog`**（`demo.css:326-338 / 825`）。
@@ -393,6 +394,16 @@ interface Props {
   todayCheckedIn?: boolean;
   /** 今日旅行状态（undefined=查询中/未知，不渲染标签） */
   travelStatus?: TravelStatus;
+  /**
+   * 成长任务摘要（「可领 N」/「可自动 N」提示标签）。
+   *
+   * `undefined` = 还没扫到（**不挂标签**，绝不写「可领 0」）；`idle` 为真同样不挂
+   * ——「没有可领也没有可自动」不该在卡片上占一个位置。
+   *
+   * ⚠️ 这个值来自**批量扫描**（`growthTasksScan`），不是每张卡各查一次：
+   * 每卡一次 = 打开账号页就打 N 次上游，见 `docs/specs/GROWTH-TASKS.md` §6。
+   */
+  growthHint?: GrowthTaskSummary | null;
   credit?: CreditExpiry;
   creditLoading?: boolean;
   creditPriority?: boolean;
@@ -455,14 +466,6 @@ interface Props {
   onOpenDetail?: (a: AccountMeta) => void;
   /** 「更多 → 编辑备注」：打开抽屉并进入编辑态。 */
   /** 「更多 → 设置分组」：打开抽屉并进入分组编辑态（与备注同一交互）。 */
-  /**
-   * 该账号「今日 Token」明细（`get_account_token_today`）。
-   *
-   * ⚠️ **缺席 = 今日无记录 / 未知** ⇒ 渲染「—」（**绝不当 0**）。
-   */
-  todayTokens?: AccountTokenTodayEntry | null;
-  /** 网关日志已到保留上限 ⇒ 网关部分是下界 ⇒ 「今日 Token」渲染 `≥N`。 */
-  todayTokensTruncated?: boolean;
   featuresDisabled?: boolean;
 }
 
@@ -501,7 +504,7 @@ function ProductCurrentState({
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, todayTokens, todayTokensTruncated = false, featuresDisabled = true }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true }: Props) {
   const t = useT();
   /**
    * 兜底归一（第三道闸）。
@@ -555,20 +558,25 @@ const activeProductCount = programSlots.filter((slot) => slot.active).length;
 const isCurrentAccount = programSlots.some((slot) => slot.active);
 
   /**
-   * 指标行（原型 `.acct-metrics`，`buddy-switch-prototype.html:341` / `accountCard` :2510-2514）：
-   * `积分 <b>当前</b>/<b>总额</b> · 今日 <b>42.1K</b> · 2 分钟前`。
+   * 指标行（原型 `.acct-metrics`，`buddy-switch-prototype.html:341` / `accountCard` :2510-2514）
+   * 的**取数与渲染**。
    *
    * ⚠️★ 2026-10-10 **口径修正**：原先这里显示的是 `已用/总额`（由 `resources[].used` 汇总），
    * 而原型显示的是 `当前/总额`（`a.credits/a.creditsTotal`，即「剩余 / 总额」）。
    * 同一个「积分 x/y」在两处含义不同 ⇒ 用户按原型对不上数。现在改为**剩余/总额**。
    *
-   * 三项都来自**真实数据源**，逐项按诚实边界渲染：
-   * - **积分 剩余/总额**：剩余取 `credit.totalRemaining`；总额由 `resources[].total` 汇总；
-   *   未就绪 ⇒ 值渲染「—」；
-   * - **今日 Token**：`get_account_token_today` 按账号聚合；账号**缺席** ⇒ 「—」（**绝不当 0**）；
-   *   网关日志的**今日**部分可能被裁（`todayTokensTruncated`）⇒ 下界 `≥N`，明细与下界说明放 tooltip；
-   *   客户端 / 网关**两侧都非零** ⇒ 明细追加「可能重复计数」说明（两条独立记录，无 join 键可去重）；
-   * - **最后使用**：`AccountMeta.lastUsedAt`（epoch 毫秒）；**缺席则整项省略**（不打印「—」）。
+   * ★★ 2026-10-22 **本行瘦身（用户要求）**：原型的三项
+   * `积分 x/y` · `今日 42.1K` · `2 分钟前` 里有**两项**被移出卡片：
+   * - **今日 Token** —— 它是「按时间累计的量」，塞在账号卡上只能看到一列瞬时数字，
+   *   真正的读法在**用量统计页**（`TokenStatsPage`，按天/模型/账号聚合）与**详情抽屉**
+   *   「今日 Token」指标块（`detailStats`）⇒ 卡片上这一项是重复且不可比较的；
+   * - **最后使用（相对时间）** —— 它只在「我该切哪个号」时有用，而那个场景的答案
+   *   由**排序选项**（`recent`，按 `lastUsedAt` 倒序）给出，读一个「2 分钟前」既不排序
+   *   也不可比；其精确时刻仍保留在详情抽屉的「最近使用」一行。
+   *
+   * ⇒ 让出的位置**留给真正需要在卡上一眼看到的两个状态**：临期积分与「优先」——
+   * 它们是**决策**（这号要不要赶紧用掉 / 是不是优先扣费号），而今日用量与最近使用是
+   * **回顾**。腾出的 chips 行空间则留给成长任务等任务标签（原先会被挤到第二行）。
    *
    * ⚠️ 整行**始终渲染**（含数据全缺时）—— 不闪不藏，缺值以「—」如实呈现。
    * ⚠️ 行间距由卡片根的 `gap-2.5` 承担，这里不再自带 `mb-*`。
@@ -581,55 +589,6 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
     credit?.ok && metricResources.length > 0
       ? metricResources.reduce((sum, resource) => sum + (Number.isFinite(resource.total) ? resource.total : 0), 0)
       : null;
-  /** 「最后使用」：仅当有真实的 `lastUsedAt`（epoch 毫秒）才渲染该项；否则整项省略。 */
-  const lastUsedAt = typeof account.lastUsedAt === "number" && account.lastUsedAt > 0 ? account.lastUsedAt : null;
-
-  /* ★ 指标行 —— 逐项对齐原型 `.acct-metrics`（`demo.css:341-342`：
-     `display:flex; gap:14px; font-size:11.5px; color:var(--muted-fg)`，**不换行**、无下边距）：
-     `积分 1,240/2,000` · `今日 42.1K` · `2 分钟前`。
-     ⚠️ 第三项原型是**相对时间、且没有标签**（`<span class="muted">${a.lastUsed}</span>`），
-     此前我们写「最后使用 10-12 17:10」——标签与绝对日期都是本仓自加的，与原型不同。
-     绝对时刻改挂 `title`（悬停可见，不占版面）。 */
-  const lastUsedRelative = formatRelativeTime(lastUsedAt, t);
-  const metricsRow = (
-    <div className="flex min-w-0 gap-[14px] text-[11.5px] text-muted-foreground">
-      <span>
-        {t("wbAccounts.card.metric.credits")}{" "}
-        {metricCreditCurrent === null ? (
-          <b className="font-semibold tabular-nums text-foreground">—</b>
-        ) : (
-          <>
-            <b className="font-semibold tabular-nums text-foreground">
-              {formatCredits(metricCreditCurrent)}
-            </b>
-            {metricCreditTotal === null ? "" : `/${formatCredits(metricCreditTotal)}`}
-          </>
-        )}
-      </span>
-      <span className="inline-flex items-center gap-1">
-        {t("wbAccounts.card.metric.todayTokens")}{" "}
-        {todayTokens ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <b className="cursor-default font-semibold tabular-nums text-foreground">
-                {formatTodayTokens(todayTokens, todayTokensTruncated, t)}
-              </b>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {todayTokensBreakdown(todayTokens, todayTokensTruncated, t)}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <b className="font-semibold tabular-nums text-foreground">—</b>
-        )}
-      </span>
-      {lastUsedRelative !== null && (
-        <span title={t("wbAccounts.card.metric.lastUsedTip", { time: formatAbsoluteTime(lastUsedAt) })}>
-          {lastUsedRelative}
-        </span>
-      )}
-    </div>
-  );
 
   /* ★ 「当前登录」徽章**单独拆出来**（原型 `buddy-switch-prototype.html:2502`）：
      它在 `.acct-top` 内、与昵称**同一行**（不是掉进下面的 chips 行）。
@@ -654,19 +613,33 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    * 拿不到临期批次 ⇒ **整条不渲染**（绝不写一个猜出来的「N 天」标签）。
    */
   const expiring = credit?.ok ? summarizeExpiring(metricResources) : null;
-  const expiringChip = expiring ? (
+  const expiringLabel = expiring
+    ? t("wbAccounts.card.expiringChip", { amount: formatCredits(expiring.total), days: expiring.days })
+    : "";
+  /**
+   * ★ 2026-10-22（第二轮）：从**徽章**改成**同色系文字**。
+   *
+   * 用户反馈：把徽章挪到积分那一行后，「448.14 积分 7 天内过期 / 优先」与上一行
+   * 「已签到 / 已结束 / 可领 3 个任务」长得一模一样（同高 20px、同底色档、同字号 10.5px）
+   * ⇒ 两行读起来成一件事，视觉上反而更乱，也和左边的 `积分 4,710.14/4,762` 不搭
+   * （一行是文字、后面突然接两个色块）。
+   *
+   * ⇒ 结论：**指标行里的一切都必须是文字**（与 `积分 x/y` 同字号 11.5px、同基线），
+   * 只用**字色**区分轻重：临期 = `text-warning`（要花掉的），优先 = `text-primary`（规则相关）。
+   * 徽章只留给 chips 行 —— 那一行本来就是「贴纸」语义（签到 / 任务 / 旅行），
+   * 两行各自的形态因此一眼可辨：**贴纸是状态，文字是数据**。
+   *
+   * ⚠️ tooltip 必须保留：徽章没有了，逐批到期明细（最急的在首位）只剩这一条查看路径。
+   */
+  const expiringNote = expiring ? (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Badge
-          variant="warning"
-          className={chipClass}
-          aria-label={t("wbAccounts.card.expiringChip", {
-            amount: formatCredits(expiring.total),
-            days: expiring.days,
-          })}
+        <span
+          className="cursor-default tabular-nums text-warning"
+          aria-label={expiringLabel}
         >
-          {t("wbAccounts.card.expiringChip", { amount: formatCredits(expiring.total), days: expiring.days })}
-        </Badge>
+          {expiringLabel}
+        </span>
       </TooltipTrigger>
       <TooltipContent side="top">
         <div className="whitespace-nowrap font-medium">{t("wbAccounts.card.expiringTipTitle", { n: expiring.batches.length })}</div>
@@ -681,6 +654,68 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
       </TooltipContent>
     </Tooltip>
   ) : null;
+
+  /**
+   * 「优先」标签 —— 该账号是**优先扣费 / 优先展示**的那一个。
+   *
+   * ★ 2026-10-22：从 chips 行**移到指标行**（紧跟总积分，见下方 `metricsRow`）。
+   * 它与「临期积分」是同一类信息：都是**关于这堆积分的状态**，与积分数字连读才成句
+   * （「4,710 / 4,762 · 448 积分 7 天内过期 · 优先」）；留在 chips 行会和
+   * 「已签到 / 旅行 / 任务」这些**账号状态**混在一起，语义串味。
+   * ★ 同日晚些时候：由徽章降级为**文字**（`text-primary`），理由见 `expiringNote`。
+   */
+  const priorityNote = creditPriority ? (
+    <span className="text-primary" title={t("wbAccounts.card.priorityTip")}>
+      {t("wbAccounts.card.priority")}
+    </span>
+  ) : null;
+
+  /**
+   * ★ 指标行 —— 形态照原型 `.acct-metrics`（`demo.css:341-342`：`display:flex; gap:14px;
+   * font-size:11.5px; color:var(--muted-fg)`），内容按 2026-10-22 的重排：
+   *
+   * ```
+   * 积分 4,710.14/4,762 · 448.14 积分 7 天内过期 · 优先
+   * ```
+   *
+   * ① 原型的三项里 `今日 42.1K` 与 `2 分钟前` 已移出卡片（理由见上方取数注释）；
+   * ② 临期与「优先」从 chips 行搬到本行，且**只以文字出现**（不带底色/边框）——
+   *    本行的每一项都是「数据」，形态必须统一；
+   * ③ 项间用 `·` 分隔（间距收到 9px）：`积分 x/y` 与 `448.14 积分…` 都以数字开头，
+   *    只靠间距会读成「4,762 448.14」一串数字；分隔点让三项边界明确
+   *    （`aria-hidden`，不念给读屏）；
+   * ④ `flex-wrap` 是**必须**的：窄卡下三项放不下一行，不换行会把末尾挤出可视区
+   *    （`.acct` 是 `overflow:hidden`，会被直接裁掉）。
+   */
+  const metricsRow = (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
+      <span>
+        {t("wbAccounts.card.metric.credits")}{" "}
+        {metricCreditCurrent === null ? (
+          <b className="font-semibold tabular-nums text-foreground">—</b>
+        ) : (
+          <>
+            <b className="font-semibold tabular-nums text-foreground">
+              {formatCredits(metricCreditCurrent)}
+            </b>
+            {metricCreditTotal === null ? "" : `/${formatCredits(metricCreditTotal)}`}
+          </>
+        )}
+      </span>
+      {expiringNote && (
+        <>
+          <span aria-hidden className="select-none text-muted-foreground/50">·</span>
+          {expiringNote}
+        </>
+      )}
+      {priorityNote && (
+        <>
+          <span aria-hidden className="select-none text-muted-foreground/50">·</span>
+          {priorityNote}
+        </>
+      )}
+    </div>
+  );
 
   /**
    * 状态标签 —— 与原型 `accountStatus()`（`buddy-switch-prototype.html:2390-2395`）**同一口径**：
@@ -702,23 +737,62 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
     <Badge variant="success" className={chipClass}><CircleCheck /> {t("wbAccounts.card.checkedIn")}</Badge>
   ) : null;
 
+  /**
+   * 成长任务提示标签 —— **只在真有可做事项时出现**。
+   *
+   * 为什么值得占一枚 chip：每个账号的成长任务基本只有**一次**机会，用户不可能靠记忆
+   * 记住「哪个号还没领」。卡片是他扫视账号的地方，标签就该长在这里。
+   *
+   * 两条纪律：
+   * 1. `claims > 0` 与 `autoable > 0` **互斥**（后端保证），否则同一个任务会在卡上挂两个数；
+   * 2. 计数为 0 / `idle` / 还没扫到 ⇒ **整枚不渲染**（`§3.4 规则 1：无数据不渲染`），
+   *    绝不写「可领 0」—— 那会让每张卡都多一枚噪声。
+   */
+  const growthClaimable = growthHint?.ok && !growthHint.idle ? growthHint.claimable : 0;
+  const growthAutoable = growthHint?.ok && !growthHint.idle ? growthHint.autoable : 0;
+  const growthHintChip =
+    growthClaimable > 0 || growthAutoable > 0 ? (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant={growthClaimable > 0 ? "success" : "info"}
+            className={chipClass}
+            aria-label={t("wbAccounts.card.growthTip", {
+              claimable: growthClaimable,
+              autoable: growthAutoable,
+            })}
+          >
+            {growthClaimable > 0 ? <Trophy /> : <Sparkles />}
+            {growthClaimable > 0
+              ? t("wbAccounts.card.growthClaimable", { n: growthClaimable })
+              : t("wbAccounts.card.growthAutoable", { n: growthAutoable })}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <div className="whitespace-nowrap">
+            {t("wbAccounts.card.growthTip", {
+              claimable: growthClaimable,
+              autoable: growthAutoable,
+            })}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    ) : null;
+
   const statusChips = (
     <>
-      {/* 顺序照原型 `.acct-chips`（`buddy-switch-prototype.html:2505-2508`）：
-          `使用中 N 个工具` → `状态` → `X 积分 N 天后过期` → `优先`。 */}
+      {/* ★ 2026-10-22：本行只留**账号状态**类标签，原型里的
+          `X 积分 N 天后过期` 与 `优先` 已移入指标行（紧跟积分，见 `metricsRow`）。
+          顺序仍照原型 `.acct-chips`（`buddy-switch-prototype.html:2505-2508`）：
+          `使用中 N 个工具` → `状态` → `任务` → `旅行`。 */}
       {activeProductCount >= 2 && (
         <Badge variant="info" className={chipClass}>
           <CircleCheck /> {t("wbAccounts.card.toolsInUse", { n: activeProductCount })}
         </Badge>
       )}
       {statusChip}
+      {growthHintChip}
       {travelChip(travelStatus)}
-      {expiringChip}
-      {creditPriority && (
-        <Badge variant="info" className={chipClass} title={t("wbAccounts.card.priorityTip")}>
-          {t("wbAccounts.card.priority")}
-        </Badge>
-      )}
     </>
   );
 
@@ -1112,7 +1186,7 @@ const workbuddyControl = workbuddyActive ? (
       {/* ⚠️ 内边距与块间距都已在**根**上（`px-3.5 py-[13px] gap-2.5`，照原型 `.acct`），
           这里不再自带 padding —— 否则块间距会变成「根 gap + 自己的 mt」两份叠加。 */}
       <section className="flex min-w-0 flex-1 flex-col">
-        {/* ★ 指标行（原型 `.acct-metrics` :2510）：徽章之下、积分明细之上的一行小字。
+        {/* ★ 指标行：`积分 x/y` + 临期徽章 + 「优先」徽章（2026-10-22 起，见 `metricsRow`）。
             始终渲染 —— 积分未就绪时显示「—」，不闪不藏。 */}
         {metricsRow}
         {creditLoading ? (

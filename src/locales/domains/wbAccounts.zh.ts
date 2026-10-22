@@ -123,6 +123,11 @@ export const zh = {
   "wbAccounts.card.notCheckedIn": "今日未签到",
   "wbAccounts.card.needRelogin": "需重新登录",
   "wbAccounts.card.tokenExpired": "凭据已过期",
+  // 成长任务提示（每号基本只有一次机会，所以值得在卡片上占一枚 chip）。
+  // 「可领」优先于「可自动」显示 —— 两者**互斥**，不会同时出现。
+  "wbAccounts.card.growthClaimable": "可领 {n}",
+  "wbAccounts.card.growthAutoable": "可自动 {n}",
+  "wbAccounts.card.growthTip": "成长任务：可领取 {claimable} 项 · 可自动完成 {autoable} 项（详情 → 任务页签）",
   // 「优先」——原型 `.acct-chips` 里是**带文字**的 `badge info`（`:2508`），
   // 此前我们只摆一枚星形图标，与原型不同。
   "wbAccounts.card.priority": "优先",
@@ -207,6 +212,10 @@ export const zh = {
   "wbAccounts.detail.tokenExpiry": "Token 到期",
   "wbAccounts.detail.expired": "已过期",
   "wbAccounts.detail.checkedIn": "今日签到",
+  /* ★ 2026-10-22：卡片指标行不再显示「最近使用」（让位给临期积分 / 优先标签），
+     该信息下沉到抽屉，避免「切号前想知道这个号多久没动过」变成无处可查。 */
+  "wbAccounts.detail.lastUsed": "最近使用",
+  "wbAccounts.detail.neverUsed": "从未使用",
 
   // ---- 切换账号弹窗 ----
   "wbAccounts.dialog.switchTitle": "切换到「{name}」",

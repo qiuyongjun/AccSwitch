@@ -112,6 +112,9 @@ export const en = {
   "wbAccounts.card.notCheckedIn": "Not checked in today",
   "wbAccounts.card.needRelogin": "Needs re-login",
   "wbAccounts.card.tokenExpired": "Credentials expired",
+  "wbAccounts.card.growthClaimable": "{n} to claim",
+  "wbAccounts.card.growthAutoable": "{n} automatable",
+  "wbAccounts.card.growthTip": "Growth tasks: {claimable} claimable · {autoable} automatable (details → Tasks tab)",
   "wbAccounts.card.priority": "Priority",
   "wbAccounts.card.priorityTip": "Recommended priority",
   "wbAccounts.card.expiringChip": "{amount} credits expire within {days} days",
@@ -171,6 +174,8 @@ export const en = {
   "wbAccounts.detail.tokenExpiry": "Token expiry",
   "wbAccounts.detail.expired": "Expired",
   "wbAccounts.detail.checkedIn": "Checked in today",
+  "wbAccounts.detail.lastUsed": "Last used",
+  "wbAccounts.detail.neverUsed": "Never used",
 
   // ---- Switch account dialog ----
   "wbAccounts.dialog.switchTitle": "Switch to \"{name}\"",
