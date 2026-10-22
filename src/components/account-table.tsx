@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -129,18 +130,15 @@ export function AccountTable<T>({
                   tabIndex={0}
                   aria-label={openRowLabel(row)}
                   onClick={(event) => {
-                    /* 行尾「更多」按钮不算「点行」：点它不该顺带打开详情。
+                    /* 行尾「更多」不算「点行」：点它不该顺带打开详情。
                        ⚠️ 用**行自身的 onClick 里判断**而不是给动作格再挂一个 `stopPropagation` ——
                        表格行的可点区预算只有 2 个（勾选格 + 行本身，见 P4 门禁），
-                       多一个 onClick 处理器就会被那条守门判红。 */
-                    /* ⚠️ 菜单内容被 portal 到 `body`，`data-row-actions` 格**不是**它的 DOM 祖先
-                       ⇒ 还须认菜单内容根上的 `data-no-account-open`（见 `ui/dropdown-menu.tsx`）。 */
-                    if (
-                      event.target instanceof Element &&
-                      event.target.closest("[data-row-actions], [data-no-account-open]")
-                    ) {
-                      return;
-                    }
+                       多一个 onClick 处理器就会被那条守门判红。
+                       ★ 判据与卡片同源（`lib/account-open-guard.ts`）：菜单经 Portal 挂到 body，
+                       菜单项是 `div[role="menuitem"]` 不是 button —— 旧判据在本表里同样拦不住。
+                       守卫的第一条「target 不在 currentTarget 子树内即不算」顺带覆盖了
+                       「菜单内容根忘挂 `data-no-account-open`」这种情况。 */
+                    if (!shouldOpenAccountDetail(event, "[data-row-actions]")) return;
                     onOpen(row);
                   }}
                   onKeyDown={(event) => {

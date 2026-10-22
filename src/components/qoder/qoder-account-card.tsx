@@ -71,6 +71,7 @@ import { MenuGroupLabel, MenuHead, MenuNote, RefreshMenuGroup } from "@/componen
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AccountRefreshKind } from "@/lib/account-refresh";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
+import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
 import type { QoderAccountView, QoderProgramStatus } from "@/lib/api";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { demoModeEnabled } from "@/lib/demo-mode";
@@ -574,13 +575,10 @@ export function QoderAccountCard({
       role="article"
       onClick={(event) => {
         if (!onOpenDetail) return;
-        const target = event.target;
-        if (
-          target instanceof Element &&
-          target.closest("button, a, input, [role='checkbox'], [role='switch'], [data-no-account-open]")
-        ) {
-          return;
-        }
+        /* ★ 判据在 `lib/account-open-guard.ts`（三张卡 + 表格行共用），
+           别再退回手写 `closest("button, …")` —— 菜单项是 Portal 里的
+           `div[role="menuitem"]`，手写判据拦不住（2026-10-22 报障根因）。 */
+        if (!shouldOpenAccountDetail(event)) return;
         onOpenDetail(account);
       }}
       onKeyDown={(event) => {
