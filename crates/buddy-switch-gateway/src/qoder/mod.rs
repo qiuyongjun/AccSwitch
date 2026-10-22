@@ -452,6 +452,8 @@ impl QoderGatewayState {
         prompt_tokens: i64,
         completion_tokens: i64,
         error: Option<String>,
+        // ★ issue #76：调用方的 Key id（`None` = 无 Key / 老条目）。
+        key_id: Option<&str>,
     ) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.log.record(serde_json::json!({
@@ -468,6 +470,8 @@ impl QoderGatewayState {
             "completionTokens": completion_tokens,
             "stream": stream,
             "error": error,
+            // ★ issue #76：调用方 Key id（无 Key 写 `null`，键固定）。
+            "keyId": key_id,
         }));
         if let Some(message) = error {
             *self.last_error.write().await = Some(message);
