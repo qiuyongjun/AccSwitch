@@ -2783,15 +2783,18 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
         account: activeAccount.nickname,
       };
     }
-    /* 卡片提示：任务摘要扫描。演示站要能同时看到「可领」与「可自动」两种标签，
-       所以给前两个账号各挂一种；其余账号不出现（= 没有提示标签）。 */
+    /* 卡片提示：任务摘要扫描。演示站要能同时看到**四态**（可领 / 可自动 / 已领 x/y / 已完成），
+       所以前四个账号各挂一种；其余账号不出现（= 没扫到 / 没有成长体系，不占位）。 */
     case "growth_tasks_scan": {
       const accounts: Record<string, unknown> = {};
-      demoAccounts.slice(0, 2).forEach((account, index) => {
-        accounts[account.id] =
-          index === 0
-            ? { ok: true, total: 4, claimable: 1, autoable: 2, claimed: 1, idle: false, message: null }
-            : { ok: true, total: 4, claimable: 0, autoable: 1, claimed: 3, idle: false, message: null };
+      demoAccounts.slice(0, 4).forEach((account, index) => {
+        const demoSummaries = [
+          { ok: true, total: 4, claimable: 1, autoable: 2, claimed: 1, idle: false, message: null },
+          { ok: true, total: 4, claimable: 0, autoable: 1, claimed: 3, idle: false, message: null },
+          { ok: true, total: 4, claimable: 0, autoable: 0, claimed: 4, idle: true, message: null },
+          { ok: true, total: 4, claimable: 0, autoable: 0, claimed: 2, idle: true, message: null },
+        ];
+        accounts[account.id] = demoSummaries[index];
       });
       return { ok: true, cached: true, updatedAt: Date.now(), accounts };
     }

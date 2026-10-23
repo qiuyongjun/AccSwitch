@@ -195,8 +195,9 @@ export const zh = {
   "wbSettings.schedule.task.travel.desc": "派猫猫出门旅行并领取奖励",
   "wbSettings.schedule.task.activity.label": "活跃地图",
   "wbSettings.schedule.task.activity.desc": "活跃地图上报，点亮连登",
-  "wbSettings.schedule.task.keepalive.label": "token 保活",
-  "wbSettings.schedule.task.keepalive.desc": "刷新登录态，避免 token 过期",
+  // ★ 2026-10-23：「token 保活」→「凭据保活」（凭据含义的 Token 改用中文「凭据」）。
+  "wbSettings.schedule.task.keepalive.label": "凭据保活",
+  "wbSettings.schedule.task.keepalive.desc": "刷新登录态，避免凭据过期",
   "wbSettings.schedule.task.school.label": "开学季",
   "wbSettings.schedule.task.school.desc": "开学季任务",
   "wbSettings.schedule.task.cat.label": "夜猫子",

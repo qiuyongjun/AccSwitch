@@ -1252,7 +1252,10 @@ fn effective_target(task: &GrowthTask) -> i64 {
     }
 }
 
-/// 单账号「一键完成」：报名 → 逐个点亮 → 回读 → 领奖。
+/// 单账号「一键完成」：报名 → 逐个点亮 → 回读 → 领奖 → **收尾领取剩余可领奖励**。
+///
+/// 最后一步覆盖 `ACTIONS` 之外的手工任务（本工具点亮不了，但奖励已达标）——
+/// 「一键完成」必须一次做完，不能留一半给第二个按钮（见阶段 3 注释）。
 ///
 /// 单个任务失败不阻断后续（一个动作踩空不该让整轮白跑）。
 /// 返回面向前端的运行报告。耗时可达数十秒（含轮询），调用方应给出进行中状态。
@@ -1391,6 +1394,27 @@ pub async fn run_auto_for(region: Region, account: &Value) -> Value {
             }
         }
         tokio::time::sleep(REPORT_GAP).await;
+    }
+
+    // 阶段 3：收尾领奖 —— 把**不在 `ACTIONS` 里**但已达标未领的任务也一并收掉。
+    //
+    // 这些任务（`manual_only` 的手工任务）本工具点亮不了，但奖励是现成的。
+    // 此前它们只能靠用户再点一次「领取全部」：函数名承诺「一键完成」，却留了一半事
+    // 给第二个按钮（`docs/specs/GROWTH-TASKS.md` §「一键完成」那节记着同一件事）。
+    // 2026-10-23 起 UI 把「领取全部」并进了「一键完成」，所以这里必须补齐，
+    // 否则合并后的按钮在「只有手工任务可领」的账号上会看起来什么都没做。
+    //
+    // ⚠️ 用**本轮开头那次** `tasks` 快照判断：中途手工完成的任务不在快照里，
+    // 与 `claim_all_for` 的快照语义一致，不做额外回读（多一轮 GET 只为一个边缘情形）。
+    for task in &tasks {
+        if !task.claimable || task.claimed {
+            continue;
+        }
+        if ACTIONS.iter().any(|spec| spec.code == task.task_code) {
+            continue; // 已在上面的循环里处理（达标必已被领取或记为失败）
+        }
+        results.push(claim_only(region, &account, &task.task_code, &task.title, "进度已达标").await);
+        tokio::time::sleep(CLAIM_GAP).await;
     }
 
     drop(guard);

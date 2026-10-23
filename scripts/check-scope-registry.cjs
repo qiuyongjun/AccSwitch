@@ -1473,9 +1473,16 @@ check("★ 两平台工具栏**控件集一致**（Trae 不得再有 WB / 原型
     if (!/<AddAccountDrawer/.test(code)) {
       throw new Error(`${path.basename(rel)} 没有渲染「添加账号」抽屉`);
     }
-    for (const slot of ["moreTools={", "labels={{"]) {
-      if (!code.includes(slot)) {
-        throw new Error(`${path.basename(rel)} 的「添加账号」抽屉缺 \`${slot}\``);
+    if (!code.includes("labels={{")) {
+      throw new Error(`${path.basename(rel)} 的「添加账号」抽屉缺 \`labels={{\``);
+    }
+    /* ★ 2026-10-23：抽屉的 `moreTools`「更多操作」分区已**整块删除**
+       （开关归设置页、批量动作归批量条、刷新归页头 / 批量条）⇒ 改反向断言。 */
+    for (const gone of ["moreTools", "DrawerTool", "ToolRow"]) {
+      if (code.includes(gone)) {
+        throw new Error(
+          `${path.basename(rel)} 又给抽屉塞了 \`${gone}\` —— 抽屉只保留添加方式与粘贴凭据`,
+        );
       }
     }
   }
@@ -1487,7 +1494,7 @@ check("★ 两平台工具栏**控件集一致**（Trae 不得再有 WB / 原型
       throw new Error(`${path.basename(rel)} 没有注入常驻控件 \`onOpenRecycleBin={\``);
     }
   }
-  return "Trae 已无分组筛选下拉 · 两页无平台插槽 · 两页同抽屉 + 同常驻控件";
+  return "Trae 已无分组筛选下拉 · 两页无平台插槽 · 两页同抽屉（无 moreTools）+ 同常驻控件";
 });
 
 check("★ 账号页工具栏 = 原型一行 + 一枚常驻控件（搜索/排序/分组/视图/回收站/全选/主操作，**无「⋯」**）", () => {
@@ -1559,46 +1566,58 @@ check("★ 账号页工具栏 = 原型一行 + 一枚常驻控件（搜索/排�
   return "搜索=label.field · 排序/分组带前缀 · 视图纯图标 · 回收站常驻 · 全选=ghost 按钮 · 无溢出菜单 · 主操作 13px";
 });
 
-check("★「添加账号」抽屉 = 原工具栏「⋯」内容的唯一落点（已有的不重复搬 · 放出来的不再留）", () => {
-  /* ★ 2026-10-12 用户要求「合并到添加账号的右侧弹出栏内…外面的菜单不用存在了，
-     workbuddy 和 traework 的交互保持一致」。原「⋯」菜单里的入口现在必须**全部有落点**，
-     且**已经存在的功能不重复搬**：
-       - 从本机导入 / 导入备份 → 抽屉**基础三张卡**里本来就有（不重复）；
-       - 自动签到 / 第二枚开关 / 导出备份 / 刷新 → `moreTools` **四行**；
-       - 回收站 → **已被用户点名「放出来」**（回工具栏的 `onOpenRecycleBin`）
-         ⇒ 抽屉里**不得**再留一份（同一个开关出现在两处必然打架）。
-     两平台的 `moreTools` **行数与顺序一致**（先两枚开关，再两枚动作），只有数据不同；
-     文案走 `shared.addDrawer.*`（同一个组件 ⇒ 不许再写回平台自己的域，否则两边会漂移）。
-     变异：删掉某一页的 `moreTools`（入口变死路）/ 改键序 / 把文案写回平台域 ⇒ 本条变红。 */
-  const WB_TOOL_KEYS = ["auto-checkin", "auto-travel", "export", "refresh"];
-  const TRAE_TOOL_KEYS = ["auto-checkin", "skip-checked", "export", "checkin-refresh"];
+check("★「添加账号」抽屉 = 添加方式 + 粘贴凭据（三平台同构 · 不再承载「更多操作」）", () => {
+  /* ## 沿革
+   *
+   * 2026-10-12 用户要求「把工具栏「⋯」的内容合并到添加账号的右侧弹出栏内」⇒ 当时落成
+   * 抽屉里的 `moreTools`「更多操作」分区（WB / Trae 各 4 行，键序一致）。
+   *
+   * ★ 2026-10-23 用户要求**整块删除** —— 理由不是「不好看」，而是**职责重叠**：
+   *   - 自动签到 / 自动旅行 / 跳过已签到：**设置页**已有等价开关，两处各一份必然打架；
+   *   - 导出：**批量条**已有「导出所选」；
+   *   - 「签到并刷新全部账号积分」：与「一键刷新」「批量刷新」构成第三套刷新语义。
+   *
+   * ⇒ 抽屉现在只有两段：① 添加方式卡（基础三张 + 平台专属 `extraOptions`）② 未装客户端提示。
+   *   本条因此**反向**钉住，防止入口被塞回来：
+   *     ① 抽屉、WB 页、Trae 页、Qoder 页**都不得**出现 `moreTools` / `DrawerTool` / `ToolRow`；
+   *     ② 抽屉仍必须渲染 `extraOptions`（平台专属的额外添加方式，如 Trae 的「粘贴 JWT」）；
+   *     ③ 三页都必须接 `extraOptions`，且文案键 `shared.addDrawer.moreTools` 已删除、不得回潮。
+   *   变异：给任一页加回 `moreTools={...}`，或把 `ToolRow` 加回抽屉 ⇒ 本条变红。 */
+  const QODER_PAGE = "src/pages/QoderAccountsPage.tsx";
+  const GONE = ["moreTools", "DrawerTool", "ToolRow"];
   const drawer = readCode("src/components/add-account-drawer.tsx");
-  if (!/\{moreTools\?\.length \?/.test(drawer)) throw new Error("抽屉没有渲染 moreTools 分区");
-  if (!/\{moreTools\.map\(/.test(drawer)) throw new Error("抽屉没有把 moreTools 逐行渲染出来");
   if (!/\{extraOptions\?\.map\(/.test(drawer)) throw new Error("抽屉没有渲染平台专属的 extraOptions");
-  for (const [rel, keys] of [[WB_PAGE, WB_TOOL_KEYS], [TRAE_PAGE, TRAE_TOOL_KEYS]]) {
-    const code = readCode(rel);
-    const i = code.indexOf("moreTools={");
-    if (i < 0) throw new Error(`${path.basename(rel)} 没给抽屉传 \`moreTools\``);
-    const seg = code.slice(i, code.indexOf("labels={{", i));
-    const found = [...seg.matchAll(/key:\s*"([^"]+)"/g)].map((m) => m[1]);
-    if (found.join(",") !== keys.join(",")) {
-      throw new Error(
-        `${path.basename(rel)} 的 moreTools 键序列为 [${found.join(",")}]，应为 [${keys.join(",")}]`,
-      );
-    }
-    if (!/moreTools:\s*t\("shared\.addDrawer\.moreTools"\)/.test(code)) {
-      throw new Error(`${path.basename(rel)} 的抽屉没有「更多操作」分区标题`);
-    }
-    if (/t\("(wbAccounts|trae)\.(addDrawer|page\.accounts\.addDrawer)/.test(code)) {
-      throw new Error(`${path.basename(rel)} 的抽屉文案又写回平台自己的域 —— 两平台必须逐字一致（shared.addDrawer.*）`);
-    }
-    /* ★ 抽屉里**不得**再出现「回收站」—— 它已放回工具栏，两处都放会打架。 */
-    if (/shared\.addDrawer\.compactMode|key:\s*"recycle"/.test(code)) {
-      throw new Error(`${path.basename(rel)} 的抽屉里仍有「回收站」—— 它已放回工具栏`);
+  for (const gone of GONE) {
+    if (drawer.includes(gone)) {
+      throw new Error(`抽屉里又出现了 \`${gone}\` —— 「更多操作」分区已整块删除`);
     }
   }
-  return "两页抽屉各 4 行 · 键序一致 · 分区有标题 · 文案同源 · 无「已放出来」的重复项";
+  for (const rel of [WB_PAGE, TRAE_PAGE, QODER_PAGE]) {
+    const code = readCode(rel);
+    for (const gone of GONE) {
+      if (code.includes(gone)) {
+        throw new Error(
+          `${path.basename(rel)} 又给抽屉塞了 \`${gone}\` —— 开关归设置页、批量动作归批量条、刷新归页头 / 批量条`,
+        );
+      }
+    }
+    /* 抽屉的文案键随分区一起删除：回潮即说明入口要被塞回来。 */
+    if (code.includes("shared.addDrawer.moreTools")) {
+      throw new Error(`${path.basename(rel)} 仍在引用已删除的 \`shared.addDrawer.moreTools\``);
+    }
+  }
+  for (const rel of [WB_PAGE, TRAE_PAGE]) {
+    if (!readCode(rel).includes("extraOptions={")) {
+      throw new Error(`${path.basename(rel)} 丢了 \`extraOptions\` —— 平台专属添加方式不该消失`);
+    }
+  }
+  if (readCode("src/locales/domains/shared.zh.ts").includes("shared.addDrawer.moreTools")) {
+    throw new Error("`shared.addDrawer.moreTools` 文案键又回到词表 —— 分区已删除，键应一并删除");
+  }
+  if (readCode("src/locales/domains/shared.en.ts").includes("shared.addDrawer.moreTools")) {
+    throw new Error("`shared.addDrawer.moreTools` 文案键又回到英文词表 —— 分区已删除，键应一并删除");
+  }
+  return "抽屉只保留添加方式 + 粘贴凭据 · 三页无 moreTools/DrawerTool/ToolRow · 文案键已删 · extraOptions 仍在";
 });
 
 check("★ Qoder 账号页 = 原型工作台同构（工具栏一行 + 卡开抽屉 + 备注在抽屉 · 第三平台不另起炉灶）", () => {
@@ -1929,14 +1948,28 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最�
      ⚠️ 2026-10-22 晚些时候（用户第二轮反馈）：临期/优先在该行里必须是**文字**，不是徽章 ——
      徽章与上一行 chips（已签到 / 任务 / 旅行）同高同底，两行会糊成一层，还与左边的
      积分数字「文字 vs 色块」不搭。变异：把 `<Badge>` 塞回指标行 ⇒ 本条变红。 */
-  const metricsRow = /const metricsRow = \(([\s\S]{0,2000}?)\n  \);/.exec(card);
+  const metricsRow = /const metricsRow = \(([\s\S]{0,2600}?)\n  \);/.exec(card);
   if (!metricsRow) throw new Error("找不到 `metricsRow` —— 卡片指标行的唯一实现没了");
   const row = metricsRow[1];
-  for (const part of ["metric.credits", "{expiringNote}", "{priorityNote}"]) {
+  /* ★ 2026-10-23：积分那一段被抽成 `creditLine`（为了「可点时整段是 `<button>`、
+     不可点时是 `<span>`」两种形态共用同一份内容）。因此这里接受两种写法：
+     直接写 key，或经 `{creditLine}` 间接引用 —— 后者要求 `creditLine` 里确实有该 key，
+     否则「拿掉积分项」仍会变红（不给这条留空子）。 */
+  const viaCreditLine = row.includes("{creditLine}");
+  if (viaCreditLine && !card.includes("wbAccounts.card.metric.credits")) {
+    throw new Error("`creditLine` 里没有「积分」项 —— 指标行第一项必须是积分");
+  }
+  const parts = viaCreditLine
+    ? ["{creditLine}", "{expiringNote}", "{priorityNote}"]
+    : ["metric.credits", "{expiringNote}", "{priorityNote}"];
+  for (const part of parts) {
     if (!row.includes(part)) throw new Error(`指标行缺少「${part}」（应为「积分 + 临期 + 优先」）`);
   }
-  if (row.indexOf("{expiringNote}") > row.indexOf("{priorityNote}")) {
+  if (row.indexOf(parts[1]) > row.indexOf(parts[2])) {
     throw new Error("指标行里「临期」必须排在「优先」之前（先读到「哪些要过期」，再读到「优先号」）");
+  }
+  if (row.indexOf(parts[0]) > row.indexOf(parts[1])) {
+    throw new Error("指标行里「积分」必须排在最前（先看还有多少，再看哪些要过期 / 是否优先号）");
   }
   if (/<Badge/.test(row)) {
     throw new Error("指标行里出现了徽章 —— 该行只允许文字（徽章留给 chips 行的状态标签）");
@@ -2016,21 +2049,122 @@ check("★ 「今日 Token」命令两端接线：路由 + 调用 + 命令名 + 
   return "route + call + 命令名 + 结果类型 四端齐备";
 });
 
-check("★ 「今日 Token」表格列：WB 账号表新增该列，且复用同一诚实实现", () => {
-  /* 表格壳 `account-table.tsx` 是**通用壳**，列由页面以 `columns`（数据）注入
-     ⇒ 新列必须落在 `AccountsPage.tsx`，且复用卡片的 `formatTodayTokens`。
-     变异：删列 / 删列头文案 / 不复用共享实现 ⇒ 本条变红。 */
+check("★ 列表与卡片同契约：今日用量不进表；积分 / 状态列复用卡片实现", () => {
+  /* ★ 2026-10-23：卡片指标行瘦身（2026-10-22 用户要求）后，表格仍挂着旧内容——
+     「今日 Token」单独成列、积分列只给一个剩余数、状态列另写一套并列徽章。
+     同一账号在卡片与列表里说法不同 ⇒ 本断言钉住「两边读同一份实现」：
+       ① 「今日 Token」列与列头文案**不得**回来（用量在统计页 / 详情抽屉）；
+       ② 积分列必须复用 `creditMetricValues`（当前/总额 + 到期口径与卡片同源），
+          并带上卡片指标行的两项文字：最近到期（`nextExpiryLabel`）与优先（`priority`）；
+       ③ 状态列必须复用卡片的三个徽章组件（状态互斥 / 成长任务 / 旅行），
+          表格壳提供 `TooltipProvider`（后两者带 tooltip，Radix Root 必须在 provider 内）；
+       ④ 2026-10-23：列**不含**「到期」（凭证到期只在详情抽屉），账号格的当前徽标
+          文案复用卡片的 `card.currentLogin`（「当前登录」），不再自造 `table.current`。
+     变异：恢复今日 Token / 到期列 / 积分列改回 `totalRemaining` / 状态列另写一份 ⇒ 变红。 */
   const page = readCode(WB_PAGE);
-  if (!/key:\s*"todayTokens"/.test(page)) {
-    throw new Error("WB 账号表未新增「今日 Token」列（`key: \"todayTokens\"`）");
+  if (/key:\s*"todayTokens"/.test(page) || page.includes("wbAccounts.table.todayTokens")) {
+    throw new Error("WB 账号表又挂上了「今日 Token」列 —— 卡片已移除，用量在统计页与详情抽屉");
   }
-  if (!page.includes("wbAccounts.table.todayTokens")) {
-    throw new Error("「今日 Token」列头文案缺失（`wbAccounts.table.todayTokens`）");
+  if (/key:\s*"expiry"/.test(page) || page.includes("wbAccounts.table.expiry")) {
+    throw new Error("WB 账号表又挂上了「到期」列 —— 卡片从不显示凭证到期，列表也不该留这一列");
   }
-  if (!/formatTodayTokens\(entry,/.test(page)) {
-    throw new Error("表格列未复用 `formatTodayTokens` —— 诚实口径会与卡片漂移");
+  if (!page.includes('"wbAccounts.card.currentLogin"')) {
+    throw new Error("账号格「当前登录」徽标未复用 `card.currentLogin` —— 卡片与列表用词会分叉");
   }
-  return "列新增 · 复用 formatTodayTokens · 壳保持通用（列由页面注入）";
+  if (page.includes("wbAccounts.table.current")) {
+    throw new Error("`wbAccounts.table.current`（「当前」）已删除，请复用 `card.currentLogin`");
+  }
+  if (!/creditMetricValues\(creditMap\[account\.id\]\)/.test(page)) {
+    throw new Error("积分列未复用 `creditMetricValues` —— 当前/总额与到期口径会和卡片漂移");
+  }
+  /* ★ 2026-10-23：卡片与列表的到期文案统一由 `nextExpiryLabel` 生成（今天/明天/日期），
+     列表若自己拼一句「N 天」就会重新出现两套口径。 */
+  if (!page.includes("nextExpiryLabel(")) {
+    throw new Error("积分列未复用卡片的 `nextExpiryLabel` —— 到期口径会和卡片漂移");
+  }
+  if (!page.includes('"wbAccounts.card.priority"')) {
+    throw new Error("积分列缺少「wbAccounts.card.priority」—— 卡片指标行的优先标记必须同步到列表");
+  }
+  for (const name of ["AccountStatusBadge", "GrowthHintBadge", "TravelStatusBadge"]) {
+    if (!page.includes(`<${name}`)) {
+      throw new Error(`状态列未复用卡片的 \`${name}\` —— 同一账号会在两个视图里说法不同`);
+    }
+  }
+  if (!/TooltipProvider/.test(readCode("src/components/account-table.tsx"))) {
+    throw new Error("表格壳缺少 `TooltipProvider` —— 复用卡片徽章后 tooltip 会在渲染期抛错");
+  }
+  if (!/export function creditMetricValues\(/.test(readCode("src/components/account-card.tsx"))) {
+    throw new Error("卡片未导出 `creditMetricValues` —— 两个视图必须读同一份积分口径");
+  }
+  return "今日用量/到期不进表 · 积分列=当前/总额+最近到期+优先 · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
+});
+
+check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {
+  /* 2026-10-23 用户反馈：卡上没有标签时读不出「已完成 / 没扫到 / 没有成长体系」。
+     ⇒ 判据：
+       ① 四种状态各有文案分支（可领 / 可自动 / 已领 x/y / 已完成）；
+       ② `ok:false`、未扫到、`total = 0` 仍**不占位**（不得把「不知道」写成「已完成」）；
+       ③ 不得再用 `idle` 整枚隐藏 —— 那会让「已完成」与「没扫到」重新变成同一种表现；
+       ④ 卡片与表格的标签都可点，直达抽屉「任务」页签；
+       ⑤ 入口页签**只对本次打开生效**，不得写进「上次停留页签」的记忆。
+     变异：恢复 `if (idle) return null` / 删掉已完成分支 / 点击不接 `tasks` ⇒ 本条变红。 */
+  const card = stripComments(readCode("src/components/account-card.tsx"));
+  // 取到下一个导出函数为止（`fnBody` 会把参数解构的 `{}` 当成函数体）。
+  const at = card.indexOf("export function GrowthHintBadge");
+  if (at < 0) throw new Error("找不到 `GrowthHintBadge`");
+  const nextExport = card.indexOf("export function", at + 10);
+  const body = card.slice(at, nextExport < 0 ? undefined : nextExport);
+  for (const key of ["growthClaimable", "growthAutoable", "growthProgress", "growthDone"]) {
+    if (!body.includes(key)) throw new Error(`GrowthHintBadge 缺少「${key}」分支`);
+  }
+  if (!/summary\.total\s*<=\s*0/.test(body)) {
+    throw new Error("总数为 0 时没有提前返回 —— 会把「没有任务」渲染成一枚空标签");
+  }
+  if (/\bidle\b/.test(body)) {
+    throw new Error("仍在用 `idle` 整枚隐藏 —— 「已完成」与「没扫到」又变成同一种没有标签");
+  }
+  /* 底色只分两档，与签到标签对齐（2026-10-23 用户定稿）：
+     可领 / 可自动 ⇒ warning（同「今日未签到」，提醒去操作）；
+     已领 x/y / 已完成 ⇒ success（同「已签到」，无需行动；两态同底只换文字）。
+     变异：退回 success/info 双色行动态 / 退回中性底 / 两态各用字色 ⇒ 本条变红。 */
+  if (!body.includes('variant="warning"')) {
+    throw new Error("可领 / 可自动没有 warning 底 —— 应与「今日未签到」同形，提醒去操作");
+  }
+  if (!body.includes('variant="success"')) {
+    throw new Error("已领 x/y / 任务已完成没有 success 底 —— 应与「已签到」同形");
+  }
+  for (const tone of ["secondary", "info"]) {
+    if (body.includes(`variant="${tone}"`)) {
+      throw new Error(`成长任务标签又用 \`${tone}\` 底 —— 底色只表达要不要动手（warning / success）`);
+    }
+  }
+  for (const tone of ["text-success", "text-warning"]) {
+    if (body.includes(`"${tone}"`)) {
+      throw new Error(`成长任务标签又用字色（${tone}）—— 区分靠底色与文字，不叠字色`);
+    }
+  }
+  const page = readCode(WB_PAGE);
+  /* ★ 2026-10-23：卡片的「点标签跳页签」统一走 `onOpenTab(target, tab)`（积分 / 签到 /
+     凭据 / 任务共用一个入口），因此这里钉**两层**：
+       ① 卡片侧把成长任务标签指到 `tasks`；
+       ② 页面侧把 `onOpenTab` 一路接到 `openDetail(target, tab)`（不留中间的第二套跳转）。 */
+  if (!/onOpenTab\(account,\s*"tasks"\)/.test(card)) {
+    throw new Error('卡片成长任务标签没有指向任务页签（应为 `onOpenTab(account, "tasks")`）');
+  }
+  if (!/onOpenTab=\{\(target,\s*tab\)\s*=>\s*openDetail\(target,\s*tab\)\}/.test(page)) {
+    throw new Error("卡片 `onOpenTab` 没有接到 `openDetail(target, tab)` —— 点击无处可去");
+  }
+  if (!/openDetail\(account,\s*"tasks"\)/.test(page)) {
+    throw new Error("表格状态列的成长任务标签未接任务页签");
+  }
+  const drawer = readCode("src/components/account-detail-drawer.tsx");
+  if (!/initialTab/.test(drawer)) {
+    throw new Error("抽屉缺少 `initialTab` —— 入口页签无法落地");
+  }
+  if (/writeDrawerTab\(|setDrawerTab\(/.test(drawer)) {
+    throw new Error("入口页签不得写入「上次停留页签」的记忆");
+  }
+  return "四态常显 · 无摘要不占位 · 卡片/表格点击直达任务页签 · 入口页签不落盘";
 });
 
 check("★ P4 两种空态不混用：被筛没必须给「清除筛选」出口（删出口即变红）", () => {
@@ -6774,15 +6908,43 @@ check("★ P3 权限自愈：授权恢复后**自动重试**上次切换（且�
   return "恢复即自动重试 + 只一次护栏";
 });
 
-check("★ P0-4a 未检测程序位：「去设置」跳到「权限与诊断」子项（不是设置页首页）", () => {
-  /* 原型 P0-4a（`verify-behaviors.cjs:365-370`）：点「去设置」后须能到「权限与诊断」。
-     ⚠️ 此前只 `navigate(.../settings)`（**首页**）⇒ 用户还得自己找子项。
-     本断言同时要求 `SettingsPage` **从 URL 读初始 section** —— 否则带了参数也不生效。 */
+check("★ P0-4a 抽屉不再有「切换权限诊断」；「程序位未检测」保持**页面内闭环**（不跳设置）", () => {
+  /* ## 两件不同的事，不能共用一个出口（2026-10-23 拆分；同日用户要求再收紧）
+   *
+   * - **权限诊断**（原详情抽屉「切换权限诊断」）：设置页 `section=diagnostics` 就是
+   *   `PermissionCheckCard`（文件系统权限检测）。★ 2026-10-23 用户要求：该按钮**移除** ——
+   *   它与「看这个账号的凭据状态」无关，且设置页入口本就存在；
+   *   `onPermissionDiagnostics` 函数已删除，本断言改为**锁死「不得回潮」**。
+   * - **程序位未检测**（卡片上的 IDE / CLI 按钮）：设置页里**既没有 IDE 路径配置，
+   *   也没有 CLI 接入项** ⇒ 旧实现 `navigate(...settings?section=diagnostics)` 是死路。
+   *   现在：CLI 直接打开接入确认弹窗（与页面顶部横幅同一入口），IDE 只 toast 说明安装方式。
+   *
+   * 判据：
+   *   ① `AccountsPage` **不得**再出现 `onPermissionDiagnostics` 或 `settings?section=diagnostics`；
+   *   ② `onGuideToSetting` 的函数体里**不得**出现 `navigate(` 或 `settings?section=`；
+   *   ③ `onGuideToSetting` 必须调用 `onInstallCodebuddyCli`（CLI）与 `toast`（IDE）；
+   *   ④ `SettingsPage` 仍从 URL 读 section 并做合法性校验（`?section=` 深链仍然合法）。
+   * 变异：把权限诊断入口加回抽屉 ⇒ ① 变红；
+   *       把卡片那个入口改回 `navigate(...diagnostics)` ⇒ ② 变红；
+   *       把 CLI 分支改成 toast 而不开弹窗 ⇒ ③ 变红。 */
   const acct = stripComments(
     fs.readFileSync(path.join(ROOT, "src/pages/AccountsPage.tsx"), "utf8"),
   );
-  if (!/settings\?section=diagnostics/.test(acct)) {
-    throw new Error("「去设置」未带子项锚点 —— 只到设置页首页（P0-4a 违反）");
+  if (/onPermissionDiagnostics/.test(acct) || /settings\?section=diagnostics/.test(acct)) {
+    throw new Error("抽屉的「切换权限诊断」又回来了（2026-10-23 用户要求移除）—— 权限检测请走设置页");
+  }
+  const guideAt = acct.indexOf("function onGuideToSetting(");
+  if (guideAt < 0) throw new Error("缺 `onGuideToSetting(target)` —— 未检测程序位的出口没了");
+  /* 取函数体：到下一条 `function ` 声明之前。 */
+  const guideBody = acct.slice(guideAt, acct.indexOf("function ", guideAt + 10));
+  if (/navigate\(/.test(guideBody) || /settings\?section=/.test(guideBody)) {
+    throw new Error("「程序位未检测」又跳设置页了 —— 那里没有 IDE 路径配置，也没有 CLI 接入项");
+  }
+  if (!/onInstallCodebuddyCli\(\)/.test(guideBody)) {
+    throw new Error("CLI 未接入没有打开接入确认弹窗 —— 应该走 `onInstallCodebuddyCli()`");
+  }
+  if (!/toast\.(info|warning|error|message)\(/.test(guideBody)) {
+    throw new Error("IDE 未检测没有给 toast 说明 —— 用户不知道该装什么");
   }
   const settings = stripComments(
     fs.readFileSync(path.join(ROOT, "src/pages/SettingsPage.tsx"), "utf8"),
@@ -6808,7 +6970,7 @@ check("★ P0-4a 未检测程序位：「去设置」跳到「权限与诊断」
       throw new Error("parseSettingsSubnav 未 fail-closed 回第一项");
     }
   }
-  return "带锚点 + 从 URL 读 + 合法性校验";
+  return "权限诊断带锚点 · 程序位未检测走弹窗 / toast（不跳设置）· SettingsPage 仍吃 URL section";
 });
 
 check("★ 设置页两平台同构：同一张 7 项子导航表 + URL 承载 + split 布局（PLAN §3.9 / D12）", () => {
@@ -6852,11 +7014,17 @@ check("★ P1-2 批量签到部分失败：toast 给「只重试失败项」出�
   /* 原型 P1-2：部分失败态不能只给一句 toast —— 要能**只重试失败项**。
      此前 `batchCheckin` 只统计 `failed` 计数、**丢掉失败 id** ⇒ 用户只能把成功的一起重跑。
      ⚠️ 本断言**同时**锁「共用同一条签到路径」（`runCheckinFor`）——
-     否则重试会另写一份逻辑，两处口径迟早漂移。 */
+     否则重试会另写一份逻辑，两处口径迟早漂移。
+
+     ★ 2026-10-23：签到改并发池后，失败 id 不再逐个 `push`，而是由结局数组派生
+       （`ids.filter((_, i) => outcomes[i] === "failed")`）；重试名单 `retryIds` =
+       失败 + **被取消而未处理**两项（取消掉的账号同样需要补跑，只重试失败会让它们永远停在未签到）。
+       断言随实现更新，但**不放宽实质**：仍然必须「把具体名单传回去」，
+       传全量（`batchCheckin(pendingIds)` / `batchCheckin(allIds)`）同样算失败。 */
   const src = stripComments(
     fs.readFileSync(path.join(ROOT, "src/pages/AccountsPage.tsx"), "utf8"),
   );
-  if (!/failedIds\.push\(/.test(src)) {
+  if (!/failedIds\.push\(/.test(src) && !/failedIds = ids\.filter\(/.test(src)) {
     throw new Error("批量签到没保留失败 id —— 无从「只重试失败项」");
   }
   if (!/checkinRetryFailed/.test(src)) {
@@ -6865,10 +7033,13 @@ check("★ P1-2 批量签到部分失败：toast 给「只重试失败项」出�
   if (!/async function runCheckinFor/.test(src)) {
     throw new Error("没有抽出共用的签到路径 —— 重试会另写一份（口径漂移风险）");
   }
-  if (!/batchCheckin\(failedIds\)/.test(src)) {
+  if (!/const retryIds = \[\.\.\.failedIds/.test(src)) {
+    throw new Error("「只重试失败项」没把失败 id 组装进重试名单");
+  }
+  if (!/batchCheckin\(retryIds\)/.test(src)) {
     throw new Error("「只重试失败项」没把失败 id 传回去 —— 实际仍会重跑全部");
   }
-  return "失败 id 保留 + toast 出口 + 共用路径";
+  return "失败 id 派生保留 + toast 出口 + 共用路径（失败与取消未处理一并重试）";
 });
 
 check("★ P12 请求代理：默认关（D29）+ 一键还原不留残留", () => {
@@ -7103,10 +7274,14 @@ check("★ B5 签到积分：抽屉里能看到「+N」+ 连签 + 日期（数�
   const zh = stripComments(
     fs.readFileSync(path.join(ROOT, "src/locales/domains/shared.zh.ts"), "utf8"),
   );
+  /* ★ 2026-10-23：签到三格改为横排（今日签到 / 已连签 / 累计积分），
+     旧的整句词条 `checkin.streak` 拆成了 `statStreak` + `days`。 */
   for (const k of [
     "shared.drawer.checkin.title",
     "shared.drawer.checkin.today",
-    "shared.drawer.checkin.streak",
+    "shared.drawer.checkin.statStreak",
+    "shared.drawer.checkin.statTotal",
+    "shared.drawer.checkin.days",
   ]) {
     if (!zh.includes(k)) throw new Error(`词条缺 ${k}`);
   }

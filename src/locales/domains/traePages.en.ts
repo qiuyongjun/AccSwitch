@@ -15,7 +15,6 @@ export const en = {
   // ---- Generic action results ----
   "trae.page.accounts.actionDone": "{label} done",
   "trae.page.accounts.actionFailed": "{label} failed",
-  "trae.page.accounts.actionCheckinAll": "Check in and refresh credits",
   "trae.page.accounts.actionSwitch": "Switch {line} account",
   "trae.page.accounts.actionSaveLogin": "Save sign-in state",
   "trae.page.accounts.saveLoginNoProgram": "This account is not signed in on any Trae client, so its sign-in state cannot be saved",
@@ -50,7 +49,6 @@ export const en = {
   "trae.page.accounts.mergeSnapshotsFailed": "⚠️ {count} snapshot(s) could not be carried over — see the run log",
 
   // ---- Check-in (all / single) ----
-  "trae.page.accounts.creditsRefreshFailed": "Failed to refresh credits",
   "trae.page.accounts.noNeedCheckin": "No accounts need a check-in",
   "trae.page.accounts.checkinNotRun": "Check-in not performed",
   "trae.page.accounts.checkinSkippedDesc": "{name} was skipped (already checked in today, cooling down, or credentials expired)",
@@ -77,7 +75,6 @@ export const en = {
   "trae.page.accounts.oauthLogin": "OAuth web sign-in",
   "trae.page.accounts.pasteJwt": "Paste JWT",
   "trae.page.accounts.pasteJwtTitle": "Paste Cloud-IDE-JWT manually (fallback — prefer the web sign-in above)",
-  "trae.page.accounts.exportTitle": "Export account backup",
 
   // ---- First-run empty state (`EmptyTraeCard`) ----
   // 2026-10-10: the old "client environment line" keys were deleted along with that strip
@@ -115,14 +112,8 @@ export const en = {
   "trae.page.accounts.table.expiry": "Expiry",
   "trae.page.accounts.table.programs": "Programs",
   "trae.page.accounts.table.current": "Current",
-  "trae.page.accounts.autoCheckin": "Auto check-in",
-  "trae.page.accounts.autoCheckinSaving": "Saving auto check-in setting",
-  "trae.page.accounts.skipChecked": "Skip checked-in",
-  "trae.page.accounts.skipCheckedAria": "Skip accounts already checked in today",
-  "trae.page.accounts.checkinSettingsSaving": "Saving check-in setting",
-  "trae.page.accounts.checkinRefreshAll": "Check in and refresh all accounts' credits",
-  "trae.page.accounts.autoCheckinSaveFailed": "Failed to save auto check-in setting",
-  "trae.page.accounts.settingsSaveFailed": "Failed to save settings",
+  // 2026-10-23: the account drawer's "More actions" section was removed, so the auto check-in
+  // and skip-checked-in switch strings now live only in Settings (`trae.page.settings.autoCheckin*`).
   "trae.page.accounts.switchIncomplete": "Switch did not complete",
 
   // ---- Check-in result card ----

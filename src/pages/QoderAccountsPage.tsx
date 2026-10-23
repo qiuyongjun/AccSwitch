@@ -590,7 +590,8 @@ export default function QoderAccountsPage() {
           } else {
             await reload();
           }
-          toast.success(t(REFRESH_DONE_LABEL[kind]), { description: label });
+          /* 单账号回执合成一行（同 AccountsPage 2026-10-23 调整）。 */
+          toast.success(`${label}${t("shared.punct.colon")}${t(REFRESH_DONE_LABEL[kind])}`);
         } catch (e) {
           toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
         }
@@ -904,10 +905,7 @@ export default function QoderAccountsPage() {
       onCheckin: () => void runCheckin([detail]),
       /* 「手动签到」只在凭据可用时出现（凭据坏了点它必然失败）。 */
       showCheckin: detail.hasCredential,
-      onExport: () => {
-        setExportTargets([detail]);
-        setExportOpen(true);
-      },
+      /* ★ 2026-10-23：`导出` 已从共享抽屉移除（卡片「更多」里仍有）。 */
       onDelete: () => {
         const target = detail;
         setDetail(null);
@@ -1004,18 +1002,17 @@ export default function QoderAccountsPage() {
       <header className="flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("qoder.page.accounts.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {attentionCount > 0
-              ? t("pageHead.accounts.pending", {
-                  scope: scopeLabel(t, scope),
-                  n: rows.length,
-                  m: attentionCount,
-                })
-              : t("pageHead.accounts", { scope: scopeLabel(t, scope), n: rows.length })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>
+              ·{" "}
+              {attentionCount > 0
+                ? t("pageHead.accounts.pending", { n: rows.length, m: attentionCount })
+                : t("pageHead.accounts", { n: rows.length })}
+            </span>
           </p>
         </div>
         <div className="grow" />
-        <ScopeChip scope={scope} />
       </header>
 
       {/* ★ 账号工作台（**三平台共用容器**）—— 与 `AccountsPage` / `TraeAccountsPage`
@@ -1233,7 +1230,6 @@ export default function QoderAccountsPage() {
           backupTitle: t("shared.addDrawer.backupTitle"),
           backupDesc: t("shared.addDrawer.backupDesc"),
           notInstalled: t("shared.addDrawer.notInstalled"),
-          moreTools: t("shared.addDrawer.moreTools"),
         }}
       />
 

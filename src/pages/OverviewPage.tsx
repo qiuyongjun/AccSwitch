@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 import { OverviewStats } from "@/components/overview/overview-stats";
 import { TokenTrendCard } from "@/components/overview/token-trend-card";
-import { ScopeMark, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip, ScopeMark, scopeLabel } from "@/components/scope-chip";
 import { RunPill } from "@/components/shell/run-pill";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatCredits } from "@/components/usage/format";
 import * as api from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import type { TranslationKey } from "@/locales/zh";
 import { useOverviewMetrics } from "@/lib/overview-metrics";
 import {
@@ -31,7 +32,7 @@ import { useScopeStatus, type ScopeStatus } from "@/lib/use-scope-status";
 import { cn } from "@/lib/utils";
 import { useAccountsStore } from "@/stores/accounts";
 
-/** Token 到期前的预警窗口：24 小时。 */
+/** 凭据到期前的预警窗口：24 小时。 */
 const EXPIRY_WARN_MS = 24 * 60 * 60 * 1000;
 
 /** 能力 → 文案键（取值来自注册表 `Capability`；新增能力必须同时补词条）。 */
@@ -304,7 +305,9 @@ export default function OverviewPage() {
       const ids = notChecked.map((a) => a.id);
       list.push({
         key: "notChecked",
-        icon: CheckCircle2,
+        /* ★ 与账号页同一枚签到图标（`lib/semantic-icons.ts`）：这里此前用 `CheckCircle2`，
+           于是「今日未签到」在概览是圆圈、在账号页是日历，读者对不上是同一件事。 */
+        icon: CheckinIcon,
         tone: "warn",
         title: t("wbOverview.pending.notChecked", { count: notChecked.length }),
         hint: t("wbOverview.pending.notCheckedHint"),
@@ -379,11 +382,8 @@ export default function OverviewPage() {
 
   /* 页头副标题：作用域 + 当前登录（作用域标签与顶栏 `ScopeSelector` 同源，见 `scopeLabel`）。 */
   const subtitle = scopeStatus.loggedInName
-    ? t("pageHead.overview.signedIn", {
-        scope: scopeLabel(t, scope),
-        name: scopeStatus.loggedInName,
-      })
-    : t("pageHead.overview.signedOut", { scope: scopeLabel(t, scope) });
+    ? t("pageHead.overview.signedIn", { name: scopeStatus.loggedInName })
+    : t("pageHead.overview.signedOut");
 
   /** 其他作用域：点击即切（写记忆 + 导航到该作用域的概览，与顶栏同口径）。 */
   function goScope(next: Scope) {
@@ -399,7 +399,10 @@ export default function OverviewPage() {
       <header className="flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("wbOverview.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">{subtitle}</p>
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {subtitle}</span>
+          </p>
         </div>
         <div className="grow" />
         <Button

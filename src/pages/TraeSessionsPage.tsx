@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { GitBranch } from "lucide-react";
 
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -41,12 +41,12 @@ export default function TraeSessionsPage() {
       <header className="flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("sessions.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("pageHead.sessions", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("pageHead.sessions")}</span>
           </p>
         </div>
         <div className="grow" />
-        <ScopeChip scope={scope} />
       </header>
 
       {/* ★ 工具栏标题行（与 WorkBuddy 会话页结构对齐，原型 `viewSessions` :3183）。

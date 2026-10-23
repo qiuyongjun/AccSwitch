@@ -12,7 +12,7 @@ import { compactTokens } from "@/components/usage/format";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AVATAR_TEXT_CLASS, accountInitials, avatarTone } from "@/components/account-card";
 import { displayText } from "@/lib/display-text";
-import { summarizeExpiring } from "@/lib/credit-expiry";
+import { EXPIRY_TIP_LIMIT, expiryDay, isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { formatAbsoluteTime, formatRelativeTime } from "@/lib/catalog-source";
 import { useT, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -330,30 +330,43 @@ export function TraeAccountCard({
     );
 
   /**
-   * 第 3 槽「N 积分 M 天内过期」—— 口径与 WorkBuddy 卡片**同一实现**（`summarizeExpiring`）：
-   * 金额 = 窗口内全部临期之和、天数 = 其中最晚那一刻，逐批明细进 tooltip。
+   * 「140 积分明天到期」—— 与 WorkBuddy 卡片**同一份**汇总（`summarizeExpiry`）：
+   * 只报最急一批的金额与到期日，逐批明细进 tooltip。
    *
    * ⚠️ Trae 的 `expireAt` 是**秒**（后端直接透传上游 `expire_time`），WorkBuddy 是毫秒 ——
    * 单位必须显式传给汇总函数，此前这里靠 `> 1e12` 猜单位，猜错一次就会整条徽章消失。
+   *
+   * 3 天内到期 = `warning`（要花掉的），更远 = `secondary`（仍在，只是不抢眼）——
+   * 每个账号都摆出最近到期，用户才能横向比较「哪个号该先用」。
    */
-  const expiring = summarizeExpiring(account.creditPackages, { unit: "s" });
-  const expiringChip = expiring ? (
+  const expiryNow = Date.now();
+  const expiry = summarizeExpiry(account.creditPackages, { unit: "s", now: expiryNow });
+  const nextExpiry = expiry?.batches[0] ?? null;
+  const expiryLabel = nextExpiry
+    ? (() => {
+        const day = expiryDay(nextExpiry.expireAt, expiryNow);
+        const amount = formatCredits(nextExpiry.amount);
+        if (day.kind === "today") return t("trae.comp.card.chip.expiringToday", { amount, time: day.time });
+        if (day.kind === "tomorrow") return t("trae.comp.card.chip.expiringTomorrow", { amount, time: day.time });
+        return t("trae.comp.card.chip.expiringDate", { amount, date: day.text, time: day.time });
+      })()
+    : "";
+  const expiringChip = nextExpiry && expiry ? (
     <Tooltip>
       <TooltipTrigger asChild>
         <Badge
-          variant="warning"
+          variant={isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "warning" : "secondary"}
           className={chipClass}
-          aria-label={t("trae.comp.card.chip.expiring", {
-            amount: formatCredits(expiring.total),
-            days: expiring.days,
-          })}
+          aria-label={expiryLabel}
         >
-          {t("trae.comp.card.chip.expiring", { amount: formatCredits(expiring.total), days: expiring.days })}
+          {expiryLabel}
         </Badge>
       </TooltipTrigger>
       <TooltipContent side="top">
-        <div className="whitespace-nowrap font-medium">{t("trae.comp.card.chip.expiringTipTitle", { n: expiring.batches.length })}</div>
-        {expiring.batches.map((batch) => (
+        <div className="whitespace-nowrap font-medium">
+          {t("trae.comp.card.chip.expiringTipTitle", { n: expiry.batches.length })}
+        </div>
+        {expiry.batches.slice(0, EXPIRY_TIP_LIMIT).map((batch) => (
           <div key={batch.expireAt} className="whitespace-nowrap tabular-nums">
             {t("trae.comp.card.chip.expiringTipLine", {
               time: formatAbsoluteTime(batch.expireAt),
@@ -361,6 +374,11 @@ export function TraeAccountCard({
             })}
           </div>
         ))}
+        {expiry.batches.length > EXPIRY_TIP_LIMIT ? (
+          <div className="whitespace-nowrap text-muted-foreground">
+            {t("trae.comp.card.chip.expiringTipMore", { n: expiry.batches.length - EXPIRY_TIP_LIMIT })}
+          </div>
+        ) : null}
       </TooltipContent>
     </Tooltip>
   ) : null;

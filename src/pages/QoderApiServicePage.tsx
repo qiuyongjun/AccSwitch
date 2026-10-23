@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { DemoAction } from "@/components/demo-action";
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import {
   AUTO_OPTION,
   MAX_CREDITS_OPTION,
@@ -389,12 +389,12 @@ export default function QoderApiServicePage() {
     <header className="mb-5 flex items-start gap-4">
       <div className="min-w-0">
         <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("qoder.gateway.title")}</h1>
-        <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-          {t("pageHead.gateway", { scope: scopeLabel(t, scope) })}
+        <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <ScopeChip scope={scope} />
+          <span>· {t("pageHead.gateway")}</span>
         </p>
       </div>
       <div className="grow" />
-      <ScopeChip scope={scope} />
     </header>
   );
 

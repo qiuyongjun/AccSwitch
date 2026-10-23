@@ -1,10 +1,11 @@
 "use client";
 
-import { Check, Gauge, KeyRound, Loader2, RefreshCw, Sparkles, type LucideIcon } from "lucide-react";
+import { Check, Gauge, KeyRound, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { ACCOUNT_REFRESH_KINDS, type AccountRefreshKind } from "@/lib/account-refresh";
 import { useT } from "@/lib/i18n";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -83,7 +84,10 @@ export function MenuStateItem({
 const REFRESH_ITEMS = [
   { kind: "credits", icon: RefreshCw, labelKey: "shared.cardMenu.refresh.credits", hintKey: "shared.cardMenu.refresh.creditsHint" },
   { kind: "tokens", icon: Gauge, labelKey: "shared.cardMenu.refresh.tokens", hintKey: "shared.cardMenu.refresh.tokensHint" },
-  { kind: "checkin", icon: Sparkles, labelKey: "shared.cardMenu.refresh.checkin", hintKey: "shared.cardMenu.refresh.checkinHint" },
+  /* ★ 「签到」在刷新组里也用签到概念的那一枚（`CheckinIcon`）：四项刷新图标各自回答
+     「这一项刷的是哪层数据」，签到项此前用 `Sparkles`（与成长任务的自动完成同形）⇒
+     读者会以为它是「智能/自动」类动作，而不是「重读签到状态」。 */
+  { kind: "checkin", icon: CheckinIcon, labelKey: "shared.cardMenu.refresh.checkin", hintKey: "shared.cardMenu.refresh.checkinHint" },
   { kind: "credential", icon: KeyRound, labelKey: "shared.cardMenu.refresh.credential", hintKey: "shared.cardMenu.refresh.credentialHint" },
 ] as const satisfies ReadonlyArray<{
   kind: AccountRefreshKind;
@@ -96,6 +100,7 @@ export function RefreshMenuGroup({
   refreshingKinds,
   doneKinds,
   kinds = ACCOUNT_REFRESH_KINDS,
+  disabled = false,
   onPick,
 }: {
   /** 本账号正在进行中的刷新项。 */
@@ -109,6 +114,8 @@ export function RefreshMenuGroup({
    * 也不要摆一个点了只会重读缓存的菜单项。
    */
   kinds?: readonly AccountRefreshKind[];
+  /** 外部动作进行中时整体禁用（批量条复用本组时使用）。 */
+  disabled?: boolean;
   onPick: (kind: AccountRefreshKind) => void;
 }) {
   const t = useT();
@@ -123,7 +130,7 @@ export function RefreshMenuGroup({
         return (
           <DropdownMenuItem
             key={kind}
-            disabled={busy}
+            disabled={disabled || busy}
             title={t(hintKey)}
             /* ⚠️ 保菜单开着：刷完一项常常接着刷下一项，且「刷新中 / 已更新」只有菜单里看得见。 */
             onSelect={(event) => {

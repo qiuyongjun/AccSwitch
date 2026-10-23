@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, CircleSlash, Loader2, RefreshCw, Sparkles, Trophy } from "lucide-react";
+import { CheckCircle2, CircleSlash, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { DemoAction } from "@/components/demo-action";
@@ -9,13 +9,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   growthTasksAuto,
   growthTasksClaim,
-  growthTasksClaimAll,
   growthTasksList,
   type GrowthTaskItem,
   type GrowthTaskRunResult,
   type GrowthTasksView,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { GrowthTaskIcon } from "@/lib/semantic-icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -52,22 +52,40 @@ export interface GrowthTasksPanelProps {
    * 一个「刚领完还说可领」的标签，比没有标签更让人不信任。
    */
   onChanged?: () => void;
+  /**
+   * 账号显示名：手动刷新成功的回执带上它（「QYJ：任务列表已刷新」），
+   * 与其它三项 `onRefreshPart` 回执同款排版（2026-10-23 用户要求）。
+   * 缺省时退回不带名字的单行文案。
+   */
+  accountName?: string;
 }
 
-export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPanelProps) {
+export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: GrowthTasksPanelProps) {
   const t = useT();
   const [view, setView] = useState<GrowthTasksView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [results, setResults] = useState<GrowthTaskRunResult[] | null>(null);
 
-  const reload = useCallback(async () => {
+  /**
+   * 拉取任务列表。
+   *
+   * @param announce 仅**手动点击刷新按钮**时为 true ⇒ 成功后弹「已刷新」回执。
+   *   挂载时的首次拉取、`runAuto` / `claimOne` 收尾的自动 reload 都走默认 false：
+   *   前者是「打开页签」，弹回执是噪音；后者各自动作已自带 toast，
+   *   再叠一条「已刷新」会把真正要看的「领了什么」挤下去。
+   *   失败回执**不分场景**都弹 —— 失败恰恰最需要被看见。
+   */
+  const reload = useCallback(async (announce = false) => {
     setLoading(true);
     try {
       const next = await growthTasksList(scope, accountId);
       setView(next);
       if (!next.ok) {
         toast.error(t("shared.growthTasks.loadFailed", { message: next.message ?? "" }));
+      } else if (announce) {
+        const done = t("shared.growthTasks.refreshDone");
+        toast.success(accountName ? `${accountName}${t("shared.punct.colon")}${done}` : done);
       }
     } catch (error) {
       setView({ ok: false, tasks: [], message: String((error as Error)?.message ?? error) });
@@ -81,7 +99,24 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
     void reload();
   }, [reload]);
 
-  /** 一键完成：报名 → 点亮 → 回读 → 领奖。耗时可达数十秒，故全程禁用交互。 */
+  /**
+   * ★ 2026-10-23：**「领取全部」与「一键完成」合并成一个按钮**。
+   *
+   * 旧面板上有两个总控按钮（`领取全部` / `一键完成`），用户要自己判断该点哪个：
+   * 「已达标未领」的点领取，「还能刷进度」的点一键完成 —— 而后者本来就会领奖
+   * （后端 `run_auto_for` 对 `claimable` 的任务直接领）。两个按钮的**交集**占绝大多数，
+   * 留给用户的只是「我该点哪个」的额外决策。
+   *
+   * 合并后的语义（与后端一致，2026-10-23 起 `run_auto_for` 末尾也会收掉
+   * `ACTIONS` 之外的可领任务）：
+   *
+   * ```
+   * 一键完成 = 能领的全领 + 能点亮的全点亮
+   * ```
+   *
+   * 仍是**一个后端命令**（`growth_tasks_auto`），不在前端编排两次请求 ——
+   * 两次请求之间的失败会让「领了一半」这种中间态没人负责。
+   */
   async function runAuto() {
     if (busy) return;
     setBusy("auto");
@@ -96,41 +131,11 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
         const credit = report.credit ?? 0;
         if (claimed > 0) {
           toast.success(t("shared.growthTasks.autoDone", { n: claimed, credit }));
+        } else if ((report.results ?? []).some((item) => item.status === "progressed")) {
+          // 点亮了但还没达标：不是「什么都没做」，说清楚比一句「没有可完成的」有用。
+          toast.info(t("shared.growthTasks.progressedOnly"));
         } else {
           toast.info(t("shared.growthTasks.autoNone"));
-        }
-      }
-    } catch (error) {
-      toast.error(String((error as Error)?.message ?? error));
-    } finally {
-      // 先刷新、再解 busy：反过来的话刷新窗口内按钮已重新可点，会直接触发第二轮请求。
-      try {
-        await reload();
-      } finally {
-        setBusy(null);
-      }
-      // 通知外部刷新**这张卡**的提示标签（列表页据此更新「可领 N」）。
-      onChanged?.();
-    }
-  }
-
-  /** 只领不点亮：领奖无副作用，不该强迫用户再发一遍行为事件。 */
-  async function claimAll() {
-    if (busy) return;
-    setBusy("claim-all");
-    try {
-      const report = await growthTasksClaimAll(scope, accountId);
-      if (!report.ok) {
-        toast.error(report.message ?? t("shared.growthTasks.autoNone"));
-      } else {
-        setResults(report.results);
-        // `ok: true` 只代表链路走通 —— 全部失败时上游照样返回 ok，
-        // 所以文案必须看 `results` 里到底领到没有，否则就是一句假的「已领取」。
-        const claimed = (report.results ?? []).filter((item) => item.status === "claimed").length;
-        if (claimed > 0) {
-          toast.success(t("shared.growthTasks.claimDone", { credit: report.credit ?? 0 }));
-        } else {
-          toast.info(t("shared.growthTasks.claimNone"));
         }
       }
     } catch (error) {
@@ -197,7 +202,7 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
           variant="ghost"
           className="h-7 shrink-0 px-2"
           disabled={loading}
-          onClick={() => void reload()}
+          onClick={() => void reload(true)}
           aria-label={t("shared.growthTasks.refresh")}
         >
           {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
@@ -208,8 +213,10 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
 
   return (
     <div className="space-y-3 pt-1">
-      {/* 汇总 + 两个总控动作。放在列表上方是刻意的：用户点开页签的第一诉求
-          通常是「有没有能领的」，不是「第 7 个任务的描述是什么」。 */}
+      {/* 汇总 + **一个**总控动作。放在列表上方是刻意的：用户点开页签的第一诉求
+          通常是「有没有能领的」，不是「第 7 个任务的描述是什么」。
+          ★ 2026-10-23：原先这里是「领取全部」+「一键完成」两枚按钮，用户要自己判断点哪个；
+          现在合成一枚（语义见 `runAuto` 注释）：可领或可自动，任一为真即可点。 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11.5px] text-muted-foreground">
           {t("shared.growthTasks.summary", {
@@ -224,7 +231,7 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
             variant="ghost"
             className="h-7 px-2"
             disabled={busy !== null}
-            onClick={() => void reload()}
+            onClick={() => void reload(true)}
             aria-label={t("shared.growthTasks.refresh")}
           >
             {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
@@ -232,23 +239,13 @@ export function GrowthTasksPanel({ scope, accountId, onChanged }: GrowthTasksPan
           <DemoAction>
             <Button
               size="sm"
-              variant="outline"
               className="h-7 px-2.5"
-              disabled={busy !== null || (view?.claimable ?? 0) === 0}
-              onClick={() => void claimAll()}
-            >
-              {busy === "claim-all" ? <Loader2 className="animate-spin" /> : <Trophy />}
-              {t("shared.growthTasks.claimAll")}
-            </Button>
-          </DemoAction>
-          <DemoAction>
-            <Button
-              size="sm"
-              className="h-7 px-2.5"
-              disabled={busy !== null || (view?.autoable ?? 0) === 0}
+              disabled={
+                busy !== null || ((view?.claimable ?? 0) === 0 && (view?.autoable ?? 0) === 0)
+              }
               onClick={() => void runAuto()}
             >
-              {busy === "auto" ? <Loader2 className="animate-spin" /> : <Sparkles />}
+              {busy === "auto" ? <Loader2 className="animate-spin" /> : <GrowthTaskIcon />}
               {busy === "auto" ? t("shared.growthTasks.running") : t("shared.growthTasks.auto")}
             </Button>
           </DemoAction>
@@ -338,7 +335,7 @@ function TaskRow({
           ) : task.claimable ? (
             <DemoAction>
               <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={disabled} onClick={onClaim}>
-                {busy ? <Loader2 className="animate-spin" /> : <Trophy />}
+                {busy ? <Loader2 className="animate-spin" /> : <GrowthTaskIcon />}
                 {t("shared.growthTasks.claim")}
               </Button>
             </DemoAction>

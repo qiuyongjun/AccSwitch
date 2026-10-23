@@ -3748,13 +3748,23 @@ export function growthTasksClaim(
   return call<GrowthTaskClaimResult>("growth_tasks_claim", { scope, accountId, code });
 }
 
-/** 只领不点亮：把当前所有「已达标未领取」的奖励一次收完。 */
+/**
+ * 只领不点亮：把当前所有「已达标未领取」的奖励一次收完。
+ *
+ * ★ 2026-10-23：UI 已把「领取全部」并进「一键完成」（抽屉任务页签只有一个总控按钮），
+ * 且 `growth_tasks_auto`（见下）末尾也会收掉 `ACTIONS` 之外的可领任务 ⇒
+ * 前端目前**没有**调用方，仅保留命令与 HTTP 路由（CLI / 脚本仍可用）。
+ */
 export function growthTasksClaimAll(scope: string, accountId: string): Promise<GrowthTaskAutoResult> {
   return call<GrowthTaskAutoResult>("growth_tasks_claim_all", { scope, accountId });
 }
 
 /**
- * 单账号「一键完成」：报名 → 逐任务点亮 → 回读 → 领奖。
+ * 单账号「一键完成」：报名 → 逐任务点亮 → 回读 → 领奖 → **收尾领取剩余可领奖励**。
+ *
+ * ★ 2026-10-23：末尾多一步「收尾」—— 不在自动动作表里的手工任务若已达标未领，
+ * 一并领掉。UI 据此把「领取全部」并进了「一键完成」：一个按钮 = 能领的全领 +
+ * 能点亮的全点亮，用户不用再判断该点哪个（见 `GrowthTasksPanel.runAuto` 注释）。
  *
  * ⚠️ 耗时可观（含异步计分轮询）。UI 必须显示进行中并禁用重复点击 ——
  * 后端虽有同账号互斥闸兜底，但让用户等一个「点了没反应」的按钮更糟。

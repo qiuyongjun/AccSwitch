@@ -8,19 +8,21 @@
  * **先开一个抽屉**，各种方式（OAuth 登录 / 从本机导入 / 导入备份文件）各占一张
  * `.opt` 可点卡。本仓此前**跳过**了这一层，`+ 添加账号` 直接 `setOauthOpen(true)`。
  *
- * ## ★ 本抽屉同时是工具栏「⋯」溢出菜单的**唯一落点**（2026-10-12 用户要求）
+ * ## ★ 抽屉只负责「添加方式 + 粘贴凭据」（2026-10-23 收敛）
  *
- * 原先工具栏右侧挂着一枚「⋯」，把「平台专属控件 + 次级操作」共 8 个入口塞进下拉里。
- * 用户要求「**合并到添加账号的右侧弹出栏内**，外面那枚菜单不用存在了」⇒ 现在：
+ * 2026-10-12 曾把原工具栏「⋯」溢出菜单的内容并进本抽屉（`moreTools`：两枚开关 + 两个动作）。
+ * 2026-10-23 用户要求**整块删除** —— 理由不是「不好看」，而是**职责重叠**：
  *
- * - 工具栏回到**只有** 搜索 / 排序 / 分组 / 视图 / 全选 / 主操作（与原型逐控件一致，「⋯」消失）；
- * - 抽屉内 = ① 添加方式卡（基础三张 + 平台专属 `extraOptions`）
- *   ② 「更多操作」分区（`moreTools`：平台开关 + 不属「添加」的动作）。
- * - **已经存在的功能不重复**：原先溢出菜单里的「从本机导入 / 导入备份」本就是本抽屉的前两张卡
- *   ⇒ 直接不搬，只搬抽屉里没有的（导出备份 / 各平台开关 / 回收站 / 刷新）。
+ * - 自动签到 / 自动旅行 / 跳过已签到：**设置页**已有等价开关，两处各放一份必然打架；
+ * - 导出：**批量条**已有「导出所选」，一键导出全量没有第二个语义；
+ * - 「签到并刷新全部积分」：与「一键刷新」「批量刷新」构成**第三套刷新语义**
+ *   （签到 + 积分 + 旅行 + 今日 Token 混在一个动作里），失败原因分不清。
  *
- * ⇒ 两平台的「添加账号」入口**同一个组件、同一套结构**，差异只有数据
- *（`extraOptions` / `moreTools` 由页面注入），与 `account-toolbar.tsx` 同一条纪律。
+ * ⇒ 现在的结构只有两段：① 添加方式卡（基础三张 + 平台专属 `extraOptions`）
+ * ② 未装客户端提示。开关归设置页、批量动作归批量条、刷新归页头 / 批量条 —— 抽屉不再承载入口。
+ *
+ * ⇒ 三平台的「添加账号」入口**同一个组件、同一套结构**，差异只有数据
+ *（`extraOptions` 由页面注入），与 `account-toolbar.tsx` 同一条纪律。
  *
  * ## 几何（逐值对齐）
  *
@@ -31,16 +33,12 @@
  *   `rounded-[11px]`、`border` + `bg-card-2`；hover 换 `--accent` 底 + `--border-strong` 描边。
  *   图标块 `32×32 rounded-[9px] bg-muted`；标题 `12.5px/550`；说明 `11px muted`；
  *   右侧 `ArrowRight`（继承全局 `svg 16px`，原型未给单独尺寸）。
- * - 「更多操作」行与 `.opt` **同几何**（图标块 + 文字 + 右侧控件），只是右侧控件换成
- *   开关 / 图标钮 —— 视觉上仍是同一列卡，不引入第二套行样式。
  * - 未装客户端提示：原型是 `warning` 描边卡（`demo.css:3730-3732`），这里同样式。
  */
 
 import type { LucideIcon } from "lucide-react";
 import { ArrowRight, Download, LogIn, TriangleAlert, Upload } from "lucide-react";
-import type { ReactNode } from "react";
 
-import { DemoAction } from "@/components/demo-action";
 import {
   Sheet,
   SheetContent,
@@ -64,30 +62,6 @@ export interface DrawerOption {
   onClick: () => void;
 }
 
-/**
- * 「更多操作」里的一行（原工具栏「⋯」菜单的内容）。两种形态，**二选一**：
- *
- * - **开关行**（`control`）：左侧图标块 + 文字（`<label htmlFor>`）+ 右侧控件；
- * - **动作行**（`onClick`）：整行可点，与上面的 `.opt` 卡**同形**（右侧一枚 `ArrowRight`）——
- *   这样「更多操作」里的动作与「添加方式」在视觉上是同一列卡，不引入第二套行样式。
- */
-export interface DrawerTool {
-  key: string;
-  icon: LucideIcon;
-  /** 已 i18n。 */
-  label: string;
-  /** 已 i18n；可选说明，显示在 `label` 下方。 */
-  hint?: string;
-  /** 开关行：文字 `<label htmlFor>` 与控件关联（**必须**给，否则点文字不生效）。 */
-  htmlFor?: string;
-  /** 开关行：右侧控件（`Switch` 及其保存中指示）。 */
-  control?: ReactNode;
-  /** 动作行：整行可点。与 `control` 二选一。 */
-  onClick?: () => void;
-  /** 动作行是否禁用（如「没有账号可导出」）。 */
-  disabled?: boolean;
-}
-
 export interface AddAccountDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -108,8 +82,6 @@ export interface AddAccountDrawerProps {
   ways?: AddAccountWay[];
   /** 平台专属的**额外**添加方式（如 Trae 的「粘贴 JWT」），接在基础三张卡之后。 */
   extraOptions?: DrawerOption[];
-  /** 「更多操作」分区内容（平台开关 + 不属「添加」的动作）。 */
-  moreTools?: DrawerTool[];
   labels: {
     /** 副标题前半句，作用域名之后紧接（原型：「当前作用域：」）。 */
     scopeHintPrefix: string;
@@ -122,8 +94,6 @@ export interface AddAccountDrawerProps {
     backupTitle: string;
     backupDesc: string;
     notInstalled: string;
-    /** 「更多操作」分区标题（有 `moreTools` 时必传）。 */
-    moreTools: string;
     title: string;
   };
 }
@@ -166,55 +136,6 @@ function Option({
   );
 }
 
-/** 「更多操作」里的一行：开关行与 `.opt` 同几何，动作行**就是** `.opt` 的形状。 */
-function ToolRow({ icon: Icon, label, hint, htmlFor, control, onClick, disabled }: Omit<DrawerTool, "key">) {
-  /* 图标块 + 两行文字：两种形态共用（`12.5px/550` + `11px muted`，与 `.opt` 逐值一致）。 */
-  const body = (
-    <>
-      <span className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-muted text-muted-foreground">
-        <Icon className="size-4" aria-hidden="true" />
-      </span>
-      {/* ⚠️ `<label>` 只包文字、**不包控件** —— 包住的话点开关会触发两次（label 转发 + 控件自身）。 */}
-      <span className="min-w-0 flex-1">
-        <b className="block text-[12.5px] font-[550] leading-tight">{label}</b>
-        {hint ? (
-          <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{hint}</span>
-        ) : null}
-      </span>
-    </>
-  );
-
-  if (onClick) {
-    /* 动作行：与 `.opt` 同形（整行可点 + 右侧 `ArrowRight`）。
-       演示构建下由 `DemoAction` 统一「看得见但点不动 + 说明原因」，与旧工具栏行为一致。 */
-    return (
-      <DemoAction>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={onClick}
-          className={cn(
-            "flex w-full items-center gap-2.5 rounded-[11px] border border-border bg-card-2 px-3 py-2.5 text-left transition-all",
-            "hover:border-border-strong hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50",
-          )}
-        >
-          {body}
-          <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        </button>
-      </DemoAction>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2.5 rounded-[11px] border border-border bg-card-2 px-3 py-2.5">
-      <label htmlFor={htmlFor} className={cn("flex min-w-0 flex-1 items-center gap-2.5", htmlFor && "cursor-pointer")}>
-        {body}
-      </label>
-      {control}
-    </div>
-  );
-}
-
 export function AddAccountDrawer({
   open,
   onOpenChange,
@@ -223,7 +144,6 @@ export function AddAccountDrawer({
   onPick,
   ways = ["oauth", "local", "backup"],
   extraOptions,
-  moreTools,
   labels,
 }: AddAccountDrawerProps) {
   return (
@@ -303,17 +223,6 @@ export function AddAccountDrawer({
               <TriangleAlert className="size-[15px] shrink-0 text-warning" aria-hidden="true" />
               <span className="text-[11px] leading-relaxed text-warning">{labels.notInstalled}</span>
             </div>
-          ) : null}
-
-          {/* ★「更多操作」：原工具栏「⋯」菜单的落点（平台开关 + 不属「添加」的动作）。
-              与上面三张卡**同一列同几何**，只把右侧换成控件 —— 不引入第二套行样式。 */}
-          {moreTools?.length ? (
-            <section className="mt-1 flex flex-col gap-2" aria-label={labels.moreTools}>
-              <div className="px-1 text-[11px] font-medium text-muted-foreground">{labels.moreTools}</div>
-              {moreTools.map(({ key, ...tool }) => (
-                <ToolRow key={key} {...tool} />
-              ))}
-            </section>
           ) : null}
         </div>
       </SheetContent>

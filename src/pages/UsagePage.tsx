@@ -38,7 +38,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLocation } from "react-router-dom";
 
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ViewParamBar } from "@/components/usage/view-param-bar";
@@ -177,8 +177,9 @@ export default function UsagePage({ defaultTab = "trend" }: { defaultTab?: Usage
       <header className="mb-5 flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("nav.usage")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("pageHead.usage", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("pageHead.usage")}</span>
           </p>
         </div>
         <div className="grow" />
@@ -192,7 +193,6 @@ export default function UsagePage({ defaultTab = "trend" }: { defaultTab?: Usage
           {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           {t("wbStats.token.refresh")}
         </Button>
-        <ScopeChip scope={scope} />
       </header>
 
       {/* 子 Tab 条：原型 `.seg` 自带 `margin-bottom:16px`（`demo.js:993`）⇒ `mb-4`。

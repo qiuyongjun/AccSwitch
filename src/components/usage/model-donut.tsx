@@ -30,6 +30,10 @@ export function ModelDonut({ slices, size = 170 }: { slices: ModelSlice[]; size?
     fill: seriesColor(index),
   }));
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  /* recharts 的半径上限 = min(画布宽, 高)/2 - 默认 margin 5，写死半径会在 size < 170 时
+     越过 SVG 边界被裁掉（环四周被切平），所以按 size 换算；2/3 保持原 52/78 的环宽比。 */
+  const outerRadius = Math.max(12, Math.round(size / 2) - 7);
+  const innerRadius = Math.round(outerRadius * (2 / 3));
   const config: ChartConfig = {};
   data.forEach((item) => {
     config[item.name] = { label: item.name, color: item.fill };
@@ -44,8 +48,8 @@ export function ModelDonut({ slices, size = 170 }: { slices: ModelSlice[]; size?
               data={data}
               dataKey="value"
               nameKey="name"
-              innerRadius={52}
-              outerRadius={78}
+              innerRadius={innerRadius}
+              outerRadius={outerRadius}
               stroke="var(--background)"
               strokeWidth={2}
               isAnimationActive={false}

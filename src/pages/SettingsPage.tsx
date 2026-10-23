@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  CircleCheck,
   FolderOpen,
   Loader2,
   Play,
@@ -26,7 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import { SettingsFieldRow, SettingsGroup, SettingsRow } from "@/components/settings-primitives";
 // 子导航只留客户端相关分区（7 项）；通用 / 备份与恢复是全局设置，在顶栏 ⚙ 抽屉里以弹框承载。
 import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
@@ -40,6 +39,7 @@ import * as api from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { useT } from "@/lib/i18n";
 import { regionDescriptor } from "@/lib/region";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { scopeOf } from "@/lib/scope";
 import { useScope } from "@/lib/use-scope";
 import type { TranslationKey } from "@/locales/zh";
@@ -226,7 +226,7 @@ function AutoCheckinCard() {
                 {saving ? <Loader2 className="animate-spin" /> : <Save />}{t("wbSettings.common.saveConfig")}
               </Button></DemoAction>
               <DemoAction><Button size="sm" variant="outline" onClick={checkinAllNow} disabled={busy}>
-                {busy ? <Loader2 className="animate-spin" /> : <CircleCheck />}{t("wbSettings.checkin.checkinAllBtn")}
+                {busy ? <Loader2 className="animate-spin" /> : <CheckinIcon />}{t("wbSettings.checkin.checkinAllBtn")}
               </Button></DemoAction>
             </div>
           </>
@@ -1676,12 +1676,12 @@ export default function SettingsPage() {
       <header className="mb-5 flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("wbSettings.page.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("pageHead.settings", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("pageHead.settings")}</span>
           </p>
         </div>
         <div className="grow" />
-        <ScopeChip scope={scope} />
       </header>
 
       {/* 两栏容器 `.split`（原型 `:369`）：方向 / 对齐 / 间距整组在 `index.css` 的

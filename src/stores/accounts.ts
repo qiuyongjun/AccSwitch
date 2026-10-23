@@ -197,6 +197,11 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   },
 }));
 
+/** 积分查询的上游并发上限：单账号一次查询会打 3 路资源接口，全并发会对同 IP 形成突发流量。 */
+const CREDIT_FETCH_CONCURRENCY = 3;
+/** 每个 worker 两次请求之间的间隔，进一步削峰（仅影响多账号批量刷新）。 */
+const CREDIT_FETCH_GAP_MS = 120;
+
 async function loadCredits(accountIds: string[], force: boolean, silent: boolean, region: Region) {
   const ids = [...new Set(accountIds.filter(Boolean))];
   if (ids.length === 0) return;
@@ -221,19 +226,32 @@ async function loadCredits(accountIds: string[], force: boolean, silent: boolean
     });
   }
 
-  await Promise.all(
-    toFetch.map(async (id) => {
-      const result = await fetchCreditExpiry(id, region);
-      creditInflight[region].delete(id);
-      useAccountsStore.setState((s) => {
-        const cur = selectRegionSlice(s, region);
-        return regionPatch(s, region, {
-          creditMap: { ...cur.creditMap, [id]: result },
-          creditLoadingMap: silent ? cur.creditLoadingMap : { ...cur.creditLoadingMap, [id]: false },
+  /* 固定 worker 池而非 Promise.all：批量刷新时把「N 账号 × 3 路请求」的瞬间并发压到 3 路，
+     单账号刷新仍是一次请求，行为不变。 */
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(CREDIT_FETCH_CONCURRENCY, toFetch.length) },
+    async () => {
+      while (cursor < toFetch.length) {
+        const id = toFetch[cursor++];
+        const result = await fetchCreditExpiry(id, region);
+        creditInflight[region].delete(id);
+        useAccountsStore.setState((s) => {
+          const cur = selectRegionSlice(s, region);
+          return regionPatch(s, region, {
+            creditMap: { ...cur.creditMap, [id]: result },
+            creditLoadingMap: silent
+              ? cur.creditLoadingMap
+              : { ...cur.creditLoadingMap, [id]: false },
+          });
         });
-      });
-    }),
+        if (cursor < toFetch.length) {
+          await new Promise((resolve) => setTimeout(resolve, CREDIT_FETCH_GAP_MS));
+        }
+      }
+    },
   );
+  await Promise.all(workers);
 
   useAccountsStore.setState((s) => {
     const cur = selectRegionSlice(s, region);

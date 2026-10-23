@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { CloudOff, Coins, Loader2, MonitorSmartphone, RefreshCw, ShieldAlert, Users } from "lucide-react";
 
 import { QoderLocalSourceRow } from "@/components/qoder/qoder-local-source-row";
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import { StatTiles, type StatTile } from "@/components/usage/stat-tiles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -157,8 +157,9 @@ export default function QoderOverviewPage() {
       <header className="flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("qoder.page.overview.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("qoder.page.overview.subtitle", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("qoder.page.overview.subtitle")}</span>
           </p>
         </div>
         <div className="grow" />
@@ -184,7 +185,6 @@ export default function QoderOverviewPage() {
         >
           {busy || reloading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
         </Button>
-        <ScopeChip scope={scope} />
       </header>
 
       {error ? (

@@ -16,6 +16,11 @@ function DropdownMenuContent({ className, sideOffset = 6, ...props }: React.Comp
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
+        /* ★ 菜单内容虽然被 portal 到 `body`，React 事件仍沿**组件树**冒泡回宿主
+           （账号卡片 / 表格行都在树上）⇒ 点菜单项会顺带命中「点卡片打开详情」。
+           宿主用 `closest("[data-no-account-open]")` 豁免；标记放在内容根上，
+           菜单项是它的 DOM 后代，`closest` 因此能找到。 */
+        data-no-account-open=""
         sideOffset={sideOffset}
         className={cn(
           "z-50 min-w-36 overflow-hidden rounded-lg border bg-popover p-1.5 text-popover-foreground shadow-overlay",

@@ -201,7 +201,7 @@ export const en = {
 
   // ---- Overview ----
   "qoder.page.overview.title": "Overview",
-  "qoder.page.overview.subtitle": "{scope} · accounts and local clients; usage and gateway not landed yet",
+  "qoder.page.overview.subtitle": "accounts and local clients; usage and gateway not landed yet",
   "qoder.page.overview.error": "Failed to load: {error}",
   "qoder.page.overview.kpi.aria": "Qoder overview statistics",
   "qoder.page.overview.kpi.accounts": "Accounts",

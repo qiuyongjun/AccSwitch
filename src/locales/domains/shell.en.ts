@@ -64,14 +64,15 @@ export const en = {
 
   // ---- Page-head scope subtitles (redesign §3.2) ----
   // Read-only: the only scope switcher lives in the top bar (region is part of L1 scope).
-  "pageHead.overview.signedIn": "{scope} · Signed in as {name}",
-  "pageHead.overview.signedOut": "{scope} · Not signed in",
-  "pageHead.accounts": "{scope} · {n} accounts",
-  "pageHead.accounts.pending": "{scope} · {n} accounts · {m} need action",
-  "pageHead.usage": "{scope} · Token and credit stats in one workbench",
-  "pageHead.gateway": "{scope} · Expose the account pool as OpenAI / Anthropic compatible APIs",
-  "pageHead.settings": "{scope} · Grouped by topic instead of one long scroll",
-  "pageHead.sessions": "{scope} · One session with a copy in each account — who lags, who diverged, sync to whom",
+  "pageHead.overview.signedIn": "Signed in as {name}",
+  "pageHead.overview.signedOut": "Not signed in",
+  // Scope is rendered by the header ScopeChip; subtitles no longer repeat {scope}.
+  "pageHead.accounts": "{n} accounts",
+  "pageHead.accounts.pending": "{n} accounts · {m} need action",
+  "pageHead.usage": "Token and credit stats in one workbench",
+  "pageHead.gateway": "Expose the account pool as OpenAI / Anthropic compatible APIs",
+  "pageHead.settings": "Grouped by topic instead of one long scroll",
+  "pageHead.sessions": "One session with a copy in each account — who lags, who diverged, sync to whom",
 
   // ---- Platform capability labels (overview "Capabilities" card; from `Capability` in registry) ----
   "capability.checkin": "Auto check-in",

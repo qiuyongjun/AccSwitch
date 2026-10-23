@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Loader2, Recycle, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -205,7 +205,9 @@ export function RecycleBinSheet({ open, onOpenChange, scope, onRestored }: Recyc
               </Alert>
             ) : count === 0 ? (
               <EmptyState
-                icon={Trash2}
+                /* 空态图标 = 回收站**本身**的标识，与工具栏入口同用 `Recycle`；
+                   桶形 `Trash2` 留给「永久删除 / 清空」这类真正的删除动作。 */
+                icon={Recycle}
                 title={t("recycleBin.empty.title")}
                 description={t("recycleBin.empty.description")}
                 action={

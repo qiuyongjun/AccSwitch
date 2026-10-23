@@ -39,6 +39,8 @@
 
 **持久化（✅ 已决策 #2：不持久化）**：`sort` / `group` / `view` **纯页内 `useState`，不持久化**（跨会话不记住）。理由：视图参数是临时的；持久化会让「为什么我的排序怪怪的」变成谜题。⚠️ `compact`（`use-compact-mode.ts`，localStorage）的持久化是**历史遗留，不要扩散**到本设计。§3.4 预留的可选 hook **不实现**。
 
+**★ 区域切换的生命周期（2026-10-23 补）**：这四项偏好的生命周期 = **一个 `<RegionPanel>` 实例**，而实例由 `AccountsPage` 的 `key={activeRegion}` 决定 ⇒ **切国内版/国际版会重置为默认值**。这是刻意的：它们描述「我正在看哪一版账号库」，换了库就该回到默认视角；更要紧的是同一行 `key` 还要负责清掉**按账号 id 键控的全部缓存**（见 §1.11）。不要为了「保留排序」而把 `key` 去掉或把这四项上提到父层 —— 那会把跨版本串数据的洞重新打开。
+
 ### 1.3 组件分层：共用壳 + 平台注入（这不是「强行合并」）
 
 **判断依据（P3 分层结论）**：*能合并的合并；不能合并的抽共享片段；差异 ≥3 处就别硬合。*
@@ -51,7 +53,7 @@
 | 排序选项 | priority / name / expiry（**无 recent**，✅ #3） | priority / name / expiry（**同样无 recent** —— 见 §1.5 的更正） | **数据**（两个平台的账号记录**都没有**「最近使用」字段） |
 | 分组选项 | none / program / status | none / program / status / **group** | **数据**（WB 无 `group` 字段，见 `types.ts:12-32`） |
 | 视图 | 卡片 / 表格 | 卡片 / 表格 | 相同 |
-| 表格列 | 账号/状态/积分/今日Token/到期/程序位 | 账号/状态/积分/到期/程序位（无今日Token） | **数据**（列定义） |
+| 表格列 | 账号/状态/积分/程序位（2026-10-23 起无今日Token、无到期） | 账号/状态/积分/到期/程序位（无今日Token） | **数据**（列定义） |
 | 平台专属控件 | 自动签到 + 自动旅行（开关） | 自动签到 + 跳过已签（开关）+ 分组筛选 | **数据/插槽** |
 | 程序位 | 3（WorkBuddy/IDE/CLI） | ≤4（2 区域 × 2 程序位） | **数据** |
 
@@ -112,6 +114,10 @@ export function matchesAccountQuery(searchText: string, query: string): boolean;
 > **教训**：设计文档引用**具体字段**时，要核实该字段**属于哪个类型** —— 同名的 `lastUsedAt` 在两个接口里含义不同，只按名字搜索就会张冠李戴。
 
 **★ 保留现状语义**：现有 `orderedAccounts`（`AccountsPage.tsx:908-933`）写死的「积分优先级」**成为 `priority` 选项**（而非唯一选项），并**保留 `pin_current_account` 的置顶覆盖**（`:929-932`）—— 该覆盖是「显式置顶，不插进比较函数」的既有正确做法，不得改动其语义。
+
+> ★ 2026-10-23：`priority` 的比较键改为「**最急一批**积分的到期时刻升序 → 该批金额降序」，
+> 与卡片「最近到期」同源（`summarizeExpiry().batches[0]`）。没有任何未来到期批次的账号
+> （凭据失败 / 积分用完 / 全部过期）沉底 —— 已过期积分不能再被消耗，不该挡住能用的账号。
 
 **实现**：把排序抽成**纯函数**，比较器与置顶由平台经 `AccountListConfig` 注入（WB 用积分优先级，Trae 用自身积分字段）：
 
@@ -189,7 +195,13 @@ export interface AccountColumn<T> {
 }
 ```
 
-**WB 列**：账号（头像+名+脱敏邮箱+当前/使用中徽标）/ 状态 / 积分 / 今日 Token / 到期 / 程序位（只读徽标）。
+**WB 列**：账号（头像+名+脱敏邮箱+当前登录/使用中徽标）/ 状态 / 积分 / 程序位（只读徽标）。
+> ★ 2026-10-23：列表与卡片同契约 —— 「状态」列复用卡片的互斥状态 / 成长任务 / 旅行徽章；
+> 「积分」列 = `当前/总额` + `最近到期` + `优先`（与卡片指标行同一份 `creditMetricValues` 与
+> `nextExpiryLabel`；「最近到期」只报最急一批的金额与**到期日 + 时分**，更远批次在 tooltip）；
+> 账号格的当前徽标复用卡片文案 `card.currentLogin`（「当前登录」）。
+> 「今日 Token」列随卡片指标行瘦身一并移除（其正式界面是用量统计页 / 详情抽屉）；
+> 「到期」列同批移除（卡片从不显示凭证到期，到期信息只在详情抽屉；排序项 `expiry` 保留）。
 **Trae 列**：账号 / 状态 / 积分 / 到期 / 程序位（只读徽标）。**无「今日 Token」**（Trae 无该口径 —— 与 `traeStats` 的既有说明一致）。
 
 **行交互（≤4 可点区）**：勾选框（1）+ 行本身（点行打开详情，1）= **2 个**；程序位是**只读徽标**（不可点）。满足 §3.3。
@@ -217,6 +229,36 @@ export interface AccountColumn<T> {
 - 表格视图的程序位列是**只读徽标**（复用 `account-detail-drawer.tsx` 的 `DetailProgramBadge` 呈现口径），**不是切换控件** —— 与抽屉同纪律。
 - **禁止**在工具栏里为每张卡加「快速操作」按钮。
 
+### 1.11 ★ 批量执行模型与跨版本状态隔离（2026-10-23 审查整改）
+
+一次整页审查（功能梳理 + 分级问题清单）之后的落地结论。五条都**约束后续改动**，不是历史记录。
+
+**① 区域切换靠重挂载，不靠逐个 clear。**
+`AccountsPage` 渲染 `<RegionPanel key={activeRegion} region={activeRegion} />`。两个版本是**同一个组件类型**，没有 `key` 时 React 会复用实例、只换 prop ⇒ 所有按账号 id 键控的缓存（`checkinMap` / `travelMap` / `checkinDetailMap` / `growthHints`）、签到结果条、已打开的抽屉都会跨版本残留；而账号 id **不带 region 命名空间**（core `modules/config.rs` 的 `checkin_log_identity_namespaces_stable_ids_and_legacy_email_fallbacks` 就用 `same@example.com` 当 id）⇒ 残值会显示在另一版本的卡上。
+此前只有一条 `useEffect(..., [region])` 清勾选集，属**只堵了一个洞**，已删除。
+⚠️ **不要**改成「在 region 变化的 effect 里逐个 clear」：新增 state 时必然漏一个，而 `key` 自动覆盖。
+⚠️ **不要**把这四项视图偏好上提到父层「顺便保留排序」—— 那会连同缓存一起留在实例上，把洞重开。
+
+**② 批量写操作走固定并发池，不是串行。**
+`src/lib/concurrency.ts` 的 `mapWithConcurrency` 是**唯一**口径（积分刷新的 worker 池与之同档）。参数：`BATCH_WRITE_CONCURRENCY = 3`、`BATCH_WRITE_GAP_MS = 150`（写操作比只读更保守：会写上游状态或消耗 refresh_token，打太快换来 429 与「一半成功一半失败」）。
+覆盖四处：`runCheckinFor` / `batchRefreshToken` / `batchRefreshGrowth` / `completeTasksFor`。**新增批量动作必须复用它**，不要再写 `for...of await`。
+
+**③ 中止是协作式的，文案必须承认「未处理」。**
+`signal` 只拦**尚未开始**的账号，在途请求会跑完 ⇒ 中止后必须报「N 个未处理」（`wbAccounts.toast.batchCancelled`），**不能**报成全部完成，也不能把它们混进 `failedIds`（它们没有失败）。因此重试名单 `retryIds = 失败 + 未处理`，而不是只有失败。
+进度（`shared.batch.progress`）只对「按账号循环」的动作出现；整批请求（一键刷新）没有可计数单位，不显示进度。
+
+**④ 「需处理」与「按状态」分桶必须同源。**
+判据唯一出处：`src/lib/account-attention.ts`。`attentionOf` 供分桶（三档：需重登 / 已过期 / 今日未签到），`needsManualAttention` 供页头计数（**只算凭据类**——签到与成长任务有一键按钮可自动完成，不该变成永不归零的数字）。
+此前页头只数 `needsRelogin` ⇒ 会出现「0 个需处理」而列表里躺着「凭据已过期」分组。
+
+**⑤ 「今日 Token」批量刷新是整版本范围，文案如实说。**
+`get_account_token_today` 无「只算这几个账号」的入参 ⇒ 勾 3 个也会重算全部。此前复用「已对 {n} 个所选账号执行」，与批量「成长摘要」自己写下的边界（越界更新未勾选账号是越权）自相矛盾 ⇒ 改用 `wbAccounts.toast.batchRefreshTokensRegion`。
+
+**本轮明确不做**（各有理由，勿顺手补）：
+- 状态筛选控件（「只看未签到 / 临期」）—— 要动三平台共用的工具栏壳与门禁脚本，属独立一轮；分组只是分桶不是过滤，这点要照实留着。
+- `React.memo(AccountCard)` —— 卡片有 20+ 个 per-row 闭包 props，记忆化前必须先把它们稳定成 `useCallback`，否则是**静默 stale 渲染**。与「拆分 AccountPage」同批做。
+- 把 `AccountsPage`（3595 行 / 54 个 `useState`）拆成多个 hook —— 纯搬迁但不改行为，需要单独一轮 + 全量门禁回归。
+
 ---
 
 ## 2. 文件列表
@@ -230,6 +272,8 @@ export interface AccountColumn<T> {
 | `src/components/account-toolbar.tsx` | **共用**工具栏壳（搜索 / 排序 / 分组 / 视图 + 全选 + `children` 插槽） |
 | `src/components/account-table.tsx` | **共用**表格壳（列定义驱动 + 表头全选 + 行选中/打开） |
 | `src/lib/use-media-query.ts` | 断点 hook（<900px 强制卡片，§3.12）；若仓内已有等价实现则复用，不新建 |
+| `src/lib/concurrency.ts` | ★ 2026-10-23：批量任务固定并发池 `mapWithConcurrency`（§1.11 ②③），积分刷新与批量写操作共用一套削峰口径 |
+| `src/lib/account-attention.ts` | ★ 2026-10-23：`attentionOf` / `needsManualAttention` —— 页头「需处理」与「按状态」分桶的**唯一判定源**（§1.11 ④） |
 
 ### 修改
 
@@ -566,7 +610,7 @@ sequenceDiagram
   - **`availableSorts = ["priority","name","expiry"]`（3 项，✅ #3：WB 无 `lastUsed` 字段 ⇒ 不渲染 `recent`）**；`availableGroups = ["none","program","status"]`。
   - 把写死的 `orderedAccounts`（`:908-933`）改为 `sortAccounts(priority, config)`，**保留 `pin_current_account` 置顶**。
   - 新增 `query`/`sort`/`group`/`view` 页内 state（✅ #2：不持久化）；`group` 选项**不含**「按自定义组」（WB 无 group 字段）。
-  - 两种空态（真没有 / 被筛没）；表格列含「今日 Token」。
+  - 两种空态（真没有 / 被筛没）；表格列**不含**「今日 Token」与「到期」（2026-10-23 随卡片指标行瘦身移除；到期只在详情抽屉）。
   - 工具栏全选 + 表头全选（✅ #6），共用 `selectedIds`。
 
 ### T04 · Trae 页面接线 ｜ P0

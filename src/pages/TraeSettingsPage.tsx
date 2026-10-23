@@ -22,7 +22,7 @@ import { toast } from "sonner";
 
 import { DemoAction } from "@/components/demo-action";
 import { TimesEditor } from "@/components/schedule-times-editor";
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 // 设置子导航**与 WorkBuddy 设置页共用同一张表 / 同一个解析函数**（PLAN §3.9、D12）。
 import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1257,12 +1257,12 @@ export default function TraeSettingsPage() {
       <header className="mb-5 flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("trae.page.settings.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("pageHead.settings", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("pageHead.settings")}</span>
           </p>
         </div>
         <div className="grow" />
-        <ScopeChip scope={scope} />
       </header>
 
       {error && (

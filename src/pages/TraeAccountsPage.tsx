@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
-  CalendarCheck,
   Download,
-  FileDown,
-  ListChecks,
   Loader2,
   QrCode,
   RefreshCw,
@@ -15,7 +12,6 @@ import {
 import { toast } from "sonner";
 
 import { AddAccountDrawer, type AddAccountWay } from "@/components/add-account-drawer";
-import { DemoAction } from "@/components/demo-action";
 import { AccountsTableAvatar } from "@/components/account-list-parts";
 import { AccountWorkbench } from "@/components/account-workbench";
 import { type AccountColumn } from "@/components/account-table";
@@ -55,7 +51,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { compactTokens } from "@/components/usage/format";
 import * as api from "@/lib/api";
 import type { CheckinStatusEntry } from "@/lib/api";
@@ -79,7 +74,6 @@ import { useT } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/zh";
 import {
   loadScheduleConfig,
-  saveSchedulePatch,
   SCHEDULE_CONFIG_KEY,
 } from "@/lib/schedule-config";
 import { traeVariantLabel, type TraeLogEntry } from "@/lib/trae-types";
@@ -98,7 +92,6 @@ import type {
   TraeCheckinStatus,
   TraeCreditsOverview,
   TraeEnvStatus,
-  TraeSettings,
   TraeProfileInfo,
   TraeSnapshotCarryReport,
   TraeVariantId,
@@ -240,24 +233,14 @@ export default function TraeAccountsPage() {
   } = useCachedResource<AccountsSnapshot>(`trae:accounts:${variant}`, loadSnapshot);
 
   /**
-   * 签到跳过策略存在设置里，与设置页**共用同一把键** `trae:settings`：
-   * 两个页面本来就都读同一份 `get_trae_settings`，共用键之后「设置页改完、账号页
-   * 立刻是新的」在结构上成立，而不是靠各自重取去撞。
-   */
-  const { data: settings, patch: patchSettings } = useCachedResource<TraeSettings>(
-    "trae:settings",
-    api.getTraeSettings,
-  );
-
-  /**
    * 自动签到的**排程**（何时跑），与 Trae 设置页共用同一把键（`SCHEDULE_CONFIG_KEY`）。
    *
-   * 它和上面那份 `trae:settings` 是**两份不同的数据**：
-   * 这里回答「到点要不要跑、几点跑」，`trae:settings` 回答「跑的时候怎么跑」
-   * （跳过已签 / 跳过过期 / 重试次数）。排程是**全局单份**、按**任务**分家 ——
-   * WorkBuddy 的六类任务与它读写同一个 `schedule_config.json`。
+   * ⚠️ 2026-10-23：账号页**只读不写**。原先这里还挂着「自动签到 / 跳过已签到」两枚开关
+   * （在「添加账号 → 更多操作」里），该分区已整块删除 ⇒ 开关只留在
+   * `TraeSettingsPage`；`trae:settings` 那份资源也随之下线（本页不再读它）。
+   * 卡片仍需要 `trae_jwt_refresh_enabled` 来判断「JWT 自动续期是否关着」，故 `schedule` 保留。
    */
-  const { data: schedule, patch: patchSchedule } = useCachedResource<ScheduleConfig>(
+  const { data: schedule } = useCachedResource<ScheduleConfig>(
     SCHEDULE_CONFIG_KEY,
     loadScheduleConfig,
   );
@@ -302,15 +285,6 @@ export default function TraeAccountsPage() {
      账号页同一做法：`void loadAll()` 是 fire-and-forget，点击后按钮必须立刻有转圈反馈。 */
   const { busy: recheckAlertBusy, run: runRecheckAlert } = useRefreshAction();
   const { busy: recheckDrawerBusy, run: runRecheckDrawer } = useRefreshAction();
-  /** 「跳过已签到」（签到策略，写 `trae:settings`）的保存中标志。 */
-  const [autoCheckinSaving, setAutoCheckinSaving] = useState(false);
-  /**
-   * 「自动签到」（排程，写 `schedule_config.json`）的保存中标志。
-   *
-   * 与上面那个**刻意分开**：两者写的是两份不同的文件、属于两个不同的概念层
-   * （何时签 vs 怎么签）。共用一个标志会让「切 A 时 B 的转圈亮起」，把操作归因到错的地方。
-   */
-  const [scheduleSaving, setScheduleSaving] = useState(false);
   const [oauthOpen, setOauthOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   /** 「添加账号」抽屉（两平台同一入口；原工具栏「⋯」菜单的内容都落在这里）。 */
@@ -708,120 +682,9 @@ export default function TraeAccountsPage() {
   }
 
   /**
-   * 「自动签到」开关 —— **排程层**的开关（到点由后台调度器签一轮、应用启动时补一轮）。
-   *
-   * 与 WorkBuddy 工具栏的同名开关**同位同义**（都读写 `schedule_config.json` 里各自那一类
-   * 任务），差别只在 Trae 是**独立任务**：关掉 WorkBuddy 的自动签到不会连带关掉 Trae 的，
-   * 两边也可以设不同的小时点。
-   *
-   * 保存走**整份提交**（见 `saveSchedulePatch`）：后端按整份解析，只发一个字段会让
-   * 其余任务的配置被默认值覆盖 —— 那是静默的配置丢失。
-   */
-  async function onAutoCheckinChange(enabled: boolean) {
-    if (!schedule || scheduleSaving) return;
-    const previous = schedule;
-    // 乐观更新写进**快照缓存**：这个值归 `SCHEDULE_CONFIG_KEY` 那把键所有，
-    // 写回组件 state 会让「设置页/账号页读到同一份」在结构上不再成立。
-    patchSchedule((prev) => ({ ...prev, trae_checkin_enabled: enabled }));
-    setScheduleSaving(true);
-    try {
-      const saved = await saveSchedulePatch(previous, { trae_checkin_enabled: enabled });
-      patchSchedule(() => saved);
-    } catch (e) {
-      patchSchedule(() => previous);
-      toast.error(t("trae.page.accounts.autoCheckinSaveFailed"), { description: api.asError(e) });
-    } finally {
-      setScheduleSaving(false);
-    }
-  }
-
-  /**
-   * 「跳过今日已签到」开关。
-   *
-   * 与 WorkBuddy 工具栏的第二个开关**同位**（那边是「自动旅行」；Trae 没有该功能，
-   * 按用户决定「Trae 无自动旅行则隐藏」处理，不塞假开关占位）。
-   *
-   * 它属于**签到策略**（怎么签），与上面的自动签到（何时签）是两件事：
-   * 后端从设置读（`handlers::parse_checkin_options`），因此手动与自动两轮**都**受它约束。
-   */
-  async function onSkipCheckedChange(enabled: boolean) {
-    if (!settings || autoCheckinSaving) return;
-    const previous = settings;
-    // 乐观更新写进**快照缓存**而不是组件 state：这个值现在归 `trae:settings` 那把键
-    // 所有，写回本地 state 会让「设置页/账号页读到同一份」在结构上不再成立。
-    patchSettings(() => ({ ...previous, checkinSkipChecked: enabled }));
-    setAutoCheckinSaving(true);
-    try {
-      const saved = await api.saveTraeSettings({ checkinSkipChecked: enabled });
-      patchSettings(() => saved);
-    } catch (e) {
-      patchSettings(() => previous);
-      toast.error(t("trae.page.accounts.settingsSaveFailed"), { description: api.asError(e) });
-    } finally {
-      setAutoCheckinSaving(false);
-    }
-  }
-
-  /**
-   * 工具栏唯一图标按钮：**签到并刷新全部账号积分**（与 WorkBuddy 同名同形）。
-   *
-   * Trae 侧这是两个接口（签到、积分快照），WorkBuddy 是一个后端动作，
-   * 但对用户的语义完全一致——「点一下把我所有账号都签一遍并把积分刷新出来」。
-   * 因此这里必须**两步都做完**再收工：只签到会让卡片上的积分停留在旧值，
-   * 用户点完看到的数字没动，会以为签到没生效。
-   *
-   * 跳过策略由 `settings.checkinSkipChecked` 决定（后端读，不在这里传）。
-   */
-  async function checkinAll() {
-    await run(
-      "checkin",
-      "trae.page.accounts.actionCheckinAll",
-      async () => {
-        // 变体决定「签哪条产品线的账号」以及「冷却/摘要落哪份文件」，
-        // 不传会让后端回落默认变体 —— 在 Trae CN 页面上点签到却签了 Trae Work。
-        const result = await api.traeCheckin({ scope: "all", variant });
-        // 积分刷新失败不应让整次操作报错：签到本身可能已经成功，
-        // 把「积分没刷出来」当成签到失败会让用户误以为一分没拿到。
-        try {
-          await api.traeRefreshCredits(undefined, variant);
-        } catch (e) {
-          toast.warning(t("trae.page.accounts.creditsRefreshFailed"), { description: api.asError(e) });
-        }
-        return result;
-      },
-      undefined,
-      (result) => setReport(result),
-      // ★ 判定必须按**后端报告**如实给（2026-09-29）：批量签到是「跑完了」，
-      //   但「跑完」不等于「成功」—— 全部失败时还报「签到并刷新积分完成」就是谎报，
-      //   与切换那条是同一个毛病。口径对齐 WorkBuddy 的 `AccountsPage.onRefreshCredits`：
-      //   全失败 ⇒ `error`；部分失败 ⇒ 仍算成功，但描述里点出失败数；
-      //   一轮没轮到任何账号（「跳过今日已签」全命中）⇒ 明说「没有需要签到的账号」。
-      (result) => {
-        if (result.total === 0) {
-          return { level: "success" as const, message: t("trae.page.accounts.noNeedCheckin") };
-        }
-        const parts: string[] = [];
-        if (result.totalOk > 0) {
-          parts.push(t("trae.page.accounts.checkinBatchSuccess", { n: result.totalOk }));
-        }
-        if (result.already > 0) {
-          parts.push(t("trae.page.accounts.checkinBatchAlready", { n: result.already }));
-        }
-        if (result.failed > 0) {
-          parts.push(t("trae.page.accounts.checkinBatchFailed", { n: result.failed }));
-        }
-        const description = parts.join(t("shared.punct.comma"));
-        return result.failed === result.total
-          ? { level: "error" as const, description }
-          : { level: "success" as const, description };
-      },
-    );
-  }
-
-  /**
    * 单账号签到（卡片菜单里的「手动签到」，与 WorkBuddy 卡片的同名菜单项对齐）。
    *
-   * 与 `checkinAll` 的差别只有范围：走 `scope: "selected"` + 当个 `userId`，
+   * 与 `batchCheckin` 的差别只有范围：走 `scope: "selected"` + 当个 `userId`，
    * 与「全部签到」共用同一条后端路径、同一套跳过与冷却规则 ——
    * **不为单账号另开旁路**，否则「整批签到会跳过它、单独点却签了」这类不一致
    * 迟早出现，且两个入口的说辞会互相矛盾。
@@ -1027,7 +890,8 @@ export default function TraeAccountsPage() {
             /* 凭据状态 = 重取账号元数据（JWT 有效期 / 需重登标记都在列表载荷里）。 */
             await loadAll();
           }
-          toast.success(t(REFRESH_DONE_LABEL[kind]), { description: label });
+          /* 单账号回执合成一行（同 AccountsPage 2026-10-23 调整）。 */
+          toast.success(`${label}${t("shared.punct.colon")}${t(REFRESH_DONE_LABEL[kind])}`);
         } catch (e) {
           toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
         }
@@ -1102,7 +966,7 @@ export default function TraeAccountsPage() {
   /**
    * 批量签到：走 `scope: "selected"`（与单账号同一后端路径），跑完重取快照并展开结果卡。
    *
-   * 判定口径与 `checkinAll` 一致：全失败 ⇒ `error`；一轮没轮到任何账号 ⇒ 明说
+   * 判定口径与 `checkinOne` 一致：全失败 ⇒ `error`；一轮没轮到任何账号 ⇒ 明说
    * 「没有需要签到的账号」；其余按后端报告拼「成功 / 已签 / 失败」三段。
    *
    * ★ B4：部分失败时**把失败项留在 toast 的 action 里** ⇒ 可「只重试失败项」。
@@ -1882,18 +1746,15 @@ export default function TraeAccountsPage() {
     : false;
 
   /**
-   * ★ 抽屉「操作」区：回调全部复用页面**既有**处理函数（刷新 JWT / 签到 / 导出 / 删除）。
+   * ★ 抽屉「操作」区：回调全部复用页面**既有**处理函数（刷新 JWT / 签到 / 删除）。
    * 「手动签到」按与卡片菜单**同一门控**：今日未签到且凭据可用时才给入口。
+   * ★ 2026-10-23：`导出` 已从抽屉移除（共享壳不再渲染该按钮，导出仍在卡片「更多」菜单里）。
    */
   const detailActions: DetailActions | null = detail
     ? {
         onRefresh: () => refreshJwt(detail),
         onCheckin: () => void checkinOne(detail),
         showCheckin: !detail.checkedToday && !detailCredentialUnavailable,
-        onExport: () => {
-          setExportTargets([detail]);
-          setExportOpen(true);
-        },
         onDelete: () => requestDelete(detail),
         credentialUnavailable: detailCredentialUnavailable,
       }
@@ -2013,18 +1874,17 @@ export default function TraeAccountsPage() {
       <header className="mb-5 flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("trae.page.accounts.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {expiredCount > 0
-              ? t("pageHead.accounts.pending", {
-                  scope: scopeLabel(t, scope),
-                  n: accounts.length,
-                  m: expiredCount,
-                })
-              : t("pageHead.accounts", { scope: scopeLabel(t, scope), n: accounts.length })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>
+              ·{" "}
+              {expiredCount > 0
+                ? t("pageHead.accounts.pending", { n: accounts.length, m: expiredCount })
+                : t("pageHead.accounts", { n: accounts.length })}
+            </span>
           </p>
         </div>
         <div className="grow" />
-        <ScopeChip scope={scope} />
       </header>
 
       {/* ★ 账号工作台（**两平台共用容器**）—— 与 `AccountsPage` 是**同一个组件**，
@@ -2341,76 +2201,6 @@ export default function TraeAccountsPage() {
             onClick: () => setAddOpen(true),
           },
         ]}
-        /* ★ 原工具栏「⋯」溢出菜单的落点（2026-10-12 用户要求「合并到添加账号的右侧弹出栏内」）。
-           与 WorkBuddy **同结构同顺序**（先两枚开关，再两枚动作）；回收站**已被用户点名「放出来」**
-           （回工具栏，见 `onOpenRecycleBin`）⇒ 这里只剩 4 个；
-           「从本机导入 / 导入备份」就是上面那两张卡 ⇒ 不重复搬。 */
-        moreTools={[
-          {
-            key: "auto-checkin",
-            icon: CalendarCheck,
-            label: t("trae.page.accounts.autoCheckin"),
-            htmlFor: "trae-auto-checkin",
-            control: (
-              <>
-                <DemoAction>
-                  <Switch
-                    id="trae-auto-checkin"
-                    checked={schedule?.trae_checkin_enabled ?? false}
-                    disabled={!schedule || scheduleSaving}
-                    onCheckedChange={(enabled) => void onAutoCheckinChange(enabled)}
-                    aria-label={t("trae.page.accounts.autoCheckin")}
-                  />
-                </DemoAction>
-                {scheduleSaving && (
-                  <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label={t("trae.page.accounts.autoCheckinSaving")} />
-                )}
-              </>
-            ),
-          },
-          {
-            key: "skip-checked",
-            icon: ListChecks,
-            label: t("trae.page.accounts.skipChecked"),
-            htmlFor: "trae-skip-checked",
-            control: (
-              <>
-                <DemoAction>
-                  <Switch
-                    id="trae-skip-checked"
-                    checked={settings?.checkinSkipChecked ?? true}
-                    disabled={!settings || autoCheckinSaving}
-                    onCheckedChange={(enabled) => void onSkipCheckedChange(enabled)}
-                    aria-label={t("trae.page.accounts.skipCheckedAria")}
-                  />
-                </DemoAction>
-                {autoCheckinSaving && (
-                  <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label={t("trae.page.accounts.checkinSettingsSaving")} />
-                )}
-              </>
-            ),
-          },
-          {
-            key: "export",
-            icon: FileDown,
-            label: t("trae.page.accounts.exportTitle"),
-            disabled: accounts.length === 0,
-            onClick: () => {
-              setAddDrawerOpen(false);
-              setExportOpen(true);
-            },
-          },
-          {
-            key: "checkin-refresh",
-            icon: RefreshCw,
-            label: t("trae.page.accounts.checkinRefreshAll"),
-            disabled: busy === "checkin" || busy === "refresh-credits" || accounts.length === 0,
-            onClick: () => {
-              setAddDrawerOpen(false);
-              void checkinAll();
-            },
-          },
-        ]}
         labels={{
           title: t("shared.addDrawer.title"),
           scopeHintPrefix: t("shared.addDrawer.scopePrefix"),
@@ -2422,7 +2212,6 @@ export default function TraeAccountsPage() {
           backupTitle: t("shared.addDrawer.backupTitle"),
           backupDesc: t("shared.addDrawer.backupDesc"),
           notInstalled: t("shared.addDrawer.notInstalled"),
-          moreTools: t("shared.addDrawer.moreTools"),
         }}
       />
 

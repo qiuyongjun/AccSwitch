@@ -1,35 +1,35 @@
 /**
- * 「临期积分」的**唯一汇总口径** —— 账号卡片上那枚 `N 积分 M 天内过期` 徽章用它。
+ * 「积分最近到期」的**唯一汇总口径** —— 账号卡片与列表那枚
+ * `N 积分<今天|明天|MM-DD> HH:mm 到期` 用它。
  *
- * ## 为什么需要这个模块（issue #44）
+ * ## 口径（2026-10-23 重定）
  *
- * 徽章原先在两张卡片里各写一遍，且两处的 `amount` 与 `days` **不是同一批积分**：
+ * - `batches`：全部**未过期且仍有剩余**的批次，按到期时刻**升序** ⇒ `batches[0]` 是最急一批；
+ * - 卡片只报 `batches[0]` 的金额与到期日，更远的批次进 tooltip。
  *
- * - `amount` = 窗口内**全部**临期剩余积分之和；
- * - `days`   = 窗口内**最早**那一刻距今天数（向上取整）。
+ * ## 为什么不再按后端的 7 天窗口过滤
  *
- * 于是只要窗口里有两批不同到期日，徽章就是假话：100 明天到期 + 200 后天到期，
- * 会显示「300 积分 1 天后过期」—— 那 200 积分根本不在 1 天内到期。
+ * 此前只收 `expiringSoon === true`（后端 7 天）⇒ 12 天后到期的 3,000 积分在卡片上
+ * **完全隐身**，用户无法比较「哪个号该先用」。卡片要回答的是「这个号现在要不要先用掉」，
+ * 所以直接读 `expireAt`（每个积分包都有）把下一批摆出来；7 天窗口仍然只服务统计页的
+ * `expiringSoonRemaining`，两者不再互相冒充。
  *
- * ## 现在的口径
+ * ## 为什么是「最急一批」而不是「窗口内合计」
  *
- * - `total`  窗口内临期剩余积分之和（**不**只算最早一批，总量不丢）；
- * - `days`   窗口内**最晚**到期时刻距今天数（向上取整）⇒「{total} 积分 {days} 天内过期」
- *   对窗口内每一笔都成立，不再有半句假话；
- * - `batches` 按到期时刻**升序**的明细，供 tooltip 逐批展开（最急的那批排第一）。
+ * issue #44 的旧口径（金额 = 窗口内全部、天数 = 其中最晚）会把「今天 100 + 6 天后 300」
+ * 说成「400 积分 6 天内过期」—— 既不是最急的，也不是可比的。逐批展示、只把最急一批
+ * 放到卡面上，才对得上「先消耗会先过期的积分」这个决策。
  *
- * ## 窗口由**后端**决定，前端不再自设
- *
- * 是否临期只认后端下发的 `expiringSoon` 标记（`credits.rs::EXPIRING_SOON_DAYS` = 7 天、
- * `trae/credits.rs::EXPIRING_SOON_SECS` = 7 天）。此前 WorkBuddy 卡片在前端另设 3 天窗口，
- * 与统计页 / 总览页（都读后端的 `expiringSoonRemaining`）口径不一致 —— 同一件事两个数字。
- *
- * ⚠️ 不可把 `expiringSoon`（布尔）当额度求和，也不可在缺该字段时自行推窗口：
- * 缺字段一律当「未知」跳过，宁可少一枚徽章，不可编一个到期日。
+ * ⚠️ 缺 `expireAt` 的积分包一律跳过 —— 宁可少一批，不可编一个到期日。
  */
 
-/** 一天的毫秒数。 */
 const DAY_MS = 86_400_000;
+
+/** 紧迫阈值：3 天内到期才用警示色。只影响字色，不影响是否展示。 */
+const EXPIRY_URGENT_MS = 3 * DAY_MS;
+
+/** tooltip 最多逐批列出几行 —— 再多对决策没有增量信息，只会把浮层拉长。 */
+export const EXPIRY_TIP_LIMIT = 5;
 
 /** 一批到期：同一时刻到期的剩余积分之和。 */
 export interface ExpiringBatch {
@@ -39,12 +39,8 @@ export interface ExpiringBatch {
   amount: number;
 }
 
-export interface ExpiringSummary {
-  /** 窗口内全部临期剩余积分之和。 */
-  total: number;
-  /** 窗口内**最晚**到期时刻距今天数（向上取整，≥1）。 */
-  days: number;
-  /** 按到期时刻升序的逐批明细。 */
+export interface ExpirySummary {
+  /** 全部未来到期批次，按到期时刻**升序** ⇒ `batches[0]` 即最急一批。 */
   batches: ExpiringBatch[];
 }
 
@@ -54,13 +50,11 @@ export interface ExpiringItem {
   expireAt: number | null;
   /** 后端标记：已到期。 */
   expired?: boolean;
-  /** 后端标记：临期（7 天窗口）。`undefined` 表示数据源没这个字段 ⇒ 视为未知、跳过。 */
-  expiringSoon?: boolean;
 }
 
 /**
- * 汇总临期积分。没有可渲染的临期批次时返回 `null`（调用方据此**整条不渲染**，
- * 绝不写一个猜出来的「N 天」标签）。
+ * 汇总未来到期批次。没有可展示的批次时返回 `null`（调用方据此**整条不渲染**，
+ * 绝不写一个猜出来的到期日）。
  *
  * @param items 积分包 / 积分资源列表（可为 `null`）
  * @param options.now 判定基准时刻（毫秒），默认 `Date.now()`
@@ -69,10 +63,10 @@ export interface ExpiringItem {
  *   WorkBuddy 的 `CreditResource.expireAt` 是**毫秒**（后端 `parse_timestamp_ms`），
  *   Trae 的 `TraeCreditPackage.expireAt` 是**秒**（后端直接透传上游 `expire_time`）。
  */
-export function summarizeExpiring(
+export function summarizeExpiry(
   items: readonly ExpiringItem[] | null | undefined,
   options: { now?: number; unit?: "ms" | "s" } = {},
-): ExpiringSummary | null {
+): ExpirySummary | null {
   if (!items || items.length === 0) return null;
   const now = options.now ?? Date.now();
   const toMs = options.unit === "s" ? (value: number) => value * 1000 : (value: number) => value;
@@ -81,8 +75,6 @@ export function summarizeExpiring(
   const merged = new Map<number, number>();
   for (const item of items) {
     if (item.expired) continue;
-    // `expiringSoon` 必须显式为 `true`：缺字段 = 未知，不当「临期」也不当「不临期」去推测窗口。
-    if (item.expiringSoon !== true) continue;
     if (!Number.isFinite(item.remaining) || item.remaining <= 0) continue;
     if (typeof item.expireAt !== "number" || !Number.isFinite(item.expireAt)) continue;
     const expireAt = toMs(item.expireAt);
@@ -94,9 +86,51 @@ export function summarizeExpiring(
   const batches = [...merged.entries()]
     .map(([expireAt, amount]) => ({ expireAt, amount }))
     .sort((left, right) => left.expireAt - right.expireAt);
-  const total = batches.reduce((sum, batch) => sum + batch.amount, 0);
-  if (total <= 0) return null;
+  return { batches };
+}
 
-  const latest = batches[batches.length - 1].expireAt;
-  return { total, days: Math.max(1, Math.ceil((latest - now) / DAY_MS)), batches };
+/**
+ * 到期日的**展示分类**：今天 / 明天 / 具体日期，外加当天的**时分**（本地时区）。
+ *
+ * ★ 2026-10-23：只给日期不够用 —— 「明天 00:00 到期」其实意味着**今天就得烧掉**，
+ * 而「明天 20:00 到期」还能拖到明天白天。时分决定了要不要提前一天动手。
+ */
+export type ExpiryDay =
+  | { kind: "today"; time: string }
+  | { kind: "tomorrow"; time: string }
+  | { kind: "date"; text: string; time: string };
+
+function startOfDay(ts: number): number {
+  const date = new Date(ts);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/** `HH:mm`（本地时区，24 小时制）。 */
+function clockText(ts: number): string {
+  const date = new Date(ts);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * 把到期时刻按**本地日历日**归类 —— 人按「今天 / 明天 / 几号几点」做计划，
+ * 不按「还剩 N 小时」。`Math.round` 兜住夏令时（23/25 小时的那天）。
+ */
+export function expiryDay(expireAt: number, now: number = Date.now()): ExpiryDay {
+  const days = Math.round((startOfDay(expireAt) - startOfDay(now)) / DAY_MS);
+  const time = clockText(expireAt);
+  if (days <= 0) return { kind: "today", time };
+  if (days === 1) return { kind: "tomorrow", time };
+  const date = new Date(expireAt);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const monthDay = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return { kind: "date", text: sameYear ? monthDay : `${date.getFullYear()}-${monthDay}`, time };
+}
+
+/** 是否进入警示窗口（3 天内到期）。 */
+export function isExpiryUrgent(expireAt: number, now: number = Date.now()): boolean {
+  const remaining = expireAt - now;
+  return remaining > 0 && remaining <= EXPIRY_URGENT_MS;
 }

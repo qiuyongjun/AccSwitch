@@ -96,11 +96,15 @@ export const zh = {
   "trae.comp.card.chip.toolsInUse": "使用中 {n} 个工具",
   "trae.comp.card.chip.expired": "凭据已过期",
   "trae.comp.card.chip.needRelogin": "需重新登录",
-  // 「{amount} 积分 {days} 天内过期」——issue #44：金额是窗口内**全部**临期之和，
-  // 天数取其中最晚那一刻，故只能写「天内」（写「天后」会把不同批次混成一句话，是假话）。
-  "trae.comp.card.chip.expiring": "{amount} 积分 {days} 天内过期",
+  // 「140 积分明天到期」——与 WorkBuddy 卡片同口径：只报**最急一批**（金额 + 到期日），
+  // 更远的批次留在 tooltip。旧文案「{amount} 积分 {days} 天内过期」把窗口内合计与
+  // 最晚一批拼在一句，既不是最急的也无法跨账号比较。
+  "trae.comp.card.chip.expiringToday": "{amount} 积分今天 {time} 到期",
+  "trae.comp.card.chip.expiringTomorrow": "{amount} 积分明天 {time} 到期",
+  "trae.comp.card.chip.expiringDate": "{amount} 积分 {date} {time} 到期",
   "trae.comp.card.chip.expiringTipTitle": "按到期时间分批（共 {n} 批）",
   "trae.comp.card.chip.expiringTipLine": "{time} · {amount} 积分",
+  "trae.comp.card.chip.expiringTipMore": "… 其余 {n} 批",
   "trae.comp.card.chip.unchecked": "今日未签到",
   "trae.comp.card.chip.cooling": "冷却中",
   "trae.comp.card.chip.jwtAuto": "自动刷新 JWT",

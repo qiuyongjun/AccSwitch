@@ -209,7 +209,7 @@ export const zh = {
 
   // ---- 概览 ----
   "qoder.page.overview.title": "概览",
-  "qoder.page.overview.subtitle": "{scope} · 账号与本机客户端；用量与网关尚未落地",
+  "qoder.page.overview.subtitle": "账号与本机客户端；用量与网关尚未落地",
   "qoder.page.overview.error": "读取失败：{error}",
   "qoder.page.overview.kpi.aria": "Qoder 概览统计",
   "qoder.page.overview.kpi.accounts": "账号",

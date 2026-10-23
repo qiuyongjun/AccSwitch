@@ -57,6 +57,7 @@ import {
 import { AccountTable, type AccountColumn } from "@/components/account-table";
 import { AccountToolbar, type ToolbarOption } from "@/components/account-toolbar";
 import { EmptyState } from "@/components/ui/empty-state";
+import type { AccountRefreshKind } from "@/lib/account-refresh";
 import type { AccountViewMode } from "@/lib/account-list-view";
 import { useT } from "@/lib/i18n";
 
@@ -138,9 +139,28 @@ export interface AccountWorkbenchProps<T> {
     busy: boolean;
     onCheckin?: () => void;
     onRefresh?: () => void;
+    /** 单项批量刷新（四项）；提供时批量「刷新」为下拉菜单。 */
+    onRefreshPart?: (kind: AccountRefreshKind) => void;
+    refreshKinds?: readonly AccountRefreshKind[];
+    refreshingKinds?: readonly AccountRefreshKind[];
+    doneKinds?: readonly AccountRefreshKind[];
+    /** 批量续期凭据（写 refresh_token），与四项只读刷新分开。 */
+    onRefreshToken?: () => void;
+    refreshingToken?: boolean;
+    doneToken?: boolean;
+    /** 批量刷新成长任务摘要（仅 WorkBuddy 国内版传入）。 */
+    onRefreshGrowth?: () => void;
+    refreshingGrowth?: boolean;
+    doneGrowth?: boolean;
+    /** 批量完成成长任务（仅 WorkBuddy 国内版传入）。 */
+    onCompleteTasks?: () => void;
     onExport?: () => void;
     onDelete: () => void;
     onClear: () => void;
+    /** 逐账号批处理的进度（只有按账号循环的动作会填；缺席 ⇒ 批量条不显示进度）。 */
+    progress?: { done: number; total: number } | null;
+    /** 中止正在跑的批处理（协作式）；缺席 ⇒ 批量条不渲染「取消」。 */
+    onCancel?: () => void;
   };
 
   /* ────────── 列表 ────────── */
@@ -280,8 +300,21 @@ export function AccountWorkbench<T>({
           busy={batch.busy}
           onCheckin={batch.onCheckin}
           onRefresh={batch.onRefresh}
+          onRefreshPart={batch.onRefreshPart}
+          refreshKinds={batch.refreshKinds}
+          refreshingKinds={batch.refreshingKinds}
+          doneKinds={batch.doneKinds}
+          onRefreshToken={batch.onRefreshToken}
+          refreshingToken={batch.refreshingToken}
+          doneToken={batch.doneToken}
+          onRefreshGrowth={batch.onRefreshGrowth}
+          refreshingGrowth={batch.refreshingGrowth}
+          doneGrowth={batch.doneGrowth}
+          onCompleteTasks={batch.onCompleteTasks}
           onExport={batch.onExport}
           onDelete={batch.onDelete}
+          progress={batch.progress}
+          onCancel={batch.onCancel}
           onClear={batch.onClear}
         />
 

@@ -499,6 +499,8 @@ export const en = {
   "shared.cardMenu.refresh.tokensHint": "Re-read local client session logs + gateway logs (fast)",
   "shared.cardMenu.refresh.checkinHint": "Re-read today's check-in result for this account (local)",
   "shared.cardMenu.refresh.credentialHint": "Re-read the local credential validity (the only one that still works when expired)",
+  "shared.cardMenu.refreshToken": "Refresh token (renew credential)",
+  "shared.cardMenu.refreshTokenHint": "Renew the login credential with refresh_token (a write operation); you will be asked to sign in again if it has expired",
   "shared.cardMenu.export": "Export account",
   "shared.cardMenu.note": "Remark and login state live in the account details (click the card)",
   "shared.cardMenu.checkedToday": "Checked in today",
@@ -509,6 +511,12 @@ export const en = {
   "shared.cardMenu.done": "Updated",
   "shared.cardMenu.checkinDone": "Checked in today",
   "shared.cardMenu.checkinNeedsLogin": "Sign in first",
+  "shared.cardMenu.completeTasks": "Complete tasks",
+  "shared.cardMenu.completeTasksClaimable": "{n} to claim",
+  "shared.cardMenu.completeTasksAutoable": "{n} automatable",
+  "shared.cardMenu.completeTasksRunning": "Completing…",
+  "shared.cardMenu.completeTasksNone": "No tasks to complete right now",
+  "shared.cardMenu.completeTasksUnknown": "Task status unknown, try again later",
   "shared.refreshPart.credits": "Credits refreshed",
   "shared.refreshPart.tokens": "Today's tokens refreshed",
   "shared.refreshPart.checkin": "Check-in status refreshed",
@@ -518,6 +526,11 @@ export const en = {
   "shared.stat.tokens": "Today's tokens",
   "shared.stat.checkin": "Check-in",
   "shared.stat.credential": "Credential",
+  // 2026-10-23: the stat tiles now mirror the tabs (credits / check-in / tasks / credential);
+  // today's tokens moved into the overview rows.
+  "shared.stat.tasks": "Tasks",
+  "shared.stat.taskClaimable": "{n} claimable",
+  "shared.stat.taskClaimed": "{n} claimed",
   "shared.stat.checkedIn": "Checked in",
   "shared.stat.notCheckedIn": "Not checked in",
   // issue #47: the honest wording Trae / Qoder need for check-in and token tiles.
@@ -534,7 +547,8 @@ export const en = {
   "shared.stat.credentialOkSub": "Usable",
   "shared.stat.credentialBadSub": "Sign in first",
   "shared.stat.noExpiring": "No expiring credits",
-  "shared.stat.expiringSoon": "{n} credits expire within {d} days",
+  // `shared.stat.expiringSoon` removed (2026-10-23): the drawer now reuses the card's
+  // `nextExpiryLabel` wording, so this sentence has no consumer left.
   "shared.stat.total": "Total {n}",
   "shared.stat.expiresAt": "Expires {when}",
   "shared.stat.noExpiry": "No expiry",
@@ -549,9 +563,9 @@ export const en = {
   "shared.drawer.tab.tasks": "Tasks",
   "shared.growthTasks.summary": "{claimable} claimable · {claimed} claimed · {autoable} automatable",
   "shared.growthTasks.auto": "Complete all",
-  "shared.growthTasks.claimAll": "Claim all",
   "shared.growthTasks.running": "Running…",
-  "shared.growthTasks.autoHint": "Reports behaviour events per task; upstream scoring is slow and may take up to a minute",
+  // 2026-10-23: "Claim all" merged into "Complete all" — the hint must say it claims first.
+  "shared.growthTasks.autoHint": "Claims ready rewards first, then reports behaviour events (upstream scoring is slow and may take up to a minute)",
   "shared.growthTasks.claim": "Claim",
   "shared.growthTasks.autoable": "Automatable",
   "shared.growthTasks.claimed": "Claimed",
@@ -563,10 +577,10 @@ export const en = {
   "shared.growthTasks.empty": "No growth tasks issued for this account",
   "shared.growthTasks.loadFailed": "Failed to load tasks: {message}",
   "shared.growthTasks.autoDone": "{n} task(s) completed, {credit} credits claimed",
-  "shared.growthTasks.autoNone": "Nothing to auto-complete this run",
-  "shared.growthTasks.claimDone": "{credit} credits claimed",
-  "shared.growthTasks.claimNone": "Nothing to claim (already claimed or not complete yet)",
+  "shared.growthTasks.autoNone": "Nothing to complete or claim this run",
+  "shared.growthTasks.progressedOnly": "Progress reported; reward not reached yet (upstream scoring is slow — run again later)",
   "shared.growthTasks.refresh": "Refresh task list",
+  "shared.growthTasks.refreshDone": "Task list refreshed",
   "shared.drawer.snapshot.title": "Login-state snapshot",
   "shared.drawer.snapshot.time": "Last modified",
   "shared.drawer.snapshot.size": "Size",
@@ -592,8 +606,15 @@ export const en = {
   "shared.drawer.packs.title": "Credits / packs",
   // ★ B5: check-in credits (fields come from the **measured upstream response**).
   "shared.drawer.checkin.title": "Check-in",
+  "shared.drawer.checkin.action": "Check in",
+  // 2026-10-23: the check-in button stays visible; checked-in state swaps to disabled text.
+  "shared.drawer.checkin.done": "Checked in today",
   "shared.drawer.checkin.today": "Checked in today",
-  "shared.drawer.checkin.streak": "{n}-day streak",
+  "shared.drawer.checkin.todayGain": "Checked in today, +{n} credits",
+  "shared.drawer.checkin.notCheckedIn": "Not checked in",
+  "shared.drawer.checkin.statStreak": "Streak",
+  "shared.drawer.checkin.statTotal": "Credits earned",
+  "shared.drawer.checkin.days": "{n} days",
   "shared.drawer.checkin.total": "{n} credits total",
   "shared.drawer.programs.title": "Programs (read-only)",
   "shared.drawer.program.current": "Current account",
@@ -605,8 +626,7 @@ export const en = {
   "shared.drawer.switch.available": "Switchable",
   "shared.drawer.currentLogin": "Signed in",
   "shared.drawer.actions.refresh": "Refresh token",
-  "shared.drawer.actions.export": "Export",
-  "shared.drawer.actions.permission": "Switch permission diagnostics",
+  "shared.drawer.actions.refreshStatus": "Refresh credential status",
   "shared.drawer.actions.credentialNote": "Credentials are expired or need re-login; no check-in entry until that is resolved.",
   "shared.drawer.checkin.historyTitle": "Check-in history (last 7 days)",
   "shared.drawer.checkin.historyDate": "Date",
@@ -620,10 +640,13 @@ export const en = {
   "shared.drawer.empty.title": "No details",
   "shared.drawer.empty.description": "No details to show for this account yet; re-check and try again.",
 
-  // ---- Minimal batch bar (components/account-batch-bar.tsx, shared) ----
+  // ---- Batch action bar (components/account-batch-bar.tsx, shared by the three account pages) ----
   "shared.batch.selected": "{n} selected",
   "shared.batch.checkin": "Check in",
   "shared.batch.refresh": "Refresh",
+  "shared.batch.refreshToken": "Refresh Token (renew credential)",
+  "shared.batch.refreshGrowth": "Refresh growth task status",
+  "shared.batch.completeTasks": "Complete tasks",
   // Prototype `batch-export`: exports the **selected** accounts (all-accounts export lives in the toolbar).
   "shared.batch.export": "Export",
   "shared.batch.delete": "Delete",
@@ -632,6 +655,8 @@ export const en = {
   "shared.batch.deleteDesc": "Delete the {n} selected accounts? You can restore them from the recycle bin.",
   "shared.batch.confirm": "Delete",
   "shared.batch.cancel": "Cancel",
+  "shared.batch.progress": "Processing {done}/{total}",
+  "shared.batch.cancelHint": "Skips the remaining accounts; requests already sent will finish",
   // ★ Bulk check-in result bar (prototype `checkinResultHtml`). Must report BOTH counts —
   // a bulk operation always partially fails, so reporting only successes would be a lie.
   "shared.checkinResult.summary": "{ok} ok · {fail} failed",
@@ -657,12 +682,24 @@ export const en = {
   "shared.toolbar.viewTableDisabled": "Window is too narrow for the table view; widen it and try again",
   "shared.toolbar.selectAll": "Select all",
   "shared.toolbar.deselectAll": "Deselect all",
+  // Cooldown is visible on the button itself; the tooltip explains the disabled state.
+  "shared.toolbar.quickRefreshCountdown": "Refresh {n}s",
+  "shared.toolbar.quickRefreshCooldown": "Refreshed too often. Try again in {n}s",
+  // One-click actions across all accounts (no selection required).
+  "shared.toolbar.quickRefresh": "Refresh all",
+  "shared.toolbar.quickCheckin": "Check in all",
+  "shared.toolbar.quickComplete": "Complete all",
+  // Why a one-click action is disabled (hover hint).
+  "shared.toolbar.quickNoAccounts": "This scope has no accounts yet",
+  "shared.toolbar.quickCheckinNone": "All accounts checked in today",
+  "shared.toolbar.quickCompleteNone": "No claimable or auto-completable tasks",
 
   // =====================================================================
   // ---- "Add account" drawer (components/add-account-drawer.tsx, shared) ----
   // =====================================================================
-  // Shared by WorkBuddy and Trae, and it now also carries what used to live in the toolbar's
-  // "…" overflow menu — so the copy lives here instead of once per platform.
+  // Shared by WorkBuddy / Trae / Qoder. The drawer only carries "ways to add" plus
+  // paste-credential; the former "More actions" section was removed on 2026-10-23
+  // (switches live in Settings, bulk actions in the batch bar, refresh in the page header).
   "shared.addDrawer.title": "Add account",
   "shared.addDrawer.scopePrefix": "Current scope: ",
   "shared.addDrawer.scopeSuffix": ". Pick a way to add an account.",
@@ -673,7 +710,6 @@ export const en = {
   "shared.addDrawer.backupTitle": "Import a backup file",
   "shared.addDrawer.backupDesc": "Restore accounts in bulk from an exported JSON backup",
   "shared.addDrawer.notInstalled": "No client detected in this scope, so \"Import from this machine\" is unavailable. Use OAuth login instead.",
-  "shared.addDrawer.moreTools": "More actions",
 
   // ---- Account list empty states (two distinct kinds — never mix) ----
   "shared.list.empty.none": "No accounts yet",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Check, Download, Info, Loader2, MessageSquare, Pencil, RefreshCw, ShieldCheck, StickyNote, XIcon } from "lucide-react";
+import { ArrowRight, Check, Info, KeyRound, Loader2, MessageSquare, Pencil, RefreshCw, StickyNote, XIcon } from "lucide-react";
 
 import { avatarTone, formatCredits } from "@/components/account-card";
 import { AccountGroupPicker } from "@/components/account-group-picker";
@@ -21,6 +21,7 @@ import {
 } from "@/lib/drawer-tab-preference";
 import { useT } from "@/lib/i18n";
 import { useRefreshAction } from "@/lib/use-refresh-action";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { cn } from "@/lib/utils";
 
 /**
@@ -47,9 +48,13 @@ import { cn } from "@/lib/utils";
  *    （issue #2）。这里用 `string` 而非 `unknown` 是为了让「忘了归一」在编译期暴露。
  * 2. **动作只留「必须看上下文才敢做」的那几个**。抽屉是**看**的地方：
  *    备注 / 分组就地编辑（改之前必须看见原文、看见已有哪些组）、续期 JWT、
- *    权限诊断、导出；**手动签到 / 删除**这类一步就能做完的动作只在卡片的「更多」菜单里
- *    （2026-10-18 分工判据，见 `docs/specs/PLAN.md` §3.3）—— 同一个动作两处都有入口
- *    正是上一版被吐槽的「乱」。程序位只以**只读徽标**呈现（切换属于列表页）。
+ *    签到（签到页签顶部）、刷新凭据状态；**删除**这类一步就能做完的动作只在卡片的「更多」菜单里
+ *    （2026-10-18 分工判据，见 `docs/specs/PLAN.md` §3.3）。
+ *    ★ 2026-10-23（用户要求）：抽屉里的 `导出` 与 `切换权限诊断` 已移除 ——
+ *    导出在卡片「更多」与批量条已有（同一动作三步可达，不必在抽屉里再摆一次），
+ *    权限诊断与「这个账号的凭据是什么状态」无关。签到按钮则相反：它此前**没有**任何
+ *    抽屉入口（`showCheckin` 是死字段），用户要签到得退回卡片菜单。
+ *    程序位只以**只读徽标**呈现（切换属于列表页）。
  *
  * ## 状态语言（PLAN §3.6）
  *
@@ -88,6 +93,16 @@ export interface DetailStat {
   tone?: "warn" | "bad";
   /** 该指标对应的刷新项；不传 ⇒ 不渲染 ⟳。 */
   refreshKind?: AccountRefreshKind;
+  /**
+   * 自定义刷新回调（与 `refreshKind` **互斥**）。
+   *
+   * ★ 2026-10-23：给「任务」卡用 —— 任务摘要是「重扫上游」（`growth_tasks_scan`），
+   * 不属于 `AccountRefreshKind` 那四项「重读某一层现成数据」的语义
+   * （见 `docs/specs/GROWTH-TASKS.md` §6），硬塞进去会污染菜单的刷新组。
+   */
+  onRefresh?: () => void;
+  /** 自定义刷新的进行中态（转圈 + 禁用）。 */
+  refreshBusy?: boolean;
 }
 
 /**
@@ -162,19 +177,42 @@ export interface DetailSwitchTarget {
 }
 
 /**
- * 「操作」区回调（原型 `drawerAccount` :3518-3527）。**全部可选** —— 缺哪个回调就不渲染哪枚按钮，
+ * 「操作」区回调。**全部可选** —— 缺哪个回调就不渲染哪枚按钮，
  * 不摆点不动的灰按钮。`编辑备注` 由抽屉内部的就地编辑器承担，不需回调。
+ *
+ * ★ 2026-10-23（用户要求）：
+ * - **移除 `导出` 与 `切换权限诊断`** —— 前者属于「一步做完」的动作（卡片「更多」/ 批量条已有），
+ *   后者指向的是设置页 `?section=diagnostics`，与本抽屉「看这个账号」的职责无关；
+ * - **`showCheckin` 终于被用上了**：签到页签顶部出现「签到」按钮（此前该字段只有声明、
+ *   没有任何渲染点，等于死字段 —— 用户反馈「签到页没有签到入口」正是它）。
  */
 export interface DetailActions {
   onRefresh?: () => void;
+  /** 「签到」按钮（签到页签顶部）。只在 `showCheckin` 为真时渲染。 */
   onCheckin?: () => void;
-  /** 是否展示「手动签到」（凭据可用且今日未签到）。 */
+  /** 是否展示「签到」按钮（凭据可用且今日未签到）。 */
   showCheckin?: boolean;
-  onExport?: () => void;
-  onPermission?: () => void;
   onDelete?: () => void;
   /** 凭据已过期 / 需重登 ⇒ 展示「不提供签到入口」的说明（与卡片 / 批量签到同口径）。 */
   credentialUnavailable?: boolean;
+}
+
+/**
+ * 「凭据」页签的内容：状态徽标 + 凭证明细行。
+ *
+ * ⚠️ 与其余区块同一条约束：`statusText` / `rows[].value` 全部**已在调用方格式化**，
+ * 抽屉只排版。不传 ⇒ 该页签退化为「只有两枚按钮」（Trae / Qoder 的现状），
+ * 不会凭空多出一个空的「凭证信息」区块。
+ */
+export interface DetailCredential {
+  /** 已 i18n 的状态文案（有效 / 已过期 / 需重登）。 */
+  statusText: string;
+  /** 状态语气：有效 = ok，临期 / 需重登 = warn，过期 = bad。 */
+  tone: "ok" | "warn" | "bad";
+  /** 状态补充说明（如「可正常使用」/「先重新登录」）。 */
+  hint?: string;
+  /** 凭证明细（凭据到期 / 刷新令牌到期 / 最近续期 …）。 */
+  rows: DetailRow[];
 }
 
 /**
@@ -248,6 +286,14 @@ export interface AccountDetailDrawerProps {
   autoEditRemark?: boolean;
   /** 由「更多 → 设置分组」打开时，直接进入分组编辑态。 */
   autoEditGroup?: boolean;
+  /**
+   * 本次打开**直接落在**指定页签（目前只由卡片 / 表格的成长任务标签传 `tasks`）。
+   *
+   * 与「记住的上次页签」的关系：本次打开以它为准（且该页签可用时）；
+   * 用户切换页签后失效，但**不改写记忆** —— 点标签去「看任务」不等于把
+   * 「上次停在任务」写进偏好（记忆只记用户主动切页签的结果，见 issue #49）。
+   */
+  initialTab?: DrawerTab | null;
   /** 详情区块**全空**时的空态出口（`EmptyState` 四要素）。 */
   empty?: { title: string; description: string; action?: ReactNode };
   /**
@@ -280,8 +326,14 @@ export interface AccountDetailDrawerProps {
   onExtSessions?: () => void;
   /** 入口文案里的客户端名（已 i18n）；`onExtSessions` 提供时才用得到。 */
   extClientLabel?: string;
-  /** 「操作」区回调（原型 :3518-3527）。`null` / 不传 = 不渲染该区块。 */
+  /** 「操作」区回调。`null` / 不传 = 不渲染该区块。 */
   actions?: DetailActions | null;
+  /**
+   * ★ 「凭据」页签的凭证信息（状态 + 明细行）。
+   *
+   * `null` / 不传 = 该页签只渲染动作按钮（Trae / Qoder 现状，行为不变）。
+   */
+  credential?: DetailCredential | null;
   /** 签到历史（近 7 天）；`null` / 空数组 = 不渲染该区块。 */
   checkinHistory?: DetailCheckinHistoryRow[] | null;
   /**
@@ -318,6 +370,40 @@ function programBadgeText(
   return t("shared.drawer.program.installed");
 }
 
+/**
+ * 签到页签的一格指标（标签 + 数字）。
+ *
+ * 与顶部 `DetailStat` 卡片**不是**同一套：这里的值只有「一个数」，不需要 ⟳，
+ * 也必须在窄列里对齐（`tabular-nums`）。刻意不抽成公共组件 —— 抽了就要给两边
+ * 加一堆开关，反而更难读。
+ */
+function CheckinStat({
+  label,
+  value,
+  tone = "default",
+  title,
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "ok" | "muted";
+  title?: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-[10px] border border-border bg-muted/40 px-2.5 py-2">
+      <div className="truncate text-[10.5px] text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "mt-0.5 truncate text-sm font-semibold tabular-nums",
+          tone === "ok" ? "text-success" : tone === "muted" ? "text-muted-foreground" : "text-foreground",
+        )}
+        title={title ?? value}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export function AccountDetailDrawer({
   open,
   onOpenChange,
@@ -341,6 +427,7 @@ export function AccountDetailDrawer({
   featuresDisabled = false,
   autoEditRemark = false,
   autoEditGroup = false,
+  initialTab = null,
   empty,
   checkin,
   current = false,
@@ -349,6 +436,7 @@ export function AccountDetailDrawer({
   onExtSessions,
   extClientLabel,
   actions = null,
+  credential = null,
   checkinHistory = null,
   growthTasks = null,
   onGrowthTasksChanged,
@@ -357,7 +445,7 @@ export function AccountDetailDrawer({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  /** 「刷新 Token」按钮的进行中态（回调是 fire-and-forget ⇒ 最小展示时长保证可见）。 */
+  /** 「续期凭据」按钮的进行中态（回调是 fire-and-forget ⇒ 最小展示时长保证可见）。 */
   const { busy: refreshBusy, run: runRefresh } = useRefreshAction();
   const inputRef = useRef<HTMLInputElement | null>(null);
   /**
@@ -443,13 +531,14 @@ export function AccountDetailDrawer({
   /**
    * 操作区是否渲染。
    *
-   * ⚠️ 只数**抽屉独有**的动作（刷新 Token / 导出 / 权限诊断）。
-   * 手动签到 / 编辑备注 / 编辑分组 / 删除**不在这里** —— 它们已经在卡片的「更多」菜单里，
-   * 同一个动作两处都有入口正是上一版被吐槽的「乱」（见 PLAN §3.3 与原型的分工表）。
+   * ⚠️ 只数**抽屉独有**的动作（续期凭据 —— 即凭据续期）。
+   * 手动签到 / 编辑备注 / 编辑分组 / 删除**不在这里**：签到有自己的页签入口，
+   * 其余三个已经在卡片的「更多」菜单里。
+   *
+   * ★ 2026-10-23：`导出` 与 `切换权限诊断` 已从抽屉移除（见 `DetailActions` 注释），
+   * 所以判据只剩 `onRefresh`。
    */
-  const hasActions = Boolean(
-    actions && (actions.onRefresh || actions.onExport || actions.onPermission),
-  );
+  const hasActions = Boolean(actions?.onRefresh);
   const isEmpty =
     packs.length === 0 &&
     sections.length === 0 &&
@@ -474,8 +563,19 @@ export function AccountDetailDrawer({
   if (snapshots.length > 0) availableTabs.push("snapshot");
 
   const [rememberedTab, rememberTab] = useDrawerTab(accountKey);
+  /**
+   * 入口指定的页签（`initialTab`）只对**本次打开**生效：
+   * 用户在抽屉里切过页签后置空，关闭 / 换账号 / 再次打开时按新入口参数重置。
+   */
+  const [forcedTab, setForcedTab] = useState<DrawerTab | null>(initialTab);
+  useEffect(() => {
+    setForcedTab(initialTab);
+  }, [initialTab, open, accountKey]);
   // 记住的页签当前不可用 ⇒ 回落第一枚可用页签，且**不改写**记忆（R3 / R4）。
-  const activeTab = resolveDrawerTab(rememberedTab, availableTabs);
+  const activeTab =
+    forcedTab && availableTabs.includes(forcedTab)
+      ? forcedTab
+      : resolveDrawerTab(rememberedTab, availableTabs);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -528,7 +628,10 @@ export function AccountDetailDrawer({
           {!loading && stats.length > 0 && (
             <div className="grid grid-cols-2 gap-2">
               {stats.map((stat) => {
-                const busy = stat.refreshKind ? (refreshingKinds ?? []).includes(stat.refreshKind) : false;
+                const kindBusy = stat.refreshKind
+                  ? (refreshingKinds ?? []).includes(stat.refreshKind)
+                  : false;
+                const busy = kindBusy || Boolean(stat.refreshBusy);
                 return (
                   <div
                     key={stat.key}
@@ -536,11 +639,15 @@ export function AccountDetailDrawer({
                   >
                     <div className="flex items-center gap-1">
                       <span className="truncate text-[10.5px] text-muted-foreground">{stat.label}</span>
-                      {stat.refreshKind && onRefreshPart && (
+                      {(stat.refreshKind ? Boolean(onRefreshPart) : Boolean(stat.onRefresh)) && (
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => onRefreshPart(stat.refreshKind as AccountRefreshKind)}
+                          onClick={() =>
+                            stat.refreshKind
+                              ? onRefreshPart?.(stat.refreshKind as AccountRefreshKind)
+                              : stat.onRefresh?.()
+                          }
                           aria-label={stat.label}
                           className="ml-auto grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground opacity-60 transition-colors hover:bg-accent hover:text-foreground hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none disabled:opacity-60"
                         >
@@ -738,7 +845,11 @@ export function AccountDetailDrawer({
               value={activeTab}
               onValueChange={(value) => {
                 // 只记**用户主动点击**的结果；`resolveDrawerTab` 的回落不写盘（R4）。
-                if (isDrawerTab(value)) rememberTab(value);
+                if (isDrawerTab(value)) {
+                  // 用户一旦自己切页签，入口指定的页签就让位。
+                  setForcedTab(null);
+                  rememberTab(value);
+                }
               }}
               className="min-h-0"
             >
@@ -808,13 +919,6 @@ export function AccountDetailDrawer({
                   </div>
                 </section>
               )}
-
-                            {actions?.onExport && (
-                <Button type="button" variant="outline" size="sm" onClick={actions.onExport}>
-                  <Download className="size-4" />
-                  {t("shared.drawer.actions.export")}
-                </Button>
-              )}
               </TabsContent>
 
               {packs.length > 0 && (
@@ -822,9 +926,31 @@ export function AccountDetailDrawer({
 {/* 积分 / 资源包：文本已由调用方格式化，这里只排版。 */}
               {packs.length > 0 && (
                 <section>
-                  <h3 className="mb-2 text-[11.5px] font-medium text-muted-foreground">
-                    {t("shared.drawer.packs.title")}
-                  </h3>
+{/* ★ 2026-10-23（用户要求）：标题行右侧补一枚**仅图标**的 ⟳ —— 与凭据页签同款。
+                  上方指标卡的 ⟳ 是快捷入口，页签内再给一个，页面功能才自洽。 */}
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-[11.5px] font-medium text-muted-foreground">
+                      {t("shared.drawer.packs.title")}
+                    </h3>
+                    {onRefreshPart && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2"
+                        disabled={(refreshingKinds ?? []).includes("credits")}
+                        onClick={() => onRefreshPart("credits")}
+                        aria-label={t("shared.drawer.tab.credits")}
+                        title={t("shared.drawer.tab.credits")}
+                      >
+                        {(refreshingKinds ?? []).includes("credits") ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <RefreshCw />
+                        )}
+                      </Button>
+                    )}
+                  </div>
                   <div className="space-y-3">
                     {packs.map((pack) => (
                       <div key={pack.key} className="min-w-0">
@@ -862,48 +988,126 @@ export function AccountDetailDrawer({
 
               {(checkin || (checkinHistory && checkinHistory.length > 0)) && (
                 <TabsContent value="checkin" className="space-y-4 pt-1">
-{/* ★ B5：签到积分（**有数据才渲染** —— 不摆「+0」「0 天」这类无信息量的行）。 */}
-              {checkin?.todayCheckedIn && (
+{/* ★ B5：签到积分 + **签到入口**（2026-10-23 用户要求）。
+   旧版把「+100 / 已连签 / 累计」竖排成三行，右侧整片空白；标题行只剩一个标题，
+   而「签到」这个页签里居然没有签到按钮 —— 标题行右侧正好是它的位置。
+   ⚠️ 有 `checkin` 就渲染（含**今日未签到**）：未签到恰恰是最需要这个区块的时刻，
+   旧版只判 `todayCheckedIn` ⇒ 没签过的账号看到的是一片空白。
+   ★ 同日（用户确认）：**标题行（含 ⟳）无条件渲染** —— 页签既然出现，
+   刷新入口就得在（⟳ 是只读重拉，对任何账号都安全），不能因
+   「只有历史、没有当日数据」就跟着消失；签到按钮仍跟随 `checkin`。 */}
                 <section>
-                  <h3 className="mb-2 text-[11.5px] font-medium text-muted-foreground">
-                    {t("shared.drawer.checkin.title")}
-                  </h3>
-                  <div className="space-y-1.5 text-xs">
-                    {/* ★ 原型 B5 要求：抽屉里能看到「+100」（Trae 为 +50）。 */}
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-success">
-                        +{checkin.todayCredit ?? checkin.dailyCredit ?? 0}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {t("shared.drawer.checkin.today")}
-                      </span>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h3 className="text-[11.5px] font-medium text-muted-foreground">
+                      {t("shared.drawer.checkin.title")}
+                    </h3>
+                    {/* ★ 2026-10-23（用户要求）：按钮**常驻**，状态只改文字与可用性 ——
+                        时隐时现的按钮比禁用的按钮更难预期。
+                        - 今日未签到 + 凭据可用 ⇒ 「签到」可点；
+                        - 今日已签到 ⇒ 「今日已签到」禁用（点了必然是「已签到」回执）；
+                        - 凭据不可用 ⇒ 禁用（说明见下方 credentialNote 一行）。
+                        ★ 同批补充：最左侧加一枚**仅图标** ⟳ 刷新签到数据（只读），
+                        与凭据 / 积分页签同款 —— 指标卡上的 ⟳ 是快捷入口，
+                        页签内再给一个，功能才完整。 */}
+                    <div className="flex items-center gap-1.5">
+                      {onRefreshPart && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2"
+                          disabled={(refreshingKinds ?? []).includes("checkin")}
+                          onClick={() => onRefreshPart("checkin")}
+                          aria-label={t("shared.drawer.tab.checkin")}
+                          title={t("shared.drawer.tab.checkin")}
+                        >
+                          {(refreshingKinds ?? []).includes("checkin") ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <RefreshCw />
+                          )}
+                        </Button>
+                      )}
+                      {checkin && actions?.onCheckin ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 px-2.5 text-[11px]"
+                          disabled={checkin.todayCheckedIn || !actions.showCheckin}
+                          onClick={actions.onCheckin}
+                        >
+                          <CheckinIcon className="size-3.5" />
+                          {checkin.todayCheckedIn
+                            ? t("shared.drawer.checkin.done")
+                            : t("shared.drawer.checkin.action")}
+                        </Button>
+                      ) : null}
                     </div>
-                    {typeof checkin.streakDays === "number" && checkin.streakDays > 0 && (
-                      <div className="text-muted-foreground">
-                        {t("shared.drawer.checkin.streak", { n: checkin.streakDays })}
-                      </div>
-                    )}
-                    {typeof checkin.totalCredits === "number" && (
-                      <div className="text-muted-foreground">
-                        {t("shared.drawer.checkin.total", { n: checkin.totalCredits })}
-                      </div>
-                    )}
-                    {/* 逐条签到日期（倒序；上游 `checkin_dates`） */}
-                    {Array.isArray(checkin.checkinDates) && checkin.checkinDates.length > 0 && (
-                      <ul className="flex flex-wrap gap-1 pt-0.5">
-                        {checkin.checkinDates.map((d) => (
-                          <li
-                            key={d}
-                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                          >
-                            {d}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
                   </div>
+                  {checkin && (
+                    <>
+                  {/* 三列横排：今日签到（+100）/ 已连签 / 累计积分 —— 把右侧的空白用掉，
+                      高度也是竖排的三分之一。数字用 tabular-nums 对齐。 */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <CheckinStat
+                      label={t("shared.drawer.checkin.today")}
+                      value={
+                        checkin.todayCheckedIn
+                          ? `+${checkin.todayCredit ?? checkin.dailyCredit ?? 0}`
+                          : t("shared.drawer.checkin.notCheckedIn")
+                      }
+                      tone={checkin.todayCheckedIn ? "ok" : "muted"}
+                      title={
+                        checkin.todayCheckedIn
+                          ? t("shared.drawer.checkin.todayGain", {
+                              n: checkin.todayCredit ?? checkin.dailyCredit ?? 0,
+                            })
+                          : undefined
+                      }
+                    />
+                    <CheckinStat
+                      label={t("shared.drawer.checkin.statStreak")}
+                      value={
+                        typeof checkin.streakDays === "number" && checkin.streakDays > 0
+                          ? t("shared.drawer.checkin.days", { n: checkin.streakDays })
+                          : "—"
+                      }
+                    />
+                    <CheckinStat
+                      label={t("shared.drawer.checkin.statTotal")}
+                      value={
+                        typeof checkin.totalCredits === "number"
+                          ? formatCredits(checkin.totalCredits)
+                          : "—"
+                      }
+                      title={
+                        typeof checkin.totalCredits === "number"
+                          ? t("shared.drawer.checkin.total", { n: checkin.totalCredits })
+                          : undefined
+                      }
+                    />
+                  </div>
+                  {/* 逐条签到日期（倒序；上游 `checkin_dates`） */}
+                  {Array.isArray(checkin.checkinDates) && checkin.checkinDates.length > 0 && (
+                    <ul className="mt-2 flex flex-wrap gap-1">
+                      {checkin.checkinDates.map((d) => (
+                        <li
+                          key={d}
+                          className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                        >
+                          {d}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {!checkin.todayCheckedIn && actions?.credentialUnavailable && (
+                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                      {t("shared.drawer.actions.credentialNote")}
+                    </p>
+                  )}
+                    </>
+                  )}
                 </section>
-              )}
 
               {/* ★ 签到历史（近 7 天）：日期 / 结果 / 获得积分（原型 checkinHistoryHtml :3428）。
                   日期 + 结果来自 `getCheckinLogs()`；获得积分来自积分统计的签到事件（账号 + 日期），
@@ -968,44 +1172,111 @@ export function AccountDetailDrawer({
                     scope={growthTasks.scope}
                     accountId={growthTasks.accountId}
                     onChanged={onGrowthTasksChanged}
+                    accountName={name}
                   />
                 </TabsContent>
               )}
 
               {hasActions && (
                 <TabsContent value="credential" className="space-y-4 pt-1">
-{/* ★ 操作区（原型 :3518-3527）：刷新 Token / 手动签到 / 编辑备注 / 导出 / 权限诊断 / 删除。
-                  每枚按钮都接**页面既有**的处理函数；缺回调就不渲染该按钮（不摆点不动的灰按钮）。
-                  编辑备注复用抽屉内部就地编辑器（`beginEdit`）。 */}
+{/* ★ 凭据页签（2026-10-23 用户要求重做）：**先看凭据信息与有效状态，再做动作**。
+                  旧版这一页只有两枚按钮，点了才知道凭据是什么状态 —— 顺序反了。
+
+                  动作只剩两个，且**语义不同**（所以不是一个「刷新」了事）：
+                  - 「刷新凭据状态」= 重读本机凭据元数据（续期状态、是否需重登），只读；
+                  - 「续期凭据」= 真的去续期（写 refresh_token，会消耗令牌），有副作用。
+                  ★ 2026-10-23：两枚动作从页签底部挪到**标题行右侧**（布局对标任务页签
+                  的汇总行）：⟳ 仅图标 = 刷新凭据状态（只读）；「续期凭据」= 钥匙
+                  图标 + 文字的主按钮 —— 钥匙即 `KeyRound`，与卡片「更多」菜单、
+                  批量栏的续期凭据图标同源，暗示「动的是令牌本身」。
+                  逐项进行中态来自页面的 `refreshingKinds`，与指标块右上角 ⟳ **同源**。 */}
               {hasActions && (
                 <section>
-                  <h3 className="mb-2 text-[11.5px] font-medium text-muted-foreground">
-                    {t("shared.drawer.tab.credential")}
-                  </h3>
-                  <div className="flex flex-wrap gap-2">
-                    {actions?.onRefresh && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={refreshBusy}
-                        onClick={() => void runRefresh(() => actions.onRefresh?.())}
-                      >
-                        {refreshBusy ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="size-4" />
-                        )}
-                        {t("shared.drawer.actions.refresh")}
-                      </Button>
-                    )}
-                    {actions?.onPermission && (
-                      <Button type="button" variant="outline" size="sm" onClick={actions.onPermission}>
-                        <ShieldCheck className="size-4" />
-                        {t("shared.drawer.actions.permission")}
-                      </Button>
-                    )}
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-[11.5px] font-medium text-muted-foreground">
+                      {t("shared.drawer.tab.credential")}
+                    </h3>
+                    <div className="flex items-center gap-1.5">
+                      {onRefreshPart && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2"
+                          disabled={(refreshingKinds ?? []).includes("credential")}
+                          onClick={() => onRefreshPart("credential")}
+                          aria-label={t("shared.drawer.actions.refreshStatus")}
+                          title={t("shared.drawer.actions.refreshStatus")}
+                        >
+                          {(refreshingKinds ?? []).includes("credential") ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <RefreshCw />
+                          )}
+                        </Button>
+                      )}
+                      {actions?.onRefresh && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-7 px-2.5"
+                          disabled={refreshBusy}
+                          onClick={() => void runRefresh(() => actions.onRefresh?.())}
+                        >
+                          {refreshBusy ? (
+                            <Loader2 className="animate-spin" />
+                          ) : (
+                            <KeyRound />
+                          )}
+                          {t("shared.drawer.actions.refresh")}
+                        </Button>
+                      )}
+                    </div>
                   </div>
+
+                  {credential && (
+                    <div className="rounded-lg border border-border px-2.5 py-2">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={
+                            credential.tone === "ok"
+                              ? "success"
+                              : credential.tone === "warn"
+                                ? "warning"
+                                : "destructive"
+                          }
+                        >
+                          {credential.statusText}
+                        </Badge>
+                        {credential.hint ? (
+                          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                            {credential.hint}
+                          </span>
+                        ) : null}
+                      </div>
+                      {credential.rows.length > 0 && (
+                        <dl className="mt-1.5 space-y-0">
+                          {credential.rows.map((row, index) => (
+                            <div
+                              key={`${row.label}-${index}`}
+                              className="grid grid-cols-[96px_minmax(0,1fr)] items-baseline gap-2.5 border-b border-dashed border-border py-1.5 text-[12.5px] last:border-b-0"
+                            >
+                              <dt className="shrink-0 text-[11.5px] text-muted-foreground">{row.label}</dt>
+                              <dd
+                                className={cn(
+                                  "min-w-0 truncate text-right text-foreground/80",
+                                  row.mono && "font-mono tabular-nums",
+                                )}
+                                title={row.title ?? row.value}
+                              >
+                                {row.value}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                    </div>
+                  )}
                   {actions?.credentialUnavailable && (
                     <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
                       {t("shared.drawer.actions.credentialNote")}

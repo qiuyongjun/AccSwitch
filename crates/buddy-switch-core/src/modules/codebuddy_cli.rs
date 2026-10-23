@@ -513,7 +513,7 @@ fn account_token(account: &Value) -> Result<&str, String> {
         .ok_or_else(|| {
             auth_config_error(
                 "账号阶段",
-                "所选账号没有可用的认证信息，请先重新登录或刷新 Token",
+                "所选账号没有可用的认证信息，请先重新登录或续期凭据",
             )
         })
 }
@@ -523,7 +523,7 @@ fn settings_account_token(account: &Value) -> Result<&str, String> {
     if token.is_empty() {
         return Err(auth_config_error(
             "账号阶段",
-            "所选账号没有可用的认证信息，请先重新登录或刷新 Token",
+            "所选账号没有可用的认证信息，请先重新登录或续期凭据",
         ));
     }
     Ok(token)

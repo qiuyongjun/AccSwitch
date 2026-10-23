@@ -571,7 +571,7 @@ pub fn envelope_token_error(account: &Value) -> Option<String> {
     }
     Some(
         "该账号的凭据是 WorkBuddy 加密信封态，无法直接调用签到 / 积分 / Token 统计等接口；\
-         切换账号不受影响。点「刷新 Token」可用本机客户端解锁（需已安装 WorkBuddy 桌面端）；\
+         切换账号不受影响。点「续期凭据」可用本机客户端解锁（需已安装 WorkBuddy 桌面端）；\
          也可重新登录该账号（或用 OAuth 扫码添加）以取得明文凭据。"
             .to_string(),
     )

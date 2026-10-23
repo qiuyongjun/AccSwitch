@@ -5,7 +5,7 @@ import { toast } from "sonner";
 
 import { SessionReplicaView } from "@/components/sessions/session-replica-view";
 import { UnifyReplicasDialog } from "@/components/sessions/unify-replicas-dialog";
-import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { ScopeChip } from "@/components/scope-chip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -308,8 +308,9 @@ export default function SessionsPage() {
       <header className="flex items-start gap-4">
         <div className="min-w-0">
           <h1 className="text-[28px] font-[640] tracking-[-0.02em]">{t("sessions.title")}</h1>
-          <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-            {t("pageHead.sessions", { scope: scopeLabel(t, scope) })}
+          <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+            <ScopeChip scope={scope} />
+            <span>· {t("pageHead.sessions")}</span>
           </p>
         </div>
         <div className="grow" />
@@ -330,7 +331,6 @@ export default function SessionsPage() {
             {t("sessions.sync.all", { count: allSyncable.reduce((n, x) => n + x.items.length, 0) })}
           </Button>
         ) : null}
-        <ScopeChip scope={scope} />
       </header>
 
       {loading ? (

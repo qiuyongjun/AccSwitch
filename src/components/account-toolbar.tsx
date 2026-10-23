@@ -1,5 +1,5 @@
 import type { Ref } from "react";
-import { LayoutGrid, Plus, Search, Table2, Trash2 } from "lucide-react";
+import { LayoutGrid, Plus, Recycle, Search, Table2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { DemoAction } from "@/components/demo-action";
@@ -22,20 +22,24 @@ import { useT } from "@/lib/i18n";
  * `sortOptions` / `groupOptions`（数据）与 `addAction`（主操作）。若哪天这里冒出平台分支，
  * 说明合并过度，应退回「两份 + 抽共享片段」。
  *
- * ## ★ 工具栏 = 原型那一行 + 一枚「常驻小控件」（2026-10-12 定稿）
+ * ## ★ 工具栏 = 原型那一行 + 一枚「常驻小控件」（2026-10-12 定稿，2026-10-23 收口）
  *
  * 原型的 `viewAccounts` 工具栏（`buddy-switch-prototype.html:2406-2429`）只有：
  * 搜索 · 排序 · 分组 · 视图 `.seg` · `[grow]` · 全选 · `+ 添加账号`。
  *
- * 本仓多出的入口**先收进「⋯」溢出菜单，再整体删掉那枚菜单**，改由「添加账号」右侧抽屉
- * 承载（`add-account-drawer.tsx` 的 `extraOptions` / `moreTools`）。
+ * 本仓多出的入口**先收进「⋯」溢出菜单，再整体删掉那枚菜单**；此后一度把这些入口
+ * 塞进「添加账号」抽屉的 `moreTools`「更多操作」分区，**2026-10-23 该分区也整块删除**
+ * （开关归设置页、批量动作归批量条、刷新归页头 / 批量条 —— 见 `add-account-drawer.tsx` 文件头）。
  *
  * ⚠️★ 用户要求「**回收站放出来**」⇒ 这一枚**例外**：它是**常驻**控件，
  * 用**结构化 prop**（`onOpenRecycleBin`）注入、摆在视图切换之后。
- * 其余入口（自动签到 / 第二枚开关 / 导出备份 / 刷新）仍在抽屉的「更多操作」里。
+ *
+ * ⇒ 约定：**常驻控件**走**结构化 prop**；**非列表级**的入口归**设置页**（开关）或
+ * **批量条**（批量动作）；**不要**再把入口塞进「添加账号」抽屉 —— 那个抽屉只负责
+ * 「添加方式 + 粘贴凭据」。
  *
  * ⇒ ⚠️ **不要再往这里加控件槽位**（`children` / `secondaryActions` 这类 ReactNode 插槽已删，
- * 且门禁钉住）。要加入口，加进那个抽屉；确实需要常驻的，加**结构化 prop** 并同步门禁。
+ * 且门禁钉住）。确实需要常驻的，加**结构化 prop** 并同步门禁。
  *
  * ## ★ 搜索框必须**常驻挂载**（IME 约束，`§1.4`）
  *
@@ -234,7 +238,9 @@ export function AccountToolbar({
 
         {/* ★ 回收站—— 用户要求「回收站放出来」⇒ 常驻工具栏（P5 §2.7.1）。
             按**当前作用域**过滤（只列本作用域被软删除的账号）；入口放账号页而非设置页，
-            避免与 P7「备份与恢复」的整库级语义混淆。 */}
+            避免与 P7「备份与恢复」的整库级语义混淆。
+            ⚠️ 图标必须是 `Recycle` 而**不是** `Trash2`：这一枚是**入口**，不是删除动作；
+            与批量条的「删除」同用垃圾桶会在视觉上被读成「删除」（2026-10-23 用户反馈）。 */}
         {onOpenRecycleBin ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -248,7 +254,7 @@ export function AccountToolbar({
                     onClick={onOpenRecycleBin}
                     aria-label={t("recycleBin.title")}
                   >
-                    <Trash2 />
+                    <Recycle />
                   </Button>
                 </DemoAction>
               </span>

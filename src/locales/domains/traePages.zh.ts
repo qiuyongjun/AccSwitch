@@ -22,7 +22,6 @@ export const zh = {
   // ---- 通用 action 结果提示 ----
   "trae.page.accounts.actionDone": "{label}完成",
   "trae.page.accounts.actionFailed": "{label}失败",
-  "trae.page.accounts.actionCheckinAll": "签到并刷新积分",
   "trae.page.accounts.actionSwitch": "切换{line}账号",
   "trae.page.accounts.actionSaveLogin": "保存登录态",
   // 保存的目标只能是「该账号此刻登录着的程序位」；一个都没有时如实报错，不静默跳过。
@@ -60,7 +59,6 @@ export const zh = {
   "trae.page.accounts.mergeSnapshotsFailed": "⚠️ {count} 个快照未能搬运，详见运行日志",
 
   // ---- 签到（全部 / 单个）----
-  "trae.page.accounts.creditsRefreshFailed": "积分刷新失败",
   "trae.page.accounts.noNeedCheckin": "没有需要签到的账号",
   "trae.page.accounts.checkinNotRun": "未执行签到",
   "trae.page.accounts.checkinSkippedDesc": "{name} 已被跳过（今日已签、冷却中或凭据过期）",
@@ -87,7 +85,6 @@ export const zh = {
   "trae.page.accounts.oauthLogin": "OAuth 网页登录",
   "trae.page.accounts.pasteJwt": "粘贴 JWT",
   "trae.page.accounts.pasteJwtTitle": "手动粘贴 Cloud-IDE-JWT（兜底方式，优先用上方网页登录）",
-  "trae.page.accounts.exportTitle": "导出账号备份",
 
   // ---- 首屏空态（`EmptyTraeCard`）----
   // ⚠️ 2026-10-10：原「客户端环境说明行」（`client` / `runtime` / `checkedTodayLabel` /
@@ -126,14 +123,10 @@ export const zh = {
   "trae.page.accounts.table.expiry": "到期",
   "trae.page.accounts.table.programs": "程序位",
   "trae.page.accounts.table.current": "当前",
-  "trae.page.accounts.autoCheckin": "自动签到",
-  "trae.page.accounts.autoCheckinSaving": "正在保存自动签到设置",
-  "trae.page.accounts.skipChecked": "跳过已签到",
-  "trae.page.accounts.skipCheckedAria": "跳过今日已签到账号",
-  "trae.page.accounts.checkinSettingsSaving": "正在保存签到设置",
-  "trae.page.accounts.checkinRefreshAll": "签到并刷新全部账号积分",
-  "trae.page.accounts.autoCheckinSaveFailed": "自动签到设置保存失败",
-  "trae.page.accounts.settingsSaveFailed": "设置保存失败",
+  // ⚠️ 2026-10-23：账号页抽屉的「更多操作」已删除 ⇒ 自动签到 / 跳过已签到的开关文案
+  //   只留在设置页（`trae.page.settings.autoCheckin*`）。这里删除以下已无引用的键：
+  //   autoCheckin / autoCheckinSaving / skipChecked / skipCheckedAria /
+  //   checkinSettingsSaving / checkinRefreshAll / autoCheckinSaveFailed / settingsSaveFailed。
   "trae.page.accounts.switchIncomplete": "切换未完成",
 
   // ---- 签到结果卡 ----

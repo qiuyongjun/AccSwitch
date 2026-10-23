@@ -12,25 +12,27 @@ export const zh = {
   // ---- 页面：账号管理 ----
   // 与原型 `viewAccounts` 的 h1（`buddy-switch-prototype.html:2432`）一致：短标题「账号」。
   "wbAccounts.page.title": "账号",
+  // 作用域改由页头 `ScopeChip` 呈现，副标题只留数量，避免同一行写两遍版本名。
+  "wbAccounts.page.accountsCount": "{n} 个账号",
+  "wbAccounts.page.accountsCountPending": "{n} 个账号 · {m} 个需处理",
+  // ★ 2026-10-23：「需处理」的判据改由 `lib/account-attention.ts` 统一（与「按状态」分桶同源），
+  //   口径是**凭据类**（需重新登录 / 已过期）—— **不含**今日未签到与待领任务：
+  //   那两类有一键按钮可以自动做完，不该变成页头上一个永远不归零的数字。
+  //   这枚数字不点也不跳，判据必须挂在 `title` 上，否则用户只能猜「凭什么算需处理」。
+  "wbAccounts.page.accountsCountPendingHint": "「需处理」= 凭据需重新登录或已过期。今日未签到与待领任务可用上方一键按钮自动完成，不计入这里。",
   "wbAccounts.page.regionSwitchAria": "切换国内版 / 国际版",
   "wbAccounts.page.subtitle": "分别管理国内版与国际版 {product} 账号、积分和签到状态，两版账号库互相隔离。",
   "wbAccounts.page.addTitle": "添加与迁移账号",
   "wbAccounts.page.addSubtitle": "快速接入新账号，或从已有环境恢复",
   "wbAccounts.page.oauthAdd": "OAuth 扫码添加",
-  "wbAccounts.page.exportTitle": "导出账号备份",
   "wbAccounts.page.loadFailed": "加载失败",
   "wbAccounts.page.accountsAria": "{count} 个账号",
-  "wbAccounts.page.autoCheckin": "自动签到",
-  "wbAccounts.page.autoCheckinSaving": "正在保存自动签到设置",
-  "wbAccounts.page.autoTravel": "自动旅行",
-  "wbAccounts.page.autoTravelSaving": "正在保存自动旅行设置",
-  "wbAccounts.page.refreshCredits": "签到并刷新全部账号积分",
   "wbAccounts.page.statusLoggedIn": "已登录: {name}",
   "wbAccounts.page.cliTitle": "CodeBuddy CLI 接入",
   "wbAccounts.page.cliDescEnvOverride": "检测到进程环境变量 CODEBUDDY_AUTH_TOKEN。它会覆盖 settings.json；请先从 Windows 用户或系统环境变量中删除它，再重启本应用与 CodeBuddy CLI。",
-  "wbAccounts.page.cliDescEnvSyncPending": "Windows CLI 认证配置与当前账号 Token 已脱节。点击更新认证后写入最新 Token；当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。",
+  "wbAccounts.page.cliDescEnvSyncPending": "Windows CLI 认证配置与当前账号凭据已脱节。点击更新认证后写入最新凭据；当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。",
   "wbAccounts.page.cliDescEnvMigration": "检测到旧版 Windows helper 配置。接入后会改用 settings.json 的 env.CODEBUDDY_AUTH_TOKEN，不再执行 helper。",
-  "wbAccounts.page.cliDescEnvDefault": "Windows 使用 CodeBuddy settings.json 中的认证 Token；切换或保活刷新后会自动更新。当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。",
+  "wbAccounts.page.cliDescEnvDefault": "Windows 使用 CodeBuddy settings.json 中的认证凭据；切换或保活刷新后会自动更新。当前运行会话不会切换，请由 ACP 重新加载会话或重启 CLI 后生效。",
   "wbAccounts.page.cliDescHelperMigration": "检测到旧版 helper，请先升级；升级前不会将 CLI 切换显示为已验证。",
   "wbAccounts.page.cliDescHelperConfigured": "当前 helper 仍按旧索引读取账号；升级后将按账号 ID 独立切换，账号增删也不会错位。",
   "wbAccounts.page.cliDescDefault": "WorkBuddy 账号与积分功能可正常使用；如需从这里切换 CodeBuddy CLI 账号，点击下方按钮一键接入。",
@@ -125,19 +127,28 @@ export const zh = {
   "wbAccounts.card.tokenExpired": "凭据已过期",
   // 成长任务提示（每号基本只有一次机会，所以值得在卡片上占一枚 chip）。
   // 「可领」优先于「可自动」显示 —— 两者**互斥**，不会同时出现。
+  // ★ 2026-10-23：新增「已领 x/y」「任务已完成」两态 —— 卡上没有标签时用户分不清
+  //   「做完了」「没扫到」「没有成长体系」，故有摘要就至少给一个答案。
   "wbAccounts.card.growthClaimable": "可领 {n}",
   "wbAccounts.card.growthAutoable": "可自动 {n}",
-  "wbAccounts.card.growthTip": "成长任务：可领取 {claimable} 项 · 可自动完成 {autoable} 项（详情 → 任务页签）",
+  "wbAccounts.card.growthProgress": "已领 {claimed}/{total}",
+  "wbAccounts.card.growthDone": "任务已完成",
+  "wbAccounts.card.growthTip": "成长任务：可领取 {claimable} 项 · 可自动完成 {autoable} 项（点击打开任务页签）",
+  "wbAccounts.card.growthTipProgress": "成长任务：已领 {claimed}/{total}，暂无可领或可自动完成的任务（点击打开任务页签）",
+  "wbAccounts.card.growthTipDone": "成长任务：{total} 项已全部领取（点击打开任务页签）",
   // 「优先」——原型 `.acct-chips` 里是**带文字**的 `badge info`（`:2508`），
   // 此前我们只摆一枚星形图标，与原型不同。
   "wbAccounts.card.priority": "优先",
   "wbAccounts.card.priorityTip": "建议优先使用",
-  // 原型 `.acct-chips` 第三条（`:2507`）：`{X} 积分 {N} 天后过期`。
-  // ★ issue #44：金额是窗口内**全部**临期之和、天数取其中最晚那一刻 ⇒ 只能写「天内」。
-  //   照原型写「天后」会把不同批次混成一句话（100 明天到期 + 200 后天到期 ⇒「300 积分 1 天后过期」）。
-  "wbAccounts.card.expiringChip": "{amount} 积分 {days} 天内过期",
+  // ★ 2026-10-23（用户反馈）：只报**最急一批**的金额与到期日 ——「N 积分 7 天内过期」
+  //   既不是最急的，也无法跨账号比较（今天 100 + 6 天后 300 ⇒「400 积分 6 天内过期」）。
+  //   更远的批次留在 tooltip（`expiringTipTitle` / `expiringTipLine`）。
+  "wbAccounts.card.nextExpiryToday": "{amount} 积分今天 {time} 到期",
+  "wbAccounts.card.nextExpiryTomorrow": "{amount} 积分明天 {time} 到期",
+  "wbAccounts.card.nextExpiryDate": "{amount} 积分 {date} {time} 到期",
   "wbAccounts.card.expiringTipTitle": "按到期时间分批（共 {n} 批）",
   "wbAccounts.card.expiringTipLine": "{time} · {amount} 积分",
+  "wbAccounts.card.expiringTipMore": "… 其余 {n} 批",
   "wbAccounts.card.toolsInUse": "使用中 {n} 个工具",
   // 头部「当前登录」徽章（原型 `accountCard` :2502）：绑定任一程序位即为当前登录。
   "wbAccounts.card.currentLogin": "当前登录",
@@ -165,7 +176,6 @@ export const zh = {
   "wbAccounts.card.editGroup": "设置分组",
   "wbAccounts.card.manageAria": "管理账号 {name}",
   "wbAccounts.card.moreActions": "更多账号操作",
-  "wbAccounts.card.refreshToken": "刷新 Token",
   "wbAccounts.card.manualCheckin": "手动签到",
   "wbAccounts.card.editRemark": "编辑备注",
   "wbAccounts.card.deleteAccount": "删除账号",
@@ -182,10 +192,17 @@ export const zh = {
   // 备注编辑器已迁入**共享**抽屉，占位符 / 无障碍标签改由 `shared.drawer.remark.*` 提供；
   // 卡片只保留「更多 → 编辑备注」这个入口（打开抽屉并进入编辑态）。
   "wbAccounts.card.viewDetail": "查看详情",
+  // 卡片可 Tab 聚焦 ⇒ 读屏必须听得出「按 Enter 会做什么」（表格侧对应 `shared.table.openRowAria`）。
+  "wbAccounts.card.focusHint": "按 Enter 打开该账号的详情",
   "wbAccounts.card.selectAria": "选择账号 {name}",
-  // 未检测到的程序位：**点击引导到设置**（§3.3 规则 1），而不是摆一枚点不动的灰按钮。
-  "wbAccounts.card.guideIdeSetting": "未检测到 CodeBuddy IDE，点击前往设置配置 IDE 路径",
-  "wbAccounts.card.guideCliSetting": "未接入 CodeBuddy CLI，点击前往设置完成接入",
+  // 未检测到的程序位：**页面内闭环**（2026-10-23 更改）—— CLI 打开接入弹窗、IDE 只 toast 说明安装方式。
+  // ⚠️ 设置页没有 IDE 路径配置项，也没有 CLI 接入项 ⇒ 旧文案「点击前往设置…」指的是死路。
+  "wbAccounts.card.guideIdeSetting": "未检测到 CodeBuddy IDE，点击查看安装说明",
+  "wbAccounts.card.guideCliSetting": "未接入 CodeBuddy CLI，点击完成接入",
+  // 可点标签的无障碍名（点击 = 打开详情抽屉的对应页签）。
+  "wbAccounts.card.openCheckin": "查看 {name} 的签到详情",
+  "wbAccounts.card.openCredential": "查看 {name} 的凭据详情",
+  "wbAccounts.card.openCredits": "查看 {name} 的积分详情",
   "wbAccounts.card.loadingCredits": "积分查询中…",
   "wbAccounts.card.waitingCredits": "等待积分数据…",
   "wbAccounts.card.creditFailed": "积分查询失败",
@@ -209,13 +226,19 @@ export const zh = {
   "wbAccounts.detail.email": "邮箱",
   "wbAccounts.detail.uid": "UID",
   "wbAccounts.detail.id": "账号 ID",
-  "wbAccounts.detail.tokenExpiry": "Token 到期",
+  // ★ 2026-10-23：原「Token 到期」改为「凭据到期」—— 凭据含义的 Token 一律改用中文，
+  // 与用量额度的「今日 Token」区分（`shared.zh.ts` 同日条目同此约定）。
+  "wbAccounts.detail.tokenExpiry": "凭据到期",
   "wbAccounts.detail.expired": "已过期",
   "wbAccounts.detail.checkedIn": "今日签到",
   /* ★ 2026-10-22：卡片指标行不再显示「最近使用」（让位给临期积分 / 优先标签），
      该信息下沉到抽屉，避免「切号前想知道这个号多久没动过」变成无处可查。 */
   "wbAccounts.detail.lastUsed": "最近使用",
   "wbAccounts.detail.neverUsed": "从未使用",
+  /* ★ 2026-10-23：「凭据」页签改为展示凭据信息（状态 + 到期）⇒ 需要这两条。
+     它们与上面的 `tokenExpiry` 同属于**凭据**，只是不在「概览」的账号信息里。 */
+  "wbAccounts.detail.refreshTokenExpiry": "刷新令牌到期",
+  "wbAccounts.detail.refreshedAt": "最近续期",
 
   // ---- 切换账号弹窗 ----
   "wbAccounts.dialog.switchTitle": "切换到「{name}」",
@@ -372,7 +395,7 @@ export const zh = {
   "wbAccounts.dialog.installTitleUpdate": "更新 CodeBuddy CLI 认证",
   "wbAccounts.dialog.installTitleUpgrade": "升级 CodeBuddy CLI helper",
   "wbAccounts.dialog.installTitleConnect": "接入 CodeBuddy CLI",
-  "wbAccounts.dialog.installDescSettingsA": "将把当前账号的认证 Token 写入",
+  "wbAccounts.dialog.installDescSettingsA": "将把当前账号的认证凭据写入",
   "wbAccounts.dialog.installDescSettingsB": "的 env.CODEBUDDY_AUTH_TOKEN。其他配置会保留；更新只影响后续加载的会话，当前运行会话不会切换。是否继续？",
   "wbAccounts.dialog.installDescOtherA": "{verb}会自动写入 ~/.codebuddy-rotate/helper.cjs 并更新 ~/.codebuddy/settings.json 的 apiKeyHelper 配置，是否继续？",
   "wbAccounts.dialog.installVerbConnect": "接入",
@@ -383,10 +406,6 @@ export const zh = {
   "wbAccounts.toast.autoTravelLoadFail": "自动旅行配置加载失败",
   "wbAccounts.toast.imported": "账号已导入",
   "wbAccounts.toast.importFail": "导入失败",
-  "wbAccounts.toast.autoCheckinSaveFail": "自动签到设置保存失败",
-  "wbAccounts.toast.autoTravelOn": "自动旅行已开启",
-  "wbAccounts.toast.autoTravelDispatching": "正在按官方状态派发或领取",
-  "wbAccounts.toast.autoTravelSaveFail": "自动旅行设置保存失败",
   "wbAccounts.toast.exportSuccess": "导出成功",
   "wbAccounts.toast.exportDetail": "已导出 {count} 个账号。文件含登录 token，等同密码，请勿上传网盘或发送给他人。",
   "wbAccounts.toast.importSuccess": "导入成功",
@@ -396,8 +415,9 @@ export const zh = {
   "wbAccounts.toast.checkinSuccess": "签到成功",
   "wbAccounts.toast.checkedInToday": "今天已签到",
   "wbAccounts.toast.checkinFail": "签到失败",
-  "wbAccounts.toast.tokenRefreshFail": "Token 刷新失败",
-  "wbAccounts.toast.tokenRefreshed": "Token 已刷新",
+  // ★ 2026-10-23：凭据含义的 Token 改用中文「凭据」；动作名已统一为「续期凭据」。
+  "wbAccounts.toast.tokenRefreshFail": "凭据续期失败",
+  "wbAccounts.toast.tokenRefreshed": "凭据已续期",
   "wbAccounts.toast.needRelogin": "需重新登录",
   "wbAccounts.toast.checkinBatchSuccess": "{n} 个签到成功",
   "wbAccounts.toast.checkinBatchAlready": "{n} 个已签到",
@@ -406,20 +426,48 @@ export const zh = {
   "wbAccounts.toast.checkinNone": "无账号需要签到",
   "wbAccounts.toast.checkinFailBatch": "签到失败",
   "wbAccounts.toast.checkinDone": "签到完成",
-  "wbAccounts.toast.batchCheckinFail": "批量签到失败",
-  "wbAccounts.toast.creditsRefreshed": "积分到期情况已刷新",
+  "wbAccounts.toast.checkinSkipped": "跳过 {n} 个今日已签到",
+  // 批处理被「取消」后**没轮到**的账号数。与「失败」分开说：它们没失败，只是没发请求，
+  // 混进失败会让「只重试失败项」把未处理的漏掉（重试 action 已同时覆盖两者）。
+  "wbAccounts.toast.batchCancelled": "已取消，{n} 个未处理",
+  "wbAccounts.toast.batchCancelledToast": "已取消批量操作",
+  "wbAccounts.toast.quickRefreshDone": "一键刷新完成",
+  "wbAccounts.toast.quickRefreshScope": "已刷新 {n} 个账号：账号信息 · 积分 · 旅行 · 今日 Token · 签到状态 · 任务完成情况",
+  "wbAccounts.toast.quickRefreshScopeNoTasks": "已刷新 {n} 个账号：账号信息 · 积分 · 旅行 · 今日 Token · 签到状态",
+  "wbAccounts.toast.quickRefreshTasksFailed": "已刷新 {n} 个账号，但任务完成情况刷新失败",
+  "wbAccounts.toast.batchRefreshDesc": "已对 {n} 个所选账号执行",
+  // ★「今日 Token」是**按整版本聚合**的接口（`get_account_token_today`），没有「只算这几个
+  //   账号」的入参 ⇒ 勾了 3 个也会重算全部。此前它复用 `batchRefreshDesc`，等于把这件
+  //   事说成「按所选执行」，与批量「成长摘要」自己写下的边界自相矛盾。这里如实说明范围。
+  "wbAccounts.toast.batchRefreshTokensRegion": "已重算本版本全部账号的今日 Token（该接口按整版本聚合，无法只算所选）",
+  // 批量的「刷新成长任务状态」（仅国内版注入）：对所选账号**逐个**强制重扫。
+  "wbAccounts.toast.batchGrowthDone": "成长任务状态已刷新",
+  "wbAccounts.toast.batchGrowthFail": "成长任务状态刷新失败",
+  "wbAccounts.toast.batchGrowthDesc": "已刷新 {n} 个所选账号，{failed} 个失败",
+  "wbAccounts.toast.batchTokenDone": "凭据续期完成",
+  "wbAccounts.toast.batchTokenFail": "凭据续期失败",
+  "wbAccounts.toast.batchTokenRenewed": "已续期 {n} 个",
+  "wbAccounts.toast.batchTokenRelogin": "需重新登录 {n} 个",
+  "wbAccounts.toast.batchTokenFailed": "续期失败 {n} 个",
+  "wbAccounts.toast.completeNone": "所有账号都没有可完成的任务",
+  "wbAccounts.toast.completeSelectedNone": "所选账号都没有可完成的任务",
+  "wbAccounts.toast.completeDone": "任务完成",
+  "wbAccounts.toast.completeDoneFail": "任务完成失败",
+  "wbAccounts.toast.completeSummary": "{n} 个账号完成，领取 {credit} 积分",
+  "wbAccounts.toast.completeSkipped": "跳过 {n} 个无可完成任务",
+  "wbAccounts.toast.completeFailed": "{n} 个失败",
   "wbAccounts.toast.switchCliLoading": "正在切换 CodeBuddy CLI…",
   "wbAccounts.toast.switchCliLoadingDesc": "正在将默认账号设为 {name}",
   "wbAccounts.toast.switchCliUpdated": "CodeBuddy CLI 默认账号已更新",
   "wbAccounts.toast.configUpdated": "配置已更新",
   "wbAccounts.toast.switchCliFail": "CodeBuddy CLI 切换失败",
   "wbAccounts.toast.switchIdeLoading": "正在切换 CodeBuddy IDE…",
-  "wbAccounts.toast.switchIdeLoadingDesc": "将注入凭证并重启 CodeBuddy IDE",
+  "wbAccounts.toast.switchIdeLoadingDesc": "将注入凭据并重启 CodeBuddy IDE",
   "wbAccounts.toast.switchIdeUpdated": "CodeBuddy IDE 已切换",
   "wbAccounts.toast.switchIdeFail": "CodeBuddy IDE 切换失败",
   // 编辑器内 CodeBuddy 插件（VS Code / JetBrains）：四个程序位共用一套文案（`{client}` 插值）。
   "wbAccounts.toast.switchPluginLoading": "正在切换 {client} 账号…",
-  "wbAccounts.toast.switchPluginLoadingDesc": "将注入凭证并重启 {client}",
+  "wbAccounts.toast.switchPluginLoadingDesc": "将注入凭据并重启 {client}",
   "wbAccounts.toast.switchPluginUpdated": "{client} 已切换",
   "wbAccounts.toast.switchPluginFail": "{client} 切换失败",
   "wbAccounts.toast.cliIntegrationUpdated": "CodeBuddy CLI 接入已更新",
@@ -430,9 +478,8 @@ export const zh = {
   "wbAccounts.toast.groupSaved": "分组已保存",
   "wbAccounts.toast.groupCleared": "已移出分组",
   "wbAccounts.toast.groupSaveFail": "分组保存失败",
-  // P4：未检测到的程序位点击后，引导用户去设置页完成配置。
-  "wbAccounts.toast.guideIdeSetting": "请到设置页配置 CodeBuddy IDE 路径",
-  "wbAccounts.toast.guideCliSetting": "请到设置页完成 CodeBuddy CLI 接入",
+  // P4：未检测到的程序位点击后的说明（页面内闭环：IDE 只 toast，CLI 打开接入弹窗）。
+  "wbAccounts.toast.guideIdeSetting": "未检测到 CodeBuddy IDE：请先安装并登录 CodeBuddy IDE，装好后这里会自动变为可切换",
   "wbAccounts.page.accounts": "账号",
 
   // =====================================================================
@@ -464,10 +511,10 @@ export const zh = {
   "wbAccounts.table.account": "账号",
   "wbAccounts.table.status": "状态",
   "wbAccounts.table.credits": "积分",
-  "wbAccounts.table.todayTokens": "今日 Token",
-  "wbAccounts.table.expiry": "到期",
+  // ★ 2026-10-23：`wbAccounts.table.todayTokens` / `.expiry` / `.current` 已删除 ——
+  //   列表随卡片瘦身（今日用量在统计页 / 详情抽屉；到期不再成列；「当前登录」直接复用
+  //   `wbAccounts.card.currentLogin`）。见 P4-TOOLBAR-ARCH §1.8。
   "wbAccounts.table.programs": "程序位",
-  "wbAccounts.table.current": "当前",
 
   // =====================================================================
   // 客户端限流台账（账号 × 模型 × 恢复时刻，**只读**观测）

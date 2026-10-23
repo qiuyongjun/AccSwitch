@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -87,82 +88,98 @@ export function AccountTable<T>({
   renderActions,
 }: AccountTableProps<T>) {
   return (
-    <div className="overflow-x-auto rounded-[12px] border border-border bg-card">
-      <table className="w-full border-collapse text-[12.5px]">
-        <thead>
-          <tr className="border-b border-border text-muted-foreground">
-            <th scope="col" className="sticky top-0 z-[1] w-10 whitespace-nowrap bg-card-2 px-3 py-2.5 text-left text-[11.5px] font-medium">
-              <Checkbox
-                checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                onCheckedChange={(checked) => onToggleAll(checked === true)}
-                aria-label={selectAllLabel}
-              />
-            </th>
-            {columns.map((column) => (
-              <th
-                key={column.key}
-                scope="col"
-                style={column.width ? { width: column.width } : undefined}
-                className={cn("sticky top-0 z-[1] bg-card-2 px-3 py-2.5 text-[11.5px] font-medium", column.align === "right" ? "text-right" : "text-left")}
-              >
-                {column.header}
+    /* ★ 2026-10-23：状态列复用卡片的徽章（`AccountStatusBadge` / `GrowthHintBadge` /
+       `TravelStatusBadge`），后两者带 tooltip ⇒ 表格壳提供一次 provider
+       （Radix Tooltip 的 Root 必须在 provider 内，否则渲染期抛错）。 */
+    <TooltipProvider>
+      <div className="overflow-x-auto rounded-[12px] border border-border bg-card">
+        <table className="w-full border-collapse text-[12.5px]">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th scope="col" className="sticky top-0 z-[1] w-10 whitespace-nowrap bg-card-2 px-3 py-2.5 text-left text-[11.5px] font-medium">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                  onCheckedChange={(checked) => onToggleAll(checked === true)}
+                  aria-label={selectAllLabel}
+                />
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const key = rowKey(row);
-            const selected = selectedIds.has(key);
-            return (
-              <tr
-                key={key}
-                tabIndex={0}
-                aria-label={openRowLabel(row)}
-                onClick={(event) => {
-                  /* 行尾「更多」按钮不算「点行」：点它不该顺带打开详情。
-                     ⚠️ 用**行自身的 onClick 里判断**而不是给动作格再挂一个 `stopPropagation` ——
-                     表格行的可点区预算只有 2 个（勾选格 + 行本身，见 P4 门禁），
-                     多一个 onClick 处理器就会被那条守门判红。 */
-                  if (event.target instanceof Element && event.target.closest("[data-row-actions]")) return;
-                  onOpen(row);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onOpen(row);
-                }}
-                className={cn(
-                  "cursor-pointer border-b border-border/60 last:border-0 hover:bg-card-2 focus-visible:bg-card-2 focus-visible:outline-none",
-                  isCurrent?.(row) && "bg-primary/[0.07]",
-                )}
-              >
-                {/* 可点区 1：勾选框（阻止冒泡，避免顺带打开详情）。 */}
-                <td className="px-3 py-2.5 align-middle text-[11px]" onClick={(event) => event.stopPropagation()}>
-                  <Checkbox
-                    checked={selected}
-                    onCheckedChange={() => onToggleSelect(row)}
-                    aria-label={selectRowLabel(row)}
-                  />
-                </td>
-                {/* 可点区 2：行本身（在上面的 <tr onClick>）。程序位列由列定义渲染成只读徽标。 */}
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className={cn("px-3 py-2.5 align-middle text-[11px]", column.align === "right" ? "text-right" : "text-left")}
-                  >
-                    {column.render(row)}
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  style={column.width ? { width: column.width } : undefined}
+                  className={cn("sticky top-0 z-[1] bg-card-2 px-3 py-2.5 text-[11.5px] font-medium", column.align === "right" ? "text-right" : "text-left")}
+                >
+                  {column.header}
+                </th>
+              ))}
+              {/* 动作列也要有表头格：否则表头的 `bg-card-2` 在此处断掉，右上角露出一块白色缺口。 */}
+              {renderActions ? (
+                <th scope="col" className="sticky top-0 z-[1] w-10 bg-card-2 px-2 py-2.5" />
+              ) : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const key = rowKey(row);
+              const selected = selectedIds.has(key);
+              return (
+                <tr
+                  key={key}
+                  tabIndex={0}
+                  aria-label={openRowLabel(row)}
+                  onClick={(event) => {
+                    /* 行尾「更多」按钮不算「点行」：点它不该顺带打开详情。
+                       ⚠️ 用**行自身的 onClick 里判断**而不是给动作格再挂一个 `stopPropagation` ——
+                       表格行的可点区预算只有 2 个（勾选格 + 行本身，见 P4 门禁），
+                       多一个 onClick 处理器就会被那条守门判红。 */
+                    /* ⚠️ 菜单内容被 portal 到 `body`，`data-row-actions` 格**不是**它的 DOM 祖先
+                       ⇒ 还须认菜单内容根上的 `data-no-account-open`（见 `ui/dropdown-menu.tsx`）。 */
+                    if (
+                      event.target instanceof Element &&
+                      event.target.closest("[data-row-actions], [data-no-account-open]")
+                    ) {
+                      return;
+                    }
+                    onOpen(row);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") onOpen(row);
+                  }}
+                  className={cn(
+                    "cursor-pointer border-b border-border/60 last:border-0 hover:bg-card-2 focus-visible:bg-card-2 focus-visible:outline-none",
+                    isCurrent?.(row) && "bg-primary/[0.07]",
+                  )}
+                >
+                  {/* 可点区 1：勾选框（阻止冒泡，避免顺带打开详情）。 */}
+                  <td className="px-3 py-2.5 align-middle text-[11px]" onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      checked={selected}
+                      onCheckedChange={() => onToggleSelect(row)}
+                      aria-label={selectRowLabel(row)}
+                    />
                   </td>
-                ))}
-                {/* 行尾动作：标记 `data-row-actions`，由上面的行 onClick 识别（见那里的注释）。 */}
-                {renderActions ? (
-                  <td data-row-actions className="w-10 px-2 py-1.5 text-right align-middle">
-                    {renderActions(row)}
-                  </td>
-                ) : null}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                  {/* 可点区 2：行本身（在上面的 <tr onClick>）。程序位列由列定义渲染成只读徽标。 */}
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={cn("px-3 py-2.5 align-middle text-[11px]", column.align === "right" ? "text-right" : "text-left")}
+                    >
+                      {column.render(row)}
+                    </td>
+                  ))}
+                  {/* 行尾动作：标记 `data-row-actions`，由上面的行 onClick 识别（见那里的注释）。 */}
+                  {renderActions ? (
+                    <td data-row-actions className="w-10 px-2 py-1.5 text-right align-middle">
+                      {renderActions(row)}
+                    </td>
+                  ) : null}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </TooltipProvider>
   );
 }

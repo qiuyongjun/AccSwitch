@@ -57,16 +57,17 @@ export const zh = {
   "topbar.theme": "切换明暗主题",
   "topbar.appMenu": "应用设置",
 
-  // ---- 页头作用域副标题（redesign §3.2：页头统一「作用域 · 说明」+ 右侧 scope-chip）----
+  // ---- 页头作用域副标题（redesign §3.2：页头统一「作用域 Chip + 说明」同排）----
   // ⚠️ 只读展示：切作用域的唯一入口在顶栏，页内不放区域切换器（区域已并入 L1 作用域）。
-  "pageHead.overview.signedIn": "{scope} · 当前登录 {name}",
-  "pageHead.overview.signedOut": "{scope} · 未登录",
-  "pageHead.accounts": "{scope} · {n} 个账号",
-  "pageHead.accounts.pending": "{scope} · {n} 个账号 · {m} 个需处理",
-  "pageHead.usage": "{scope} · Token 与积分统计合并到一个工作台",
-  "pageHead.gateway": "{scope} · 把账号池暴露为 OpenAI / Anthropic 兼容接口",
-  "pageHead.settings": "{scope} · 按主题分区，不再是一屏长滚动",
-  "pageHead.sessions": "{scope} · 同一份会话在各账号里的副本 —— 谁落后、谁分叉、同步给谁",
+  "pageHead.overview.signedIn": "当前登录 {name}",
+  "pageHead.overview.signedOut": "未登录",
+  // 作用域统一由页头 `ScopeChip` 呈现；副标题不再重复写 {scope}，避免同一信息出现两遍。
+  "pageHead.accounts": "{n} 个账号",
+  "pageHead.accounts.pending": "{n} 个账号 · {m} 个需处理",
+  "pageHead.usage": "Token 与积分统计合并到一个工作台",
+  "pageHead.gateway": "把账号池暴露为 OpenAI / Anthropic 兼容接口",
+  "pageHead.settings": "按主题分区，不再是一屏长滚动",
+  "pageHead.sessions": "同一份会话在各账号里的副本 —— 谁落后、谁分叉、同步给谁",
 
   // ---- 平台能力标签（概览「能力」卡；取值来自注册表 `Capability`）----
   "capability.checkin": "自动签到",

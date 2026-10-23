@@ -956,7 +956,7 @@ export interface ScheduleConfig {
   travel_times: string[];
   /** 活跃地图上报的时点。 */
   activity_times: string[];
-  /** token 保活的时点。 */
+  /** 凭据保活的时点。 */
   keepalive_times: string[];
   /** 开学季任务的时点。 */
   school_times: string[];
@@ -993,7 +993,7 @@ export interface ScheduleConfig {
   travel_enabled: boolean;
   /** 活跃地图上报开关。 */
   activity_enabled: boolean;
-  /** token 保活开关。 */
+  /** 凭据保活开关。 */
   keepalive_enabled: boolean;
   /** 开学季任务开关。 */
   school_enabled: boolean;

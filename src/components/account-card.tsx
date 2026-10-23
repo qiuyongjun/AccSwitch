@@ -1,4 +1,4 @@
-import { Ban, Check, CircleCheck, Coins, Loader2, PlaneTakeoff, QrCode, Sparkles, Trophy } from "lucide-react";
+import { Ban, Check, CircleCheck, Coins, Loader2, PlaneTakeoff, QrCode } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 // P0 · 程序位表（含「计划新增 / 尚未支持」态）—— 展示侧镜像，与后端 `programs.rs` 逐字对齐。
@@ -14,9 +14,11 @@ import { ENCRYPTED_CREDENTIAL_REASON } from "@/lib/api";
 import { compactTokens, exactTokens } from "@/components/usage/format";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
-import { summarizeExpiring } from "@/lib/credit-expiry";
+import { EXPIRY_TIP_LIMIT, expiryDay, isExpiryUrgent, summarizeExpiry, type ExpirySummary } from "@/lib/credit-expiry";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
 import { useT, type Translate } from "@/lib/i18n";
+import { CheckinIcon, GrowthTaskIcon } from "@/lib/semantic-icons";
+import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import type { AccountMeta, AccountTokenTodayEntry, CreditExpiry, TravelStatus } from "@/lib/types";
 import type { GrowthTaskSummary } from "@/lib/api";
 
@@ -220,6 +222,76 @@ export function formatCreditExpiry(ts: number | null, t: Translate): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * 账号积分指标的**唯一取数口径** —— 卡片指标行与表格「积分」列共用。
+ *
+ * - `current`：剩余积分（`credit.totalRemaining`）；拿不到 ⇒ `null`（渲染「—」，**绝不当 0**）
+ * - `total`：总额（`resources[].total` 汇总）；没有资源包 ⇒ `null`（只显示剩余，不编一个分母）
+ * - `expiry`：最近到期（`summarizeExpiry`，`batches[0]` 是最急一批）
+ *
+ * ★ 2026-10-23：表格此前只渲染 `totalRemaining ?? 0` —— 同一账号在卡片上是
+ * 「4,710.14/4,762 · 448.14 积分 7 天内过期 · 优先」，在列表里却只剩一个数，
+ * 缺数据时还显示成 0。两处改读同一份取值，口径不可能再漂移。
+ */
+export interface AccountCreditMetric {
+  current: number | null;
+  total: number | null;
+  expiry: ExpirySummary | null;
+}
+
+export function creditMetricValues(credit?: CreditExpiry): AccountCreditMetric {
+  const resources = credit?.ok ? credit.resources ?? [] : [];
+  return {
+    current: credit?.ok && typeof credit.totalRemaining === "number" ? credit.totalRemaining : null,
+    total:
+      credit?.ok && resources.length > 0
+        ? resources.reduce((sum, resource) => sum + (Number.isFinite(resource.total) ? resource.total : 0), 0)
+        : null,
+    expiry: credit?.ok ? summarizeExpiry(resources) : null,
+  };
+}
+
+/** 到期明细的**唯一文案来源**：卡片 tooltip 与表格 `title` 共用（最急的一批排第一）。 */
+export function expiryTooltipLines(
+  expiry: ExpirySummary,
+  t: Translate,
+): { title: string; lines: string[]; more: string | null } {
+  const shown = expiry.batches.slice(0, EXPIRY_TIP_LIMIT);
+  const rest = expiry.batches.length - shown.length;
+  return {
+    title: t("wbAccounts.card.expiringTipTitle", { n: expiry.batches.length }),
+    lines: shown.map((batch) =>
+      t("wbAccounts.card.expiringTipLine", {
+        time: formatAbsoluteTime(batch.expireAt),
+        amount: formatCredits(batch.amount),
+      }),
+    ),
+    more: rest > 0 ? t("wbAccounts.card.expiringTipMore", { n: rest }) : null,
+  };
+}
+
+/**
+ * 卡片 / 列表共用的**到期文案**：`120 积分今天 14:30 到期` / `明天` / `10-27`。
+ *
+ * 只讲最急一批 —— 用户要的是「这个号该不该现在先用掉」，7 天窗口内的合计
+ * 既不可比也说不出先后（见 `credit-expiry.ts` 文件头）。逐批明细在 tooltip。
+ *
+ * 带时分是因为「明天 00:00」等于今天就得烧掉，「明天 20:00」还能拖到明天白天。
+ */
+export function nextExpiryLabel(
+  expiry: ExpirySummary | null | undefined,
+  t: Translate,
+  now: number = Date.now(),
+): string {
+  const next = expiry?.batches[0];
+  if (!next) return "";
+  const day = expiryDay(next.expireAt, now);
+  const amount = formatCredits(next.amount);
+  if (day.kind === "today") return t("wbAccounts.card.nextExpiryToday", { amount, time: day.time });
+  if (day.kind === "tomorrow") return t("wbAccounts.card.nextExpiryTomorrow", { amount, time: day.time });
+  return t("wbAccounts.card.nextExpiryDate", { amount, date: day.text, time: day.time });
+}
+
 export function accountIdentity(account: AccountMeta): string {
   // 先归一再看：脏值（对象）会让下面的 `split` 直接抛 TypeError，
   // 而渲染期的 TypeError 会顺着错误边界外的路径把整棵树带走（issue #2）。
@@ -271,7 +343,7 @@ export function identityDisplayName(
 }
 
 /**
- * 卡片徽章的**局部微调**。
+ * 账号徽章的**局部微调**（卡片与表格共用，几何只在这里定义一次）。
  *
  * ⚠️ 这里**不再**覆盖圆角 / 字号 / 内边距：`Badge` 基础样式已经逐值对齐原型 `.badge`
  * （圆角 6 / 字号 10.5 / 内边距 0 7 / 高 20 / 图标 11）。此前这里写 `rounded-md px-1.5
@@ -279,8 +351,13 @@ export function identityDisplayName(
  * 于是卡片徽章比原型圆 4px、字号大 0.5px、内边距少 1px（实测 10px/11px/6px）。
  * 只留 `border-0`：原型 `.badge` 没有边框，而 `Badge` 基础样式带 `border`（变体给的是
  * `border-transparent`）—— 1px 透明边框不显色却占位，会让徽章比原型宽 2px。
+ *
+ * ★ 2026-10-23：导出给表格列复用 —— 列表此前另写 `rounded-md px-1.5 text-[11px]`，
+ * 同一枚徽章在两个视图里长得不一样。
  */
-const chipClass = "border-0 px-[7px] font-medium";
+export const ACCOUNT_CHIP_CLASS = "border-0 px-[7px] font-medium";
+
+const chipClass = ACCOUNT_CHIP_CLASS;
 
 /**
  * 旅行标签（**带文字**）。
@@ -345,8 +422,221 @@ function travelTooltip(status: TravelStatus, t: Translate): string {
   return t("wbAccounts.card.notTraveled");
 }
 
-/** 按旅行状态渲染标签：无 Buddy / 未旅行 / 旅行中 / 已结束。 */
-function travelChip(status: TravelStatus | undefined) {
+/**
+ * 账号**状态标签**的唯一口径 —— 卡片 chips 行与表格「状态」列共用。
+ *
+ * 照原型 `accountStatus()`（`buddy-switch-prototype.html:2390-2395`）**互斥的一枚**：
+ * 凭据已过期 → 需重新登录 → 今日未签到 →（否则）已签到。
+ * 此前表格自己写了一份「已签到 + 需重新登录」并列的组合，同一账号会同时挂两个
+ * 互相矛盾的标签 ⇒ 收进这里，两个视图不可能再分叉。
+ *
+ * ★ 2026-10-23：标签**可点**跳详情抽屉的对应页签 —— 状态标签回答的就是「这号哪里不对」，
+ * 点进去直接落在能解释它的那一页（凭据类 → `credential`，签到类 → `checkin`），
+ * 而不是先落到「概览」再让用户自己找。页签不可用时由 `resolveDrawerTab` 回退。
+ *
+ * ★ 2026-10-23：签到两态（已签到 / 今日未签到）**共用** `CheckinIcon`，状态由文字与
+ * 底色（success / warning）区分 —— 同一概念在页头、批量条、卡片、菜单里是同一枚图标，
+ * 见 `lib/semantic-icons.ts`。凭据两态不用图标：文案本身已足够自明。
+ */
+export type AccountStatusKind = "expired" | "needRelogin" | "notCheckedIn" | "checkedIn";
+
+export function accountStatusKind(account: AccountMeta, todayCheckedIn?: boolean): AccountStatusKind | null {
+  if (typeof account.expiresAt === "number" && account.expiresAt < Date.now()) return "expired";
+  if (account.needsRelogin) return "needRelogin";
+  if (todayCheckedIn === false) return "notCheckedIn";
+  if (todayCheckedIn === true) return "checkedIn";
+  return null;
+}
+
+export function AccountStatusBadge({
+  account,
+  todayCheckedIn,
+  onOpen,
+}: {
+  account: AccountMeta;
+  todayCheckedIn?: boolean;
+  /**
+   * 点击打开详情抽屉的对应页签（凭据 / 签到）。不传 ⇒ 只读文本。
+   *
+   * ⚠️ 可点形态必须带 `data-no-account-open`：表格行的 `onClick` 只排除
+   * `[data-row-actions]` / `[data-no-account-open]`，缺了它「点标签跳签到」会被
+   * 行点击覆盖成「打开概览」。
+   */
+  onOpen?: (tab: DrawerTab) => void;
+}) {
+  const t = useT();
+  const kind = accountStatusKind(account, todayCheckedIn);
+  if (!kind) return null;
+
+  const credentialSide = kind === "expired" || kind === "needRelogin";
+  const tab: DrawerTab = credentialSide ? "credential" : "checkin";
+  const variant: "destructive" | "warning" | "success" = credentialSide
+    ? "destructive"
+    : kind === "notCheckedIn"
+      ? "warning"
+      : "success";
+  const content =
+    kind === "expired" ? (
+      t("wbAccounts.card.tokenExpired")
+    ) : kind === "needRelogin" ? (
+      t("wbAccounts.card.needRelogin")
+    ) : kind === "notCheckedIn" ? (
+      <>
+        <CheckinIcon /> {t("wbAccounts.card.notCheckedIn")}
+      </>
+    ) : (
+      <>
+        <CheckinIcon /> {t("wbAccounts.card.checkedIn")}
+      </>
+    );
+  const ariaLabel = t(
+    credentialSide ? "wbAccounts.card.openCredential" : "wbAccounts.card.openCheckin",
+    { name: accountDisplayName(account) },
+  );
+
+  return (
+    <Badge
+      asChild={Boolean(onOpen)}
+      variant={variant}
+      className={cn(chipClass, onOpen && "cursor-pointer transition-opacity hover:opacity-85")}
+      aria-label={onOpen ? ariaLabel : undefined}
+    >
+      {onOpen ? (
+        <button type="button" data-no-account-open onClick={() => onOpen(tab)}>
+          {content}
+        </button>
+      ) : (
+        content
+      )}
+    </Badge>
+  );
+}
+
+/**
+ * 成长任务提示标签 —— 卡片与表格共用，**四态**（2026-10-23 用户反馈后扩展）。
+ *
+ * | 状态 | 渲染 | 强调 |
+ * |:--|:--|:--|
+ * | `claimable > 0` / `autoable > 0` | 徽章「可领 N」/「可自动 N」 | **warning 底**（同「今日未签到」——提醒去操作） |
+ * | 有任务且 `claimed >= total` | 徽章「任务已完成」 | **success 底**（同「已签到」） |
+ * | 有任务、`claimed < total`、暂无可做项 | 徽章「已领 x/y」 | **success 底**（与上一态同底，只有文字不同） |
+ * | 扫描失败 / 没扫到 / `total = 0` | **不渲染** | — |
+ *
+ * 四态**共用** `GrowthTaskIcon`（`lib/semantic-icons.ts`）：图标只回答「这是什么」，
+ * 「做到哪一步 / 要不要动手」交给文字与底色 —— 此前四态用了 `Trophy` / `Sparkles` /
+ * 裸 `Check` / 无图标四种画法，读者得猜它们是不是同一件事。
+ *
+ * 为什么把「已完成」也显示出来：此前 `idle` 整枚不渲染，于是「卡上没有标签」
+ * 同时意味着「已完成」「没扫到」「该账号没有成长体系」—— 用户读不出答案
+ * （2026-10-23 反馈原话：「是否有可以完成的任务 / 是否完成所有任务 / 是否有待领取任务」）。
+ * 现在用 `ok` + `total` + `claimed` 把三种状态分开，只剩「失败 / 不支持」仍不渲染。
+ *
+ * 为什么颜色只分两档（2026-10-23 用户定稿）：底色表达「**要不要动手**」——
+ * 有事可做 ⇒ warning（与「今日未签到」同一提醒语义）；无需行动 ⇒ success（与「已签到」同形）。
+ * 「做到哪一步」交给文字（可领 N / 可自动 N / 已领 x/y / 任务已完成），
+ * 而不是再引入第三、第四种颜色 —— 否则一屏里会出现四个相近的色块，反而分不清轻重。
+ *
+ * 两条纪律：
+ * 1. `claimable > 0` 与 `autoable > 0` **互斥**（后端保证），否则同一个任务会在卡上挂两个数；
+ * 2. 绝不写「可领 0」/「已完成 0/0」—— 没有任务摘要就不占位。
+ */
+export function GrowthHintBadge({
+  summary,
+  onOpen,
+}: {
+  summary?: GrowthTaskSummary | null;
+  /** 点击打开详情抽屉的「任务」页签；不传 ⇒ 只读展示。 */
+  onOpen?: () => void;
+}) {
+  const t = useT();
+  // 扫描失败（凭证失效 / 企业号无成长体系）与还没扫到都不占位：
+  // 不能把「不知道」写成「已完成」。
+  if (!summary?.ok || summary.total <= 0) return null;
+
+  const { total, claimed, claimable, autoable } = summary;
+  const actionable = claimable > 0 || autoable > 0;
+  const done = claimed >= total;
+
+  const tip = actionable
+    ? t("wbAccounts.card.growthTip", { claimable, autoable })
+    : done
+      ? t("wbAccounts.card.growthTipDone", { total })
+      : t("wbAccounts.card.growthTipProgress", { claimed, total });
+
+  let chip;
+  if (actionable) {
+    /* ★ 图标不区分「可领 / 可自动」（2026-10-23 统一）：四态共用 `GrowthTaskIcon`，
+       区别交给文案与底色 —— 此前「可自动」用 `Sparkles`，而 `Sparkles` 同时在
+       菜单里代表「刷新签到状态」，同一枚图标两个概念，用户无从推断。
+       详见 `lib/semantic-icons.ts`。 */
+    const label =
+      claimable > 0
+        ? t("wbAccounts.card.growthClaimable", { n: claimable })
+        : t("wbAccounts.card.growthAutoable", { n: autoable });
+    chip = (
+      <Badge
+        asChild={Boolean(onOpen)}
+        variant="warning"
+        className={cn(chipClass, onOpen && "cursor-pointer transition-opacity hover:opacity-85")}
+        aria-label={tip}
+      >
+        {onOpen ? (
+          <button type="button" data-no-account-open onClick={onOpen}>
+            <GrowthTaskIcon />
+            {label}
+          </button>
+        ) : (
+          <>
+            <GrowthTaskIcon />
+            {label}
+          </>
+        )}
+      </Badge>
+    );
+  } else {
+    const label = done
+      ? t("wbAccounts.card.growthDone")
+      : t("wbAccounts.card.growthProgress", { claimed, total });
+    /* 两种非行动态**共用** `success` 底（同「已签到」）：底色只表达「无需行动」，
+       做到哪一步由文字区分 —— 若两态各用一种底色（如绿 / 琥珀），会被读成
+       两种不同的紧急度。图标同理共用 `GrowthTaskIcon`（此前「已完成」是裸 `Check`，
+       另三态里又是 `Trophy` / `Sparkles`，四个状态三枚图标）。 */
+    const content = (
+      <>
+        <GrowthTaskIcon />
+        {label}
+      </>
+    );
+    chip = (
+      <Badge
+        asChild={Boolean(onOpen)}
+        variant="success"
+        className={cn(chipClass, onOpen && "cursor-pointer transition-opacity hover:opacity-85")}
+        aria-label={tip}
+      >
+        {onOpen ? (
+          <button type="button" data-no-account-open onClick={onOpen}>
+            {content}
+          </button>
+        ) : (
+          content
+        )}
+      </Badge>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{chip}</TooltipTrigger>
+      <TooltipContent side="top">
+        <div className="whitespace-nowrap">{tip}</div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** 按旅行状态渲染标签：无 Buddy / 未旅行 / 旅行中 / 已结束（卡片与表格共用）。 */
+export function TravelStatusBadge({ status }: { status?: TravelStatus }) {
   const t = useT();
   if (!status) return null;
   switch (status.label) {
@@ -378,7 +668,7 @@ interface Props {
   /**
    * 单项刷新（积分 / 今日 Token / 签到状态 / 凭据状态）。
    *
-   * 不传 ⇒ 菜单退回旧的单条「刷新 Token」项（向后兼容：页面还没接上时行为不变）。
+   * 不传 ⇒ 菜单退回旧的单条「续期凭据」项（向后兼容：页面还没接上时行为不变）。
    * 传了 ⇒ 渲染「刷新」分组，四项各自独立（理由见 `lib/account-refresh.ts` 文件头）。
    */
   onRefreshPart?: (a: AccountMeta, kind: AccountRefreshKind) => void;
@@ -395,15 +685,32 @@ interface Props {
   /** 今日旅行状态（undefined=查询中/未知，不渲染标签） */
   travelStatus?: TravelStatus;
   /**
-   * 成长任务摘要（「可领 N」/「可自动 N」提示标签）。
+   * 成长任务摘要（「可领 N」/「可自动 N」/「已领 x/y」/「任务已完成」）。
    *
-   * `undefined` = 还没扫到（**不挂标签**，绝不写「可领 0」）；`idle` 为真同样不挂
-   * ——「没有可领也没有可自动」不该在卡片上占一个位置。
+   * `undefined` = 还没扫到、`ok:false` = 扫描失败、`total = 0` = 该账号没有任务
+   * ⇒ 三种情况都**不挂标签**，绝不写「可领 0」或假的「已完成」。
    *
    * ⚠️ 这个值来自**批量扫描**（`growthTasksScan`），不是每张卡各查一次：
    * 每卡一次 = 打开账号页就打 N 次上游，见 `docs/specs/GROWTH-TASKS.md` §6。
    */
   growthHint?: GrowthTaskSummary | null;
+  /**
+   * 点击标签 → 打开详情抽屉的**指定页签**。
+   *
+   * 适用：成长任务标签（`tasks`）、积分指标与到期提示（`credits`）、状态标签（`checkin` / `credential`）。
+   * 不传 ⇒ 这些位置只读（tooltip 仍说明详情去哪看）。
+   *
+   * ⚠️ 页签不可用时由抽屉的 `resolveDrawerTab` 回退，卡片不重复判一遍可用性。
+   */
+  onOpenTab?: (a: AccountMeta, tab: DrawerTab) => void;
+  /**
+   * 「更多 → 完成任务」：对该账号一键完成成长任务。
+   *
+   * 不传 ⇒ 菜单不出现该项（成长任务只有 WB 国内版有）。
+   */
+  onCompleteTasks?: (a: AccountMeta) => void | Promise<void>;
+  /** 本账号正在续期凭据（菜单里的「续期凭据」转圈并禁止重复点击）。 */
+  refreshingToken?: boolean;
   credit?: CreditExpiry;
   creditLoading?: boolean;
   creditPriority?: boolean;
@@ -452,10 +759,14 @@ interface Props {
    */
   onAddPlaintextAccount?: () => void;
   /**
-   * 未检测到的程序位（IDE / CLI）点击后**引导到设置**对应子项（PLAN §3.3 规则 1）。
+   * 未检测到的程序位（IDE / CLI）点击后的**页面内**引导（2026-10-23 更改）。
    *
-   * 为什么不就地禁用：一枚点不动的灰按钮**不告诉用户下一步做什么**；
-   * 引导到设置页才能让「未检测到」变成可解决的问题。
+   * 此前这个回调叫「引导到设置」（`settings?section=diagnostics`），但设置页里
+   * **既不配置 IDE 路径、也没有 CLI 接入项** —— 跳过去解决不了问题，只是把用户
+   * 从「不知道点哪里」换成「不知道在设置页找哪一条」。现在由调用方决定：
+   * CLI ⇒ 打开接入确认弹窗（与页面顶部横幅同一入口）；IDE ⇒ toast 说明安装方式。
+   *
+   * 为什么不就地禁用：一枚点不动的灰按钮**不告诉用户下一步做什么**。
    */
   onGuideToSetting?: (target: GuideTarget) => void;
   /** 是否被勾选（批量操作）。 */
@@ -504,7 +815,7 @@ function ProductCurrentState({
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshingToken, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, onOpenTab, onCompleteTasks, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true }: Props) {
   const t = useT();
   /**
    * 兜底归一（第三道闸）。
@@ -580,15 +891,14 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    *
    * ⚠️ 整行**始终渲染**（含数据全缺时）—— 不闪不藏，缺值以「—」如实呈现。
    * ⚠️ 行间距由卡片根的 `gap-2.5` 承担，这里不再自带 `mb-*`。
+   *
+   * ★ 2026-10-23：取数收进 `creditMetricValues`，表格「积分」列读同一份（见该函数注释）。
    */
-  const metricResources = credit?.ok ? credit.resources ?? [] : [];
-  /** 当前（剩余）积分 —— 与原型 `a.credits` 同义。 */
-  const metricCreditCurrent =
-    credit?.ok && typeof credit.totalRemaining === "number" ? credit.totalRemaining : null;
-  const metricCreditTotal =
-    credit?.ok && metricResources.length > 0
-      ? metricResources.reduce((sum, resource) => sum + (Number.isFinite(resource.total) ? resource.total : 0), 0)
-      : null;
+  const {
+    current: metricCreditCurrent,
+    total: metricCreditTotal,
+    expiry,
+  } = creditMetricValues(credit);
 
   /* ★ 「当前登录」徽章**单独拆出来**（原型 `buddy-switch-prototype.html:2502`）：
      它在 `.acct-top` 内、与昵称**同一行**（不是掉进下面的 chips 行）。
@@ -600,57 +910,67 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
   ) : null;
 
   /**
-   * 「N 积分 M 天内过期」——原型 `.acct-chips` 的第三条（`buddy-switch-prototype.html:2507`）：
-   * `a.expiring ? <span class="badge warn">${fmt(a.expiring)} 积分 ${a.expireInDays} 天后过期</span> : ""`。
+   * 「120 积分今天到期 / 明天到期 / 10-27 到期」—— 指标行的第二项。
    *
-   * ★ 2026-10-17 **口径修正**（issue #44）：此前金额取「3 天内临期之和」、天数取「最早那一刻」，
-   * 两者不是同一批积分 ⇒ 100 明天到期 + 200 后天到期会显示「300 积分 1 天后过期」（假话）。
-   * 现在统一由 `summarizeExpiring` 汇总：**金额 = 全部临期之和、天数 = 其中最晚那一刻**
-   * ⇒「N 积分 M 天内过期」对每一笔都成立；逐批明细（最急的排在首位）放进 tooltip。
+   * ★ 2026-10-23（用户反馈）：旧的「N 积分 7 天内过期」把**窗口内合计**与**最晚一批**
+   * 拼成一句，既不是最急的、也无法跨账号比较（今天 100 + 6 天后 300 ⇒「400 积分
+   * 6 天内过期」）。卡片要回答的是「这个号现在要不要先用掉」⇒ 只报**最急一批**的
+   * 金额与到期日，更远的批次进 tooltip。窗口也不再由后端的 7 天 `expiringSoon` 决定
+   * （那是统计页的口径），见 `credit-expiry.ts` 文件头。
    *
-   * ⚠️ 窗口不再是前端自设的 3 天，而是**后端的 `expiringSoon`（7 天）**——统计页 / 总览页
-   * 读的就是同一口径（`expiringSoonRemaining`），卡片若另设窗口，同一件事会出现两个数字。
-   * 拿不到临期批次 ⇒ **整条不渲染**（绝不写一个猜出来的「N 天」标签）。
+   * 值全是文字（与 `积分 x/y` 同字号同基线），只用字色分轻重：
+   * 3 天内到期 = `text-warning`，更远 = muted。徽章留给 chips 行 —— 贴纸是状态，文字是数据。
+   *
+   * ⚠️ 没有可展示的批次（无到期日 / 已全部用完）⇒ **整条不渲染**，绝不编一个到期日。
    */
-  const expiring = credit?.ok ? summarizeExpiring(metricResources) : null;
-  const expiringLabel = expiring
-    ? t("wbAccounts.card.expiringChip", { amount: formatCredits(expiring.total), days: expiring.days })
-    : "";
-  /**
-   * ★ 2026-10-22（第二轮）：从**徽章**改成**同色系文字**。
-   *
-   * 用户反馈：把徽章挪到积分那一行后，「448.14 积分 7 天内过期 / 优先」与上一行
-   * 「已签到 / 已结束 / 可领 3 个任务」长得一模一样（同高 20px、同底色档、同字号 10.5px）
-   * ⇒ 两行读起来成一件事，视觉上反而更乱，也和左边的 `积分 4,710.14/4,762` 不搭
-   * （一行是文字、后面突然接两个色块）。
-   *
-   * ⇒ 结论：**指标行里的一切都必须是文字**（与 `积分 x/y` 同字号 11.5px、同基线），
-   * 只用**字色**区分轻重：临期 = `text-warning`（要花掉的），优先 = `text-primary`（规则相关）。
-   * 徽章只留给 chips 行 —— 那一行本来就是「贴纸」语义（签到 / 任务 / 旅行），
-   * 两行各自的形态因此一眼可辨：**贴纸是状态，文字是数据**。
-   *
-   * ⚠️ tooltip 必须保留：徽章没有了，逐批到期明细（最急的在首位）只剩这一条查看路径。
-   */
-  const expiringNote = expiring ? (
+  const expiryNow = Date.now();
+  const nextExpiry = expiry?.batches[0] ?? null;
+  const expiringLabel = nextExpiryLabel(expiry, t, expiryNow);
+  const expiringTip = expiry ? expiryTooltipLines(expiry, t) : null;
+  const expiringNote = nextExpiry ? (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className="cursor-default tabular-nums text-warning"
-          aria-label={expiringLabel}
-        >
-          {expiringLabel}
-        </span>
+        {/* ★ 2026-10-23：到期提示**可点** → 抽屉「积分」（它讲的就是这堆积分的去向）。
+            tooltip 行为不变：悬停仍给逐批明细，点击才跳页签。 */}
+        {onOpenTab ? (
+          <button
+            type="button"
+            data-no-account-open
+            onClick={() => onOpenTab(account, "credits")}
+            className={cn(
+              "cursor-pointer tabular-nums transition-opacity hover:opacity-85",
+              isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "text-warning" : "text-muted-foreground",
+            )}
+            aria-label={t("wbAccounts.card.openCredits", { name })}
+          >
+            {expiringLabel}
+          </button>
+        ) : (
+          <span
+            className={cn(
+              "cursor-default tabular-nums",
+              isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "text-warning" : "text-muted-foreground",
+            )}
+            aria-label={expiringLabel}
+          >
+            {expiringLabel}
+          </span>
+        )}
       </TooltipTrigger>
       <TooltipContent side="top">
-        <div className="whitespace-nowrap font-medium">{t("wbAccounts.card.expiringTipTitle", { n: expiring.batches.length })}</div>
-        {expiring.batches.map((batch) => (
-          <div key={batch.expireAt} className="whitespace-nowrap tabular-nums">
-            {t("wbAccounts.card.expiringTipLine", {
-              time: formatAbsoluteTime(batch.expireAt),
-              amount: formatCredits(batch.amount),
-            })}
-          </div>
-        ))}
+        {expiringTip ? (
+          <>
+            <div className="whitespace-nowrap font-medium">{expiringTip.title}</div>
+            {expiringTip.lines.map((line) => (
+              <div key={line} className="whitespace-nowrap tabular-nums">
+                {line}
+              </div>
+            ))}
+            {expiringTip.more ? (
+              <div className="whitespace-nowrap text-muted-foreground">{expiringTip.more}</div>
+            ) : null}
+          </>
+        ) : null}
       </TooltipContent>
     </Tooltip>
   ) : null;
@@ -659,8 +979,8 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    * 「优先」标签 —— 该账号是**优先扣费 / 优先展示**的那一个。
    *
    * ★ 2026-10-22：从 chips 行**移到指标行**（紧跟总积分，见下方 `metricsRow`）。
-   * 它与「临期积分」是同一类信息：都是**关于这堆积分的状态**，与积分数字连读才成句
-   * （「4,710 / 4,762 · 448 积分 7 天内过期 · 优先」）；留在 chips 行会和
+   * 它与「最近到期」是同一类信息：都是**关于这堆积分的状态**，与积分数字连读才成句
+   * （「4,710 / 4,762 · 120 积分今天到期 · 优先」）；留在 chips 行会和
    * 「已签到 / 旅行 / 任务」这些**账号状态**混在一起，语义串味。
    * ★ 同日晚些时候：由徽章降级为**文字**（`text-primary`），理由见 `expiringNote`。
    */
@@ -675,7 +995,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    * font-size:11.5px; color:var(--muted-fg)`），内容按 2026-10-22 的重排：
    *
    * ```
-   * 积分 4,710.14/4,762 · 448.14 积分 7 天内过期 · 优先
+   * 积分 4,710.14/4,762 · 120 积分今天到期 · 优先
    * ```
    *
    * ① 原型的三项里 `今日 42.1K` 与 `2 分钟前` 已移出卡片（理由见上方取数注释）；
@@ -687,21 +1007,44 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    * ④ `flex-wrap` 是**必须**的：窄卡下三项放不下一行，不换行会把末尾挤出可视区
    *    （`.acct` 是 `overflow:hidden`，会被直接裁掉）。
    */
+  /**
+   * 「积分 x/y」的**内容**（与是否可点解耦：可点时当 `<button>` 的子节点，否则当 `<span>` 的）。
+   *
+   * ★ 2026-10-23：整段可点 → 抽屉「积分」（想看明细 / 到期批次都在那一页）。
+   * `data-no-account-open` 是必须的：表格视图里若复用同一段 clickable 内容，
+   * 行的 `onClick` 只排除 `[data-row-actions]` / `[data-no-account-open]`。
+   */
+  const creditLine = (
+    <>
+      {t("wbAccounts.card.metric.credits")}{" "}
+      {metricCreditCurrent === null ? (
+        <b className="font-semibold tabular-nums text-foreground">—</b>
+      ) : (
+        <>
+          <b className="font-semibold tabular-nums text-foreground">
+            {formatCredits(metricCreditCurrent)}
+          </b>
+          {metricCreditTotal === null ? "" : `/${formatCredits(metricCreditTotal)}`}
+        </>
+      )}
+    </>
+  );
+
   const metricsRow = (
     <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
-      <span>
-        {t("wbAccounts.card.metric.credits")}{" "}
-        {metricCreditCurrent === null ? (
-          <b className="font-semibold tabular-nums text-foreground">—</b>
-        ) : (
-          <>
-            <b className="font-semibold tabular-nums text-foreground">
-              {formatCredits(metricCreditCurrent)}
-            </b>
-            {metricCreditTotal === null ? "" : `/${formatCredits(metricCreditTotal)}`}
-          </>
-        )}
-      </span>
+      {onOpenTab ? (
+        <button
+          type="button"
+          data-no-account-open
+          onClick={() => onOpenTab(account, "credits")}
+          className="cursor-pointer text-left tabular-nums transition-opacity hover:opacity-85"
+          aria-label={t("wbAccounts.card.openCredits", { name })}
+        >
+          {creditLine}
+        </button>
+      ) : (
+        <span>{creditLine}</span>
+      )}
       {expiringNote && (
         <>
           <span aria-hidden className="select-none text-muted-foreground/50">·</span>
@@ -718,66 +1061,30 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
   );
 
   /**
-   * 状态标签 —— 与原型 `accountStatus()`（`buddy-switch-prototype.html:2390-2395`）**同一口径**：
+   * 状态标签 —— 口径收在 {@link AccountStatusBadge}（表格「状态」列读同一份）：
    *
    * ```
-   * 凭据已过期(bad) → 需重新登录(bad) → 今日未签到(warn) → null（渲染「已签到」ok）
+   * 凭据已过期(bad) → 需重新登录(bad) → 今日未签到(warn) → 已签到(ok) → 不渲染
    * ```
    *
    * ⚠️ 原型是**互斥的一枚**。此前本仓把「已签到」与「需重新登录」当两枚并列渲染
    * ⇒ 同一张卡会同时挂着「已签到」和「需重新登录」两个互相矛盾的标签。
    */
-  const statusChip = expired ? (
-    <Badge variant="destructive" className={chipClass}>{t("wbAccounts.card.tokenExpired")}</Badge>
-  ) : account.needsRelogin ? (
-    <Badge variant="destructive" className={chipClass}>{t("wbAccounts.card.needRelogin")}</Badge>
-  ) : todayCheckedIn === false ? (
-    <Badge variant="warning" className={chipClass}>{t("wbAccounts.card.notCheckedIn")}</Badge>
-  ) : todayCheckedIn === true ? (
-    <Badge variant="success" className={chipClass}><CircleCheck /> {t("wbAccounts.card.checkedIn")}</Badge>
-  ) : null;
+  const statusChip = (
+    <AccountStatusBadge
+      account={account}
+      todayCheckedIn={todayCheckedIn}
+      onOpen={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
+    />
+  );
 
-  /**
-   * 成长任务提示标签 —— **只在真有可做事项时出现**。
-   *
-   * 为什么值得占一枚 chip：每个账号的成长任务基本只有**一次**机会，用户不可能靠记忆
-   * 记住「哪个号还没领」。卡片是他扫视账号的地方，标签就该长在这里。
-   *
-   * 两条纪律：
-   * 1. `claims > 0` 与 `autoable > 0` **互斥**（后端保证），否则同一个任务会在卡上挂两个数；
-   * 2. 计数为 0 / `idle` / 还没扫到 ⇒ **整枚不渲染**（`§3.4 规则 1：无数据不渲染`），
-   *    绝不写「可领 0」—— 那会让每张卡都多一枚噪声。
-   */
-  const growthClaimable = growthHint?.ok && !growthHint.idle ? growthHint.claimable : 0;
-  const growthAutoable = growthHint?.ok && !growthHint.idle ? growthHint.autoable : 0;
-  const growthHintChip =
-    growthClaimable > 0 || growthAutoable > 0 ? (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant={growthClaimable > 0 ? "success" : "info"}
-            className={chipClass}
-            aria-label={t("wbAccounts.card.growthTip", {
-              claimable: growthClaimable,
-              autoable: growthAutoable,
-            })}
-          >
-            {growthClaimable > 0 ? <Trophy /> : <Sparkles />}
-            {growthClaimable > 0
-              ? t("wbAccounts.card.growthClaimable", { n: growthClaimable })
-              : t("wbAccounts.card.growthAutoable", { n: growthAutoable })}
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <div className="whitespace-nowrap">
-            {t("wbAccounts.card.growthTip", {
-              claimable: growthClaimable,
-              autoable: growthAutoable,
-            })}
-          </div>
-        </TooltipContent>
-      </Tooltip>
-    ) : null;
+  /** 成长任务提示 —— 判定与渲染收在 {@link GrowthHintBadge}（表格「状态」列读同一份）。 */
+  const growthHintChip = (
+    <GrowthHintBadge
+      summary={growthHint}
+      onOpen={onOpenTab ? () => onOpenTab(account, "tasks") : undefined}
+    />
+  );
 
   const statusChips = (
     <>
@@ -792,7 +1099,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
       )}
       {statusChip}
       {growthHintChip}
-      {travelChip(travelStatus)}
+      <TravelStatusBadge status={travelStatus} />
     </>
   );
 
@@ -1086,10 +1393,13 @@ const workbuddyControl = workbuddyActive ? (
       doneKinds={doneKinds}
       refreshKinds={refreshKinds}
       onRefresh={onRefresh ? () => onRefresh(account) : undefined}
+      refreshingToken={refreshingToken}
       todayCheckedIn={todayCheckedIn}
       expired={expired}
       needsRelogin={account.needsRelogin}
       onCheckin={onCheckin ? () => onCheckin(account) : undefined}
+      onCompleteTasks={onCompleteTasks ? () => onCompleteTasks(account) : undefined}
+      growthHint={growthHint}
       onExport={onExport ? () => onExport(account) : undefined}
       onDelete={() => onDelete(account)}
       featuresDisabled={featuresDisabled}
@@ -1101,7 +1411,11 @@ const workbuddyControl = workbuddyActive ? (
       <article
         /* ★ P1-5 键盘可达：**卡片本身可 Tab 聚焦**（此前只有内部勾选框可聚焦）。
            ⚠️ 可聚焦元素**必须有用途**，否则是无障碍反模式（WCAG 2.4.3「可聚焦但无操作」）⇒
-           Enter / Space 打开详情，与菜单里的「查看详情」同义（无 onOpenDetail 时不拦按键）。 */
+           Enter / Space 打开详情，与菜单里的「查看详情」同义（无 onOpenDetail 时不拦按键）。
+           ★ 2026-10-23：补一行 `sr-only` 说明。可视用户看得到整张卡可点（悬停态 + 光标），
+           读屏用户落在 `<article>` 上只会听到账号名，**听不出「按下去会打开详情」** ——
+           表格视图那边有 `rowOpenLabel`，卡片这边此前是缺口。用隐藏文本而不是 `aria-label`：
+           `aria-label` 会**替换**掉 article 的可访问名（账号名），读屏就只剩一句操作提示。 */
         tabIndex={0}
         role="article"
         onClick={(e) => {
@@ -1139,6 +1453,8 @@ const workbuddyControl = workbuddyActive ? (
           ⚠️ 竖条只在**左侧两条圆角**上贴合卡片（`rounded-l-lg`），否则四角会露出直角方块。
           ⚠️ 条件必须与徽章**同为** `isCurrentAccount`（绑定任一程序位）：两者是同一信号的两重表达，
           否则会出现「有徽章却无竖条」/「有竖条却无徽章」的矛盾态。 */}
+      {/* 读屏说明：卡片可 Tab 聚焦 + Enter 打开详情（见 `<article>` 上的注释）。 */}
+      {onOpenDetail ? <span className="sr-only">{t("wbAccounts.card.focusHint")}</span> : null}
       {isCurrentAccount ? (
         <span
           aria-hidden="true"
