@@ -21,6 +21,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+// ★ issue #108 §P0-B：会话失效标记**从 core 复用，不在这里另写一份** ——
+// Trae 侧此前各自没有这份表，于是「真正的会话作废」与「access token 过期」
+// 只能共用同一个判据（裸 401）。两侧同源是「改一处、两边生效」的前提。
+use buddy_switch_core::modules::upstream::SESSION_DEAD_MARKERS;
 use chrono::{NaiveDate, TimeZone};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -96,6 +100,19 @@ pub struct PoolSummary {
     ///
     /// 不变量：`in_flight_full <= available`。
     pub in_flight_full: usize,
+    /// **状态可用、但有模型级冷却**的账号数（**正交计数，已计入** `available`，issue #88 新增）。
+    ///
+    /// 与 `in_flight_full` 同一档：账号本身没坏（凭据、余额、账号级冷却都没问题），
+    /// 只是「某个模型」被上游 429 罚了 —— 换个模型就能用。因此**不能**从 `available`
+    /// 里扣掉（扣掉会让人把「换个模型就好」误判成「这个号废了」）。
+    ///
+    /// ★ 本侧现状（2026-11-02）：WB 池条目还没有 `model_cooldowns` 数据源（那是上游
+    ///   issue #88 引入的），因此这里**恒为 0**，字段的存在只是为了让错误文案与池卡
+    ///   契约先对齐。接入 #88 后必须与选号同源计数（判据 `pick::model_cooling_until`），
+    ///   否则会变成「卡片全绿、选号却跳过」的新一类报障。
+    ///
+    /// 不变量：`model_cooling <= available`。
+    pub model_cooling: usize,
     pub total_credits: f64,
 }
 
@@ -428,9 +445,6 @@ const MODEL_RATE_MARKERS: &[&str] = &["IsModelRateLimit", "6004"];
 
 /// 模型封禁标记（`11102`）。
 const MODEL_BLOCK_MARKER: &str = "11102";
-
-/// 会话失效标记。
-const SESSION_DEAD_MARKERS: &[&str] = &["Offline user session not found", "12153"];
 
 /// 从响应体里尝试解析上游声明的重置时刻。
 ///
@@ -933,7 +947,7 @@ impl Pool {
             Some(GateBlock {
                 model: model.to_string(),
                 remain_ms: 0,
-                accounts: 0,
+                failures: 0,
             })
         }
     }
@@ -2292,7 +2306,7 @@ mod tests {
 
         let block = pool.admit_model("m", NOW).expect("暂停中必须被拒");
         assert!(block.remain_ms > 0, "拒绝信息必须带剩余时长");
-        assert_eq!(block.accounts, 2);
+        assert_eq!(block.failures, 2);
 
         // 另一个模型不受影响（闸门按模型分家）
         assert!(pool.admit_model("other", NOW).is_none());
