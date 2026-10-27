@@ -28,6 +28,7 @@ import {
 import { displayText } from "@/lib/display-text";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { CheckinIcon } from "@/lib/semantic-icons";
+import { cooldownAgeKey, describeTraeCooldown } from "@/lib/trae-cooldown";
 import { useT, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type {
@@ -539,6 +540,30 @@ export function TraeAccountCard({
     />
   );
 
+  // ★ issue #108 §P1-A：冷却态的**展示口径**收在 `lib/trae-cooldown.ts` 一处。
+  //   卡片 / 表格 / 聚合页共用同一份映射，不再各自从 `cooldownType` 现推语义
+  //   （改造前三处给出三种说法：需重新登录 / 冷却中 / 视为正常）。
+  //
+  //   状态徽章仍走 {@link TraeStatusChips}（它与表格「状态」列同源）；这里只产出
+  //   冷却提示行要用的三个值，不重复画第二枚冷却徽章。
+  const cooldownDisplay = describeTraeCooldown(account.cooldownType);
+  const cooldownAge = cooldownAgeKey(account.cooldownSince);
+  const cooldownTip = cooldownDisplay
+    ? [
+        account.cooldownType,
+        account.cooldownUntil
+          ? t("trae.comp.card.cooldown.until", { time: shortTime(account.cooldownUntil) })
+          : "",
+        // 「11 小时前」必须出现：只给 reason 原文，用户会读成「刚才又失败了」。
+        cooldownAge ? t(cooldownAge.key, { minutes: cooldownAge.minutes }) : "",
+        t(cooldownDisplay.hintKey),
+        account.cooldownReason ?? "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+
+
   /**
    * 「140 积分明天到期」—— 与 WorkBuddy 卡片**同一份**汇总（`summarizeExpiry`）：
    * 只报最急一批的金额与到期日，逐批明细进 tooltip。
@@ -1036,10 +1061,24 @@ export function TraeAccountCard({
 
         <section className="flex min-w-0 flex-1 flex-col">
           {/* 冷却 / 未查询提示：与 WorkBuddy 的积分错误行同形（同一图标位、同一配色语义）。 */}
-          {account.cooldownType ? (
-            <div className="flex min-w-0 items-center gap-2 py-3 text-sm text-destructive">
+          {cooldownDisplay ? (
+            <div
+              className={cn(
+                "flex min-w-0 items-center gap-2 py-3 text-sm",
+                // ★ issue #108 §P1-A：只有「需要人动手」的那档才用红色。
+                //   改造前所有冷却都是 destructive，于是「等 60 秒就好」的限流与
+                //   「必须重新登录」的会话作废长得一模一样，用户无法分辨优先级。
+                cooldownDisplay.tone === "destructive" ? "text-destructive" : "text-muted-foreground",
+              )}
+              title={cooldownTip || undefined}
+            >
               <Coins className="size-4 shrink-0" />
-              <span className="min-w-0 truncate">{account.cooldownReason || t("trae.comp.card.cooldown.fallback", { type: account.cooldownType })}</span>
+              <span className="min-w-0 truncate">
+                {/* ★ 相对时间必须在前：11 小时前的 401 与刚刚的失败，用户要做的事完全不同。 */}
+                {cooldownAge ? `${t(cooldownAge.key, { minutes: cooldownAge.minutes })} · ` : ""}
+                {account.cooldownReason ||
+                  t("trae.comp.card.cooldown.fallback", { type: account.cooldownType ?? "" })}
+              </span>
             </div>
           ) : !hasCredits ? (
             /* ★ issue #44：这句提示原先写「点右上角菜单『刷新积分』重试」—— 而菜单里没有这一项。
