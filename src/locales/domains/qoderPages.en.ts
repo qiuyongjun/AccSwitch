@@ -58,22 +58,34 @@ export const en = {
   "qoder.page.accounts.toolbar.statusBucket.normal": "Normal",
   "qoder.page.accounts.toolbar.statusBucket.noCredential": "No usable credential",
   "qoder.page.accounts.toolbar.statusBucket.unrecognized": "Credential unrecognized",
+  "qoder.page.accounts.quickRefreshDone": "Refreshed {n} account(s): credits · check-in status · credential status",
+  "qoder.page.accounts.quickRefreshPartial": "Refreshed {n} account(s); some data did not update",
+  "qoder.page.accounts.quickRefreshFail": "Refresh failed",
 
   "qoder.page.accounts.table.account": "Account",
   "qoder.page.accounts.table.status": "Status",
+  // 2026-10-27 (T05): `expiresAt` is normalized to Unix ms by core, so the list gains a
+  // Credential column (same header as WB / Trae; missing values render as "—").
+  "qoder.page.accounts.table.credential": "Credential",
   "qoder.page.accounts.table.source": "Source",
   "qoder.page.accounts.table.remark": "Remark",
 
   // ---- Detail drawer (`drawerAccount`: account info + remark edited **inside the drawer**) ----
   "qoder.page.accounts.drawer.subtitle": "{name} · UID {uid}",
   "qoder.page.accounts.drawer.info": "Account info",
-  "qoder.page.accounts.drawer.uid": "UID",
+  // 2026-10-27: the overview no longer repeats the UID (already in the subtitle) or the
+  // credential summary / masked token (the Credential tab carries them).
   "qoder.page.accounts.drawer.domain": "Domain",
   "qoder.page.accounts.drawer.source": "Source",
   "qoder.page.accounts.drawer.addedAt": "Added at",
   "qoder.page.accounts.drawer.updatedAt": "Last updated",
   "qoder.page.accounts.drawer.credential": "Credential",
   "qoder.page.accounts.drawer.accessToken": "Access token",
+  "qoder.page.accounts.drawer.refreshToken": "Refresh token",
+  "qoder.page.accounts.drawer.personalToken": "Personal token",
+  "qoder.page.accounts.drawer.present": "Present",
+  "qoder.page.accounts.drawer.absent": "Absent",
+  "qoder.page.accounts.drawer.expiresAt": "Credential expiry",
 
   // ---- Deletion (Qoder deletes **permanently**, no recycle bin ⇒ never claim "restorable") ----
   "qoder.page.accounts.removed": "Deleted {name}",
@@ -174,8 +186,15 @@ export const en = {
   "qoder.page.accounts.chip.notCheckedIn": "Not checked in",
   "qoder.page.accounts.chip.checkinUnavailable": "Check-in unavailable",
   "qoder.page.accounts.metric.credits": "Credits",
-  "qoder.page.accounts.metric.creditsValue": "{remaining} / {total}",
+  // 2026-10-26: `{remaining} / {total}` removed — card and table render
+  // `<b>remaining</b>/total` separately (thousands via `formatCredits`), matching WB.
+  "qoder.page.accounts.metric.creditsTip": "Remaining {remaining} · Total {total} · Used {used}",
   "qoder.page.accounts.metric.plan": "Plan",
+  // 2026-10-27: quota expiry now appears on the drawer's credit pack row (top-level
+  // `expiresAt`, Unix milliseconds per the Qoder SDK).
+  "qoder.page.accounts.metric.used": "Used {n}",
+  "qoder.page.accounts.metric.expiresOn": "Expires {date}",
+  "qoder.page.accounts.metric.expired": "Expired",
   "qoder.page.accounts.credits.loading": "Loading quota…",
   "qoder.page.accounts.checkin.action": "Check in",
   "qoder.page.accounts.checkin.already": "{name} already checked in today",
@@ -186,6 +205,9 @@ export const en = {
   "qoder.page.accounts.checkin.resultFail": "{n} failed",
   "qoder.page.accounts.refresh.done": "Token refreshed for {name}",
   "qoder.page.accounts.refresh.batchDone": "Refreshed tokens for {n} accounts",
+  "qoder.page.accounts.refresh.syncFailed": "Renewal finished, but the UI sync failed",
+  "qoder.page.accounts.refresh.syncFailedDesc":
+    "The token was renewed, but the account list could not be re-read. Reload instead of renewing again.",
 
   "qoder.page.accounts.toolbar.sort.credits": "Credit balance",
   "qoder.page.accounts.toolbar.group.source": "By source",

@@ -67,8 +67,81 @@ pub fn plan_refresh(account: &RawAccount) -> Result<RefreshPlan, String> {
     Err("这条账号既没有可用的刷新令牌也没有 PAT —— 需要重新登录或重新导入".to_string())
 }
 
+/// 续期闸门表（键 `region:uid`）。
+///
+/// 表本身是进程级静态量：闸门必须跨请求存活，否则「两个并发调用各拿一把新锁」，
+/// 串行化就等于没做。条目由 [`release_refresh_lock`] 在无人持有时摘掉。
+fn refresh_locks() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn refresh_lock_key(region: QoderRegion, uid: &str) -> String {
+    format!("{}:{uid}", region.as_str())
+}
+
+/// 同一条账号的续期**串行闸门**（键 `region:uid`）。
+///
+/// 菜单 / 详情 / 批量三个入口可能同时发起同一条账号的续期：并发会重复消耗
+/// `refresh_token`，两次回写还会互相覆盖（后写的把前一次的新令牌顶掉）。
+/// 闸门放在 **core**，HTTP 与 Tauri 两条通道都受约束 —— 前端去重只挡 UI 重复点击，
+/// 挡不住两个客户端同时调用。
+fn refresh_lock_for(region: QoderRegion, uid: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let mut guard = refresh_locks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    guard
+        .entry(refresh_lock_key(region, uid))
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// 调用方用完闸门后，若除表本身已无人持有，就摘掉该条目。
+///
+/// 不摘会让表随「历史上出现过的每个 `region:uid`」永久增长 —— 被删除的账号
+/// 也留着一条，且这些条目再也不会被任何人取用。
+fn release_refresh_lock(
+    region: QoderRegion,
+    uid: &str,
+    gate: &std::sync::Arc<tokio::sync::Mutex<()>>,
+) {
+    /// 表里那一份 + 当前调用方手上这一份。
+    const EXPECTED: usize = 2;
+    if std::sync::Arc::strong_count(gate) > EXPECTED {
+        return;
+    }
+    let key = refresh_lock_key(region, uid);
+    let mut guard = refresh_locks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    /* 拿到表锁之前可能又有线程 clone 走了这一份 —— 对表里那一份再确认一次，
+    否则会摘掉别人正在持有的闸门（那人释放时用的还是旧 Arc，串行化就漏了）。 */
+    if guard
+        .get(&key)
+        .is_some_and(|entry| std::sync::Arc::strong_count(entry) <= EXPECTED)
+    {
+        guard.remove(&key);
+    }
+}
+
 /// 刷新一条账号的令牌并回写账号库。返回面向命令面的视图（**不含令牌明文**）。
+///
+/// ⚠️ 同 `(region, uid)` 的并发调用在**这里**被串行化（见 [`refresh_lock_for`]）。
 pub async fn refresh_for(region: QoderRegion, uid: &str) -> Result<Value, String> {
+    let gate = refresh_lock_for(region, uid);
+    let outcome = {
+        let _permit = gate.lock().await;
+        refresh_for_inner(region, uid).await
+    };
+    release_refresh_lock(region, uid, &gate);
+    outcome
+}
+
+async fn refresh_for_inner(region: QoderRegion, uid: &str) -> Result<Value, String> {
     let account =
         account::find_account_for(region, uid).ok_or_else(|| format!("账号不存在: {uid}"))?;
     let plan = plan_refresh(&account)?;
@@ -126,18 +199,10 @@ pub const KEEPALIVE_WINDOW_HOURS: i64 = 4;
 
 /// `expires_at` 归一成**毫秒**。
 ///
-/// ⚠️ 两个来源单位不同：我们自己的刷新路径写的是**毫秒**（[`refresh_for`] 传
-/// `expires_at * 1000`），而**本机导入**路径把上游 `expiresAt` **原样**抄了下来
-/// （实测上游给的是**秒**）。判据用量级：小于 10^11 的一律当秒
-/// （10^11 秒 ≈ 公元 5138 年，10^11 毫秒 ≈ 1973 年 —— 两侧都不会误判）。
+/// ⚠️ 判据与 `account::normalize_expiry_ms` **同一份**（那边同时服务账号视图与切换写回）：
+/// 两处各写一遍就会在「导入的秒值」上分叉 —— 保活判断正确、界面却渲染 1970。
 fn expiry_ms(account: &RawAccount) -> Option<i64> {
-    account.expires_at.map(|value| {
-        if value < 100_000_000_000 {
-            value * 1000
-        } else {
-            value
-        }
-    })
+    super::account::normalize_expiry_ms(account.expires_at)
 }
 
 /// 这条账号是否需要保活刷新（**纯函数**，可测）。

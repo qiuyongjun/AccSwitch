@@ -62,15 +62,11 @@ export const en = {
 
   // ---- Status chips ----
   "trae.comp.card.chip.checked": "Checked in",
-  "trae.comp.card.chip.toolsInUse": "{n} tools in use",
   "trae.comp.card.chip.expired": "Credentials expired",
   "trae.comp.card.chip.needRelogin": "Needs re-login",
-  "trae.comp.card.chip.expiringToday": "{amount} credits expire today at {time}",
-  "trae.comp.card.chip.expiringTomorrow": "{amount} credits expire tomorrow at {time}",
-  "trae.comp.card.chip.expiringDate": "{amount} credits expire on {date} at {time}",
-  "trae.comp.card.chip.expiringTipTitle": "Expiring batches ({n})",
-  "trae.comp.card.chip.expiringTipLine": "{time} · {amount} credits",
-  "trae.comp.card.chip.expiringTipMore": "… {n} more",
+  // 2026-10-26: the six `chip.expiring*` keys were removed — the expiry is no longer a chip
+  // but a text segment in the metrics row, rendered by the shared `nextExpiryLabel` /
+  // `expiryTooltipLines` (identical wording to WorkBuddy).
   "trae.comp.card.chip.unchecked": "Not checked in today",
   "trae.comp.card.chip.cooling": "Cooling down",
   "trae.comp.card.chip.jwtAuto": "Auto-refresh JWT",
@@ -98,7 +94,6 @@ export const en = {
   "trae.comp.card.menu.refreshCredits": "Refresh credits",
   "trae.comp.card.menu.checkin": "Check in manually",
   "trae.comp.card.menu.thaw": "Clear cooldown",
-  "trae.comp.card.menu.remark": "Edit remark",
   "trae.comp.card.menu.delete": "Delete account",
 
   // ---- Credits section ----
@@ -120,30 +115,28 @@ export const en = {
   "trae.comp.card.action.refreshCreditsTip": "Re-query credits for this account only — no need to select all accounts and refresh in bulk",
   "trae.comp.card.footer.updatedAt": "Updated {time}",
   "trae.comp.card.footer.noUpdate": "No update time recorded",
-  "trae.comp.card.footer.updatedTip": "Last time this account was updated in the local account library",
 
   // ---- Card head + metrics row (prototype `.acct-top` / `.acct-metrics`) ----
   // Same names and meaning as the WorkBuddy card: both product areas render one card shape.
   "trae.comp.card.currentLogin": "Current login",
   "trae.comp.card.metric.credits": "Credits",
-  "trae.comp.card.metric.expiry": "Expires",
+  "trae.comp.card.expiryOn": "Expires {date}",
+  "trae.comp.card.expiryOnTip": "Credit expiry (package breakdown not fetched yet, so no amount)",
 
   // ---- Detail drawer sections (assembled by TraeAccountsPage) ----
+  // 2026-10-27: the overview keeps one "Account" section only; keys for the removed
+  // credits / credential sections went with them.
   "trae.comp.card.detail.section.account": "Account",
-  "trae.comp.card.detail.section.credits": "Credits",
-  "trae.comp.card.detail.section.credential": "Credential",
 
   // ---- Details (P4: carried by the shared drawer `account-detail-drawer.tsx`) ----
-  "trae.comp.card.detail.open": "View account details",
+  // (2026-10-27: the menu's "View details" entry was removed; details open by clicking
+  //  the card itself, so the key went with it.)
   "trae.comp.card.detail.subtitle": "{name} · UID {uid}",
-  "trae.comp.card.detail.accountId": "Account ID",
-  "trae.comp.card.detail.creditsExpiry": "Credits expiry",
-  "trae.comp.card.detail.jwtStatus": "JWT status",
+  "trae.comp.card.detail.jwtExpiry": "Credential expiry",
   "trae.comp.card.detail.jwtAutoRefresh": "Auto-refresh JWT",
   "trae.comp.card.detail.deviceId": "Device ID",
   "trae.comp.card.detail.cooldown": "Cooldown",
   "trae.comp.card.detail.none": "None",
-  "trae.comp.card.detail.notQueried": "Not fetched",
   "trae.comp.card.detail.jwtAutoOn": "Due for renewal",
   "trae.comp.card.detail.jwtAutoOff": "Auto-renews before expiry",
   "trae.comp.card.detail.jwtAutoDisabled": "Off (manual refresh only)",

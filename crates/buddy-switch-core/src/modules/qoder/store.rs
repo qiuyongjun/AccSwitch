@@ -28,11 +28,11 @@ pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
         .unwrap_or_default()
 }
 
-/// 读 JSON 并把「读不到 / 解析失败」如实报出来（`Ok(None)` = 文件不存在）。
+/// 读原始文本（`Ok(None)` = 文件不存在 / 空文件）。
 ///
-/// 用于**写路径**（改账号库前先读）：写路径必须知道自己是「在空库上新建」还是
-/// 「在损坏库上覆盖」，否则会把用户剩下的数据一起抹掉。
-pub fn read_json_checked<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+/// 单独抽出来是给**写事务**用的：写前比对需要「读到的那份原文」，而不是解析后的结构体
+/// —— 解析会丢掉键顺序与未知字段，用它比对会把每次写都误判成冲突。
+pub fn read_text_checked(path: &Path) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
@@ -41,9 +41,20 @@ pub fn read_json_checked<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, 
     if text.trim().is_empty() {
         return Ok(None);
     }
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|error| format!("解析 {} 失败：{error}", path.display()))
+    Ok(Some(text))
+}
+
+/// 读 JSON 并把「读不到 / 解析失败」如实报出来（`Ok(None)` = 文件不存在）。
+///
+/// 用于**写路径**（改账号库前先读）：写路径必须知道自己是「在空库上新建」还是
+/// 「在损坏库上覆盖」，否则会把用户剩下的数据一起抹掉。
+pub fn read_json_checked<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let Some(text) = read_text_checked(path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&text).map(Some).map_err(|error| {
+        format!("解析 {} 失败：{error}", path.display())
+    })
 }
 
 /// 原子写 JSON（先建父目录）。

@@ -543,19 +543,31 @@ export const zh = {
   // =====================================================================
   // 抽屉是**共享壳**：平台差异由调用方装配成 sections / packs / programs 注入，
   // 因此抽屉自身的文案（标题 / 备注 / 只读程序位 / 加载）放这里，不各写一份。
-  // 卡片「更多」菜单：四项刷新 + 账号动作分组（三平台共用同一套文案，避免各自造词）。
+  // 卡片「更多」菜单：刷新组（**只读项**）+ 账号动作分组（三平台共用同一套文案，避免各自造词）。
+  // ★ 2026-10-26：刷新组只有 积分 / 签到状态 / 凭证状态（+ 任务 `refresh.tasks`，仅 WB·CN）；
+  // 「刷新今日 Token」不再进任何菜单 ⇒ 没有 `refresh.tokens` 这个标题键。
+  // ⚠️ `refresh.tokensHint` 仍被 Trae 卡片「今日 Token」指标块的 tooltip 使用，别一起删。
   "shared.cardMenu.refreshGroup": "刷新",
   "shared.cardMenu.refresh.credits": "刷新积分",
-  "shared.cardMenu.refresh.tokens": "刷新今日 Token",
+  "shared.cardMenu.refresh.travel": "刷新旅行状态",
   "shared.cardMenu.refresh.checkin": "刷新签到状态",
   "shared.cardMenu.refresh.credential": "刷新凭据状态",
   "shared.cardMenu.accountGroup": "账号",
-  // 四项刷新各自的说明（菜单项的 title）：说清「读的是哪一层」，失败时用户才知道卡在哪。
+  // ★ 2026-10-26：切换账号 = 详情抽屉底部的向导入口（同一个 action）。
+  "shared.cardMenu.switchAccount": "切换账号",
+  "shared.cardMenu.switchAccountHint": "打开切换向导（与详情页同一入口；可顺带迁移会话）",
+  // 刷新项各自的说明（菜单项的 title）：说清「读的是哪一层」，失败时用户才知道卡在哪。
   "shared.cardMenu.refresh.creditsHint": "向上游查询剩余积分与到期时间（最慢，可能被限流）",
+  "shared.cardMenu.refresh.travelHint": "向上游查询旅行 / 加速器状态（是否在途、到达时刻、奖励积分）",
   "shared.cardMenu.refresh.tokensHint": "重读本机客户端会话日志 + 网关日志（本地，快）",
   "shared.cardMenu.refresh.checkinHint": "重读今天这个账号的签到结果（本地）",
-  "shared.cardMenu.refresh.credentialHint": "重读本机登录凭据的有效期（凭据失效时只有这项还能用）",
-  // 续期凭据（**写** refresh_token）—— 与上面四项只读刷新是两类动作，因此单独成项。
+  "shared.cardMenu.refresh.credentialHint": "重读本机登录凭据的有效期（刷新所有账号）",
+  // ★ 2026-10-26：成长任务摘要作为刷新组的第四项（仅 WB·CN）—— 与前三项一样只读重扫，不执行任务。
+  // 批量条与单账号菜单共用这一项（同一个 `RefreshTasksItem`），文案只有这一处。
+  "shared.cardMenu.refresh.tasks": "刷新任务",
+  "shared.cardMenu.refresh.tasksHint": "重扫这个账号的成长任务摘要（更新卡片上的「可领 / 可自动」标签，不执行任务）",
+  // 续期凭据（**写** refresh_token）—— 与四项只读刷新是两类动作，因此独立于刷新组成项
+  // （★ 2026-10-26：从刷新组后的单独一块挪进「账号」组、「切换账号」之前）。
   // ★ 2026-10-23：允许与抽屉的「续期凭据」并存（全量 / 勾选 / 单账号三个作用域，
   // 同一作用域内才不重复），理由见 `account-more-menu.tsx` 的刷新组注释。
   // ★ 2026-10-23：原「刷新 Token（续期凭据）」改为「续期凭据」—— 凭据含义的 Token
@@ -572,6 +584,10 @@ export const zh = {
   "shared.cardMenu.done": "已更新",
   "shared.cardMenu.checkinDone": "今日已签到",
   "shared.cardMenu.checkinNeedsLogin": "需先登录",
+  "shared.cardMenu.checkinUnavailable": "通道未开放",
+  "shared.cardMenu.checkinUnavailableHint": "上游签到通道已关停，重试无效 —— 去客户端活动页领取",
+  "shared.cardMenu.checkinUnreadable": "签到状态读取失败",
+  "shared.cardMenu.checkinUnreadableHint": "上次查询失败；可用「刷新签到状态」重试",
   // 「完成任务」（仅 WB·CN）：没有可做的就禁用，两种禁用原因分开说（未知 ≠ 没有）。
   "shared.cardMenu.completeTasks": "完成任务",
   "shared.cardMenu.completeTasksClaimable": "可领 {n}",
@@ -581,6 +597,7 @@ export const zh = {
   "shared.cardMenu.completeTasksUnknown": "任务状态未知，稍后重试",
   // 单项刷新的结果（四项各自一句，别用「已刷新」糊住 —— 用户要知道刷的是哪一层）。
   "shared.refreshPart.credits": "积分已刷新",
+  "shared.refreshPart.travel": "旅行状态已刷新",
   "shared.refreshPart.tokens": "今日 Token 已刷新",
   "shared.refreshPart.checkin": "签到状态已刷新",
   "shared.refreshPart.credential": "凭据状态已刷新",
@@ -594,7 +611,10 @@ export const zh = {
   // 与下面的页签一一对应（用户要求「对齐下面的页面」）。今日 Token 下沉到「概览」的信息行。
   "shared.stat.tasks": "任务",
   "shared.stat.taskClaimable": "可领 {n}",
-  "shared.stat.taskClaimed": "已领 {n}",
+  // ★ 2026-10-26（用户要求）：「已领 {n}」补上任务总数 —— 只写「已领 13」读不出
+  //   还剩几个没领，与卡片徽章「已领 x/y」同一口径（`growth_tasks.rs` 的
+  //   `TaskSummary.total` = 上游全部任务，含未解锁）。
+  "shared.stat.taskClaimedTotal": "已领 {claimed}/{total}",
   "shared.stat.checkedIn": "已签到",
   "shared.stat.notCheckedIn": "未签到",
   // issue #47：Trae / Qoder 的签到与 Token 两个块多出来的**诚实**措辞。
@@ -608,14 +628,19 @@ export const zh = {
   "shared.stat.credentialExpired": "已过期",
   "shared.stat.credentialRelogin": "需重登",
   "shared.stat.credentialOkSub": "可正常使用",
+  /* ★ 2026-10-26（用户要求）：「可正常使用」不携带信息 ⇒ 凭据有效时改报**具体到期时刻**
+     （WB 侧 `expiresAt`）；没有到期时间才退回「长期有效」。Qoder 侧不在指标块副行报日期
+     （到期在抽屉「凭据」页签展示），仍用 `credentialOkSub`。 */
+  "shared.stat.credentialValidUntil": "有效至 {date}",
   "shared.stat.credentialBadSub": "先重新登录",
   "shared.stat.noExpiring": "无临期积分",
   /* `shared.stat.expiringSoon`（「{n} 积分 {d} 天内到期」）已删除（2026-10-23）：
      抽屉临期文案改用与卡片同源的 `nextExpiryLabel`，不再需要这句话。 */
   "shared.stat.total": "累计 {n}",
-  "shared.stat.expiresAt": "到期 {when}",
-  "shared.stat.noExpiry": "无到期时间",
-  "shared.stat.plan": "{plan} 套餐",
+  // ★ 2026-10-27：`shared.stat.expiresAt` / `noExpiry` 已删 —— 抽屉积分块的副行
+  //   改成与卡片同一句 `nextExpiryLabel`（「X 积分 10-29 00:00 到期」），不再单独拼「到期 …」。
+  // ★ 2026-10-27：`shared.stat.plan` 也已删 —— Qoder 的副行改报到期后，套餐名只剩
+  //   积分页签的包名在用（`detailPacks.name`），不再需要这句。
   "shared.drawer.close": "关闭",
   "shared.drawer.loading": "正在加载详情…",
   // 详情页签：把 7 段长滚动切成四块（概览 / 积分 / 签到 / 凭据）。只切「看」的部分，
@@ -627,8 +652,11 @@ export const zh = {
   "shared.drawer.tab.snapshot": "快照",
   "shared.drawer.tab.tasks": "任务",
   // 成长任务中心（仅 WB·CN）：抽屉里的「任务」页签。
-  "shared.growthTasks.summary": "可领 {claimable} · 已领 {claimed} · 可自动 {autoable}",
-  "shared.growthTasks.auto": "一键完成",
+  // ★ 2026-10-26（用户要求）：摘要行补上任务总数「共 N 项」，与指标块同口径。
+  "shared.growthTasks.summary": "共 {total} 项 · 可领 {claimable} · 已领 {claimed} · 可自动 {autoable}",
+  // ★ 2026-10-26（用户要求）：抽屉里的总控按钮改叫「完成任务」—— 与卡片菜单、批量条
+  //   同一动作同名；「一键」只描述便利性，没说明它到底做什么。
+  "shared.growthTasks.auto": "完成任务",
   "shared.growthTasks.running": "正在执行…",
   // ★ 2026-10-23：「领取全部」并进「一键完成」⇒ 说明里必须写清它**先领再点亮**，
   // 否则用户仍会去找那个已经消失的按钮。
@@ -646,7 +674,7 @@ export const zh = {
   "shared.growthTasks.autoDone": "已完成 {n} 项并领取 {credit} 积分",
   "shared.growthTasks.autoNone": "本次没有可完成或可领取的任务",
   "shared.growthTasks.progressedOnly": "已上报进度，奖励尚未达标（上游计分较慢，稍后再点一次可续跑）",
-  "shared.growthTasks.refresh": "刷新任务列表",
+  "shared.growthTasks.refresh": "刷新任务",
   "shared.growthTasks.refreshDone": "任务列表已刷新",
   "shared.drawer.snapshot.title": "登录态快照",
   "shared.drawer.snapshot.time": "最近修改",
@@ -675,18 +703,24 @@ export const zh = {
   "shared.drawer.group.picker.exists": "该分组已存在，将直接归入",
   // 积分 / 资源包区块：文本已由调用方格式化，抽屉只负责排版。
   "shared.drawer.packs.title": "积分 / 资源包",
+  // ★ 2026-10-26：积分页签常驻后的空态（还没查过积分明细）。说清「为什么空」+「怎么做」。
+  "shared.drawer.packs.empty": "尚未查询到积分明细。点右上角 ⟳ 刷新该账号的积分，这里会显示逐包余额与到期时间。",
   // 只读程序位徽标（**不是**切换控件）—— 抽屉里不允许出现第二个「看起来能切」的控件。
   // ★ B5：签到积分（字段来自**上游实测响应**；`+N` 的 N 取 `today_credit` / `daily_credit`）。
   "shared.drawer.checkin.title": "签到",
+  // 签到数据未返回 / 读取失败时的如实说明（旁边有 ⟳ 刷新出口，不摆 0 或「未签到」）。
+  "shared.drawer.checkin.unknown": "签到状态未知（未读取或读取失败）—— 点右上角 ⟳ 重新读取",
   "shared.drawer.checkin.action": "签到",
   // ★ 2026-10-23：签到按钮常驻，已签状态换成禁用文字（不再隐藏按钮）。
   "shared.drawer.checkin.done": "今日已签到",
   "shared.drawer.checkin.today": "今日签到",
   "shared.drawer.checkin.todayGain": "今日签到 +{n} 积分",
   "shared.drawer.checkin.notCheckedIn": "未签到",
-  // 三列横排的另外两格（旧版是「已连签 {n} 天」「累计 {n} 积分」两句竖排整句）。
-  "shared.drawer.checkin.statStreak": "已连签",
+  // 三列横排的另外两格。上游 `streak_days` 实际可能与签到日期列表的断档不一致
+  // （21 天却有多处未签），因此只称「签到天数」，不使用「连签」这种连续性表述。
+  "shared.drawer.checkin.statStreak": "签到天数",
   "shared.drawer.checkin.statTotal": "累计积分",
+  "shared.drawer.checkin.localStats": "按本机积分明细统计（明细保留 90 天），不是上游的连续天数 / 终身累计。",
   "shared.drawer.checkin.days": "{n} 天",
   "shared.drawer.checkin.total": "累计 {n} 积分",
   "shared.drawer.programs.title": "程序位（只读）",
@@ -706,6 +740,10 @@ export const zh = {
   // ★ 2026-10-23：「刷新 Token」→「续期凭据」；「刷新凭证状态」→「刷新凭据状态」（统一用「凭据」）。
   "shared.drawer.actions.refresh": "续期凭据",
   "shared.drawer.actions.refreshStatus": "刷新凭据状态",
+  // ★ 2026-10-26：抽屉页签标题行 ⟳ 的 tooltip。此前直接借了页签名（`tab.credits` / `tab.checkin`）
+  // 当 aria-label/title，悬停提示变成「积分」「签到」—— 只说了这块叫什么，没说点了会做什么。
+  "shared.drawer.actions.refreshCredits": "刷新积分",
+  "shared.drawer.actions.refreshCheckin": "刷新签到状态",
   // 凭据不可用时的说明（原型 `.proto-note` :3526）—— 过期 / 需重登不给签到入口。
   "shared.drawer.actions.credentialNote": "凭据已过期或需重新登录，不提供签到入口，请先处理凭据。",
   // 签到历史（近 7 天）：日期 / 结果 / 获得积分（原型 checkinHistoryHtml :3428-3439）。
@@ -730,12 +768,14 @@ export const zh = {
   "shared.batch.selected": "已选 {n} 项",
   "shared.batch.checkin": "批量签到",
   "shared.batch.refresh": "刷新",
-  // 写操作：续期凭据，与上面四项只读刷新分开放（混在一起会让人以为点「刷新」就会续期）。
+  // 写操作：续期凭据，与只读刷新分开放（混在一起会让人以为点「刷新」就会续期）。
   // ★ 2026-10-23：原「刷新 Token（续期凭据）」改为「续期凭据」。
+  // ★ 2026-10-26：它已从刷新下拉挪到**下拉外部**的按钮行（签到 / 完成任务同排）。
   "shared.batch.refreshToken": "续期凭据",
   // 成长任务摘要刷新（仅 WorkBuddy 国内版注入）：对**所选账号逐个**强制重扫，
   // 不用全量扫描 —— 全量会越界更新未勾选账号的标签。
-  "shared.batch.refreshGrowth": "刷新成长任务状态",
+  // ★ 2026-10-26：文案统一由 `shared.cardMenu.refresh.tasks`（「刷新任务」）提供 ——
+  // 批量条的该项与单账号菜单是同一个 `RefreshTasksItem`，不再各写一句。
   // 成长任务（仅 WorkBuddy 国内版传入 `onCompleteTasks` 时才渲染）。
   "shared.batch.completeTasks": "完成任务",
   // 原型 `batch-export`：批量条上导出**所选**账号（不是全部 —— 全部有工具栏那个入口）。
@@ -758,12 +798,18 @@ export const zh = {
   "shared.checkinResult.failedNames": "失败账号：{names}",
   "shared.checkinResult.allOk": "全部账号已签到",
   "shared.checkinResult.retryFailed": "重试失败项",
+  // 只剩「未处理」项时的重试出口文案：这些账号**没失败过**（请求根本没发出），
+  // 沿用「重试失败项」会让用户以为是自己漏看的失败。
+  "shared.checkinResult.retryPending": "重试未完成项",
   "shared.checkinResult.summary4": "成功 {ok} · 未开放 {skip} · 失败 {fail}",
   "shared.checkinResult.skippedNames": "以下账号的签到通道未开放（桌面端网页活动页才可领）：{names}",
   // 本次真领到的额度合计（活动通道）。**可选**：不传时结果条不显示这一枚徽标，
   // WB / Trae 的渲染逐字不变（它们没有活动通道，也不该凭空多一行）。
   "shared.checkinResult.earned": "本次共 +{n} Credits",
   "shared.checkinResult.dismiss": "知道了",
+  // 协作式取消后的「未处理」数：它既不是成功也不是失败（没有发出请求），必须单列一档。
+  "shared.checkinResult.unprocessed": "未处理 {n} 个",
+  "shared.batch.cancelled": "已取消，{n} 个未处理",
   // 分组标题右侧的数量（原型 `.tiny muted`，`buddy-switch-prototype.html:2471`）。
   "shared.list.groupCount": "{n} 个",
 
@@ -789,13 +835,13 @@ export const zh = {
   "shared.toolbar.quickRefreshCountdown": "刷新 {n}s",
   "shared.toolbar.quickRefreshCooldown": "刷新过于频繁，请 {n} 秒后再试",
   // 一键动作（作用于全部账号，不需要先勾选）。
+  // ★ 2026-10-26（用户要求）：删除「一键完成」—— 成长任务是低频动作，
+  //   不值得占一枚页头按钮；批量条与单账号菜单仍保留该动作。
   "shared.toolbar.quickRefresh": "一键刷新",
   "shared.toolbar.quickCheckin": "一键签到",
-  "shared.toolbar.quickComplete": "一键完成",
   // 一键动作的禁用原因（悬停提示）：说清「为什么现在点不了」，而不是让按钮默默灰掉。
   "shared.toolbar.quickNoAccounts": "当前作用域还没有账号",
   "shared.toolbar.quickCheckinNone": "今日已全部签到",
-  "shared.toolbar.quickCompleteNone": "没有可领 / 可自动任务",
 
   // =====================================================================
   // ---- 「添加账号」抽屉（components/add-account-drawer.tsx，两平台共用）----

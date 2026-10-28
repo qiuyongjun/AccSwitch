@@ -19,8 +19,9 @@
 
 ## 1. 为什么需要新接口（而不是复用现有的）
 
-卡片「更多」里有四项刷新：`积分` / `今日 Token` / `签到状态` / `凭据状态`。
-WorkBuddy 四项都能刷；**Trae / Qoder 只开了两项**，因为缺「这个账号、今天」这一粒度的只读数据。
+卡片「更多」的刷新组为 `积分` / `签到状态` / `凭据状态`（+ WB·CN 的 `任务`）；
+`今日 Token` 自 2026-10-26 起不再是菜单项，只由 Trae 卡片「今日 Token」指标块与用量页刷新。
+WorkBuddy 全部可刷；**Trae / Qoder 曾缺「这个账号、今天」这一粒度的只读数据**，因此补了下面两条命令。
 
 现有的三个批量接口都**不能**直接当单账号今日口径用：
 
@@ -133,3 +134,114 @@ interface AccountTokenTodayResponse {
 
 > 两条都对应本仓已有的老问题（`AccountTokenTodayResponse` 的注释里写了四类边界），
 > 新接口照抄形状即可自动满足。
+
+---
+
+## 7. Qoder 积分刷新（2026-10-27 补充）
+
+Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `qoder_credits`
+（`GET /api/qoder/credits`），逐账号检查返回行的 `ok`；不得调用 `qoder_refresh_account`，
+后者会续期并回写凭据，是独立的写操作。页头同时只读重取 `qoder_checkin_status_map`
+与账号元数据，三层都失败才报整体失败，任一层成功而另一层失败则报部分失败。
+
+`status-map` 请求 fulfilled 只代表拿到响应，不代表所有账号都读取成功：任一返回条目
+`ok:false` 都属于部分失败；单账号刷新也必须检查目标条目，不能在「读不到」时显示成功。
+
+---
+
+## 8. 刷新顺序与失败信号（2026-10-27 补充）
+
+### 8.1 Trae 一键刷新：快照必须后读
+
+- 积分（`trae_refresh_credits`，不传 `userId`）与签到状态（`get_trae_checkin_status_map`）
+  **可以并行**；但账号快照（`getTraeAccounts` + `getTraeCredits` + …）必须在积分请求
+  **结束之后**再取。此前三项 `allSettled` 并行 ⇒ 快照先回来、积分后落盘，刷新结束仍显示旧值。
+- 积分请求失败也要回读快照：成功的那批账号已经落盘，不能因为另一批失败就不显示。
+- `trae_refresh_credits` 的批量作用域在既有 `refreshed` 之外增加 `total` / `failed`；
+  单账号作用域没有这两个字段（单账号失败直接 `Err`）。
+- 页面按 **积分 / 签到 / 快照** 三层分别判定：三层全成功 → `success`，三层全失败 → `error`，
+  其余 → `warning`。快照读取失败必须计入 —— 否则错误提示旁仍会亮「已刷新 N 个账号」。
+- 单账号积分刷新（卡片菜单 / 专用按钮）落盘后同样重取页面快照；快照读取失败时本轮不算成功
+  （刷新状态管理层不会亮「已更新」）。
+- 缓存层 `refreshWithResult()` 返回 `{ ok, superseded, error }`。同键强制刷新并发时，
+  先发结果若被后发请求取代（`superseded: true`），调用方**既不报成功也不亮「已更新」**；
+  一键刷新把它计入「部分失败」，不把过期结论说成已刷新。
+- 缓存 **key 与 loader 必须成对**：loader 按 key 存档，调用时用闭包里的键反查。
+  只有一个 `loaderRef` 时，「国内版发起、完成前切到国际版」会让旧键读到国际版 loader，
+  把国际版账号写进国内版缓存。
+
+### 8.2 Trae 逐包明细的单一口径
+
+账号视图（`list_account_views_for`）只带聚合积分，逐包明细在积分总览的 `packages[uid]`。
+前端一律走 `traeCreditPackages(account, credits.packages)`：卡片、表格、详情抽屉共用这一份
+合并结果，不得各自读 `account.creditPackages`（生产上该字段恒缺）。
+
+抽屉的自动补拉按 `scope:userId` 去重（区域 × 账号），判据用合并结果：
+`null` = 尚未查询（补拉一次），`[]` = 已查询但没有积分包（不再请求）。
+
+签到成功写入的是**更新的事实**：`markCheckinMapChecked` 必须替换旧的 `ok:false`（查询失败）
+条目，而不只是改 `ok` 条目 —— 否则抽屉优先读到过期失败，历史显示成功、今日签到仍显示「读不到」。
+替换后 `source` 标 `"ledger"`，失败条目没有可信统计字段，未知统计保持为空。
+
+### 8.3 WorkBuddy 旅行：成功状态 + 失败账号
+
+`api.queryTravelStatuses` 返回 `{ statuses, failedIds }`；`getTravelStatusMap` 保留为
+「失败即忽略」的容错包装，供后台轮询使用。页面口径：
+
+- **单账号**刷新：目标不在 `statuses` 里 ⇒ 抛错（不亮「已更新」）；
+- **批量 / 一键**刷新：只更新成功项、失败项保留旧值，并提示失败数量；
+- `label` 为「无 Buddy / 未旅行」等**正常业务态**仍算读取成功。
+
+### 8.4 一键刷新冷却：完整作用域键
+
+冷却表键是完整 L1 作用域（`wb-cn` / `trae-global` …），不是裸 `region`。切换区域时
+按钮重新读取该作用域的绝对截止时间；倒计时按 `deadline - Date.now()` 计算（后台节流不累积偏差）；
+请求完成后只回写**发起请求时**的作用域，且只有当前仍停在该区域时才更新按钮状态。
+
+---
+
+## 9. 2026-10-27 补充：Qoder 积分按账号筛选
+
+`qoder_credits`（`GET /api/qoder/credits`）新增**可选** `accountIds`：
+
+| 通道 | 入参形状 | 语义 |
+|:--|:--|:--|
+| Tauri `qoder_credits` | `accountIds?: string[]` | 缺省 = 全区域 |
+| HTTP `/api/qoder/credits` | `accountIds=a,b`（逗号串，同 `parse_id_list`） | 同上 |
+
+- **过滤发生在 core 发送上游请求之前**（`qoder::credits::region_view(region, uids)`）：
+  单账号刷新只打该账号的额度与套餐，不再「顺手刷全区域」。
+- **显式空集合不退化为全量**：`Some([])` 表示没有目标账号 ⇒ 零上游请求、零行。
+  未知 uid 同样不产生请求，调用方按「缺条目 = 未取得数据」处理（不覆盖旧值）。
+- 前端 `api.qoderCredits(scope, accountIds?)`：`undefined` = 全区域；`[]` = 空。
+  单账号刷新传 `[uid]`，勾选刷新传勾选集合，页头一键才省略参数。
+
+---
+
+## 10. 2026-10-28 批量签到可取消（Trae）
+
+| 通道 | 入参 | 说明 |
+|:--|:--|:--|
+| Tauri `trae_checkin` | `options.taskId?: string` | 本批任务 id |
+| HTTP `POST /api/trae/checkin` | `{ options: { taskId } }` | 同上 |
+| Tauri `trae_checkin_cancel` | `taskId: string` | 请求取消 |
+| HTTP `POST /api/trae/checkin/cancel` | `{ taskId: string }` | 同上 |
+
+语义（**协作式**，与 `mapWithConcurrency` 的 `signal` 同一条规则）：
+
+- 只拦**尚未开始**的账号；在途请求一定跑完并计入报告。
+- 取消后 `report.results` 只含已执行账号 ⇒ 前端按
+  `total - results.length` 报「N 个未处理」，重试名单 = 失败 + 未处理。
+- 取消标记在任务结束时清理（同 id 复用不残留）。
+- 桌面端进度经 `trae-checkin-progress`（`start` / `account` / `cancelled` / `done`）；
+  webui 没有事件通道，进度停在 0/N 直到结束 —— 这是通道能力差异，不编造中间进度。
+
+### 10.1 2026-10-28 复审整改（进度隔离 / 未处理口径）
+
+- **事件携带 `taskId` + `variant`**：页面只消费「本区域 + 当前任务」的事件
+  （`payload.taskId` 必须等于当前批次 id；`variant` 按区域前缀比对 —— `global*` = 国际线，
+  其余 = 国内线）。切区后旧任务收尾、或新旧任务重叠，不再污染新批次进度。
+- **「未处理」只算计划内未执行**：报告新增 `unprocessed` / `unprocessedIds` / `cancelled`。
+  被策略跳过（已签到 / 凭据过期 / 冷却中）的账号**不在其中**，正常完成的一批不会出现未处理项。
+- **取消不能报成功**：前端判定顺序为「仍有未处理 ⇒ warning（已取消，N 个未处理）」
+  →「全部失败 ⇒ error」→「成功」；重试名单 = 失败 + 未处理。

@@ -21,6 +21,7 @@ import type {
   TraeClientModelList,
   TraeCreditsOverview,
   TraeEnvStatus,
+  TraeLogEntry,
   TraeVariantsStatus,
   TraeGatewayConfigRaw,
   TraeGatewayLogEntry,
@@ -1410,7 +1411,7 @@ function traeDemoAccounts(): TraeAccount[] {
     // jackey：880/1,500，其中 140 五天后到期；work + code 两个程序位都绑
     {
       userId: "7481920", name: t("shared.demo.trae.name.jackey"), groupId: "g1", jwt: "", jwtExpHours: 320.5,
-      jwtExpTimestamp: atLocalTime(0, 9, 12), jwtStatus: "ok", checkedToday: true,
+      jwtExpTimestamp: Math.floor(futureAt(13, 9, 12) / 1000), jwtStatus: "ok", checkedToday: true,
       credits: 880, remainingCredits: 880, creditsExpireAt: Math.floor(futureAt(5, 0, 0) / 1000),
       creditPackages: [
         { packageCode: "pkg_work_month", packageName: t("shared.demo.trae.pack.month"), total: 1360, remaining: 740, used: 620, expireAt: Math.floor(futureAt(30, 0, 0) / 1000), expired: false, expiringSoon: false },
@@ -1424,7 +1425,7 @@ function traeDemoAccounts(): TraeAccount[] {
     // code-lab：1,320/1,500，33 天后到期；只绑 code
     {
       userId: "7481999", name: t("shared.demo.trae.name.codeLab"), groupId: "g1", jwt: "", jwtExpHours: 210.4,
-      jwtExpTimestamp: atLocalTime(0, 15, 20), jwtStatus: "ok", checkedToday: true,
+      jwtExpTimestamp: Math.floor(futureAt(9, 15, 20) / 1000), jwtStatus: "ok", checkedToday: true,
       credits: 1320, remainingCredits: 1320, creditsExpireAt: Math.floor(futureAt(33, 0, 0) / 1000),
       creditPackages: [
         { packageCode: "pkg_cn_plan", packageName: t("shared.demo.trae.pack.cnPlan"), total: 1500, remaining: 1320, used: 180, expireAt: Math.floor(futureAt(33, 0, 0) / 1000), expired: false, expiringSoon: false },
@@ -1437,7 +1438,7 @@ function traeDemoAccounts(): TraeAccount[] {
     // solo-test：90/500，全部一天后到期；**今日未签到**
     {
       userId: "7482044", name: t("shared.demo.trae.name.soloTest"), groupId: "g2", jwt: "", jwtExpHours: 96.8,
-      jwtExpTimestamp: atLocalTime(1, 5, 30), jwtStatus: "ok", checkedToday: false,
+      jwtExpTimestamp: Math.floor(futureAt(4, 5, 30) / 1000), jwtStatus: "ok", checkedToday: false,
       credits: 90, remainingCredits: 90, creditsExpireAt: Math.floor(futureAt(1, 0, 0) / 1000),
       creditPackages: [
         { packageCode: "pkg_trial", packageName: t("shared.demo.trae.pack.trial"), total: 500, remaining: 90, used: 410, expireAt: Math.floor(futureAt(1, 0, 0) / 1000), expired: false, expiringSoon: true },
@@ -1450,7 +1451,7 @@ function traeDemoAccounts(): TraeAccount[] {
     // idle-01：480/500，15 天后到期；今日用量 0
     {
       userId: "7482101", name: t("shared.demo.trae.name.idle"), groupId: "g3", jwt: "", jwtExpHours: 640.2,
-      jwtExpTimestamp: atLocalTime(3, 11, 0), jwtStatus: "ok", checkedToday: true,
+      jwtExpTimestamp: Math.floor(futureAt(27, 11, 0) / 1000), jwtStatus: "ok", checkedToday: true,
       credits: 480, remainingCredits: 480, creditsExpireAt: Math.floor(futureAt(15, 0, 0) / 1000),
       creditPackages: [
         { packageCode: "pkg_cn_plan", packageName: t("shared.demo.trae.pack.cnPlan"), total: 500, remaining: 480, used: 20, expireAt: Math.floor(futureAt(15, 0, 0) / 1000), expired: false, expiringSoon: false },
@@ -1463,7 +1464,7 @@ function traeDemoAccounts(): TraeAccount[] {
     // snap-acc：700/1,500，25 天后到期
     {
       userId: "7482102", name: t("shared.demo.trae.name.snap"), groupId: "g3", jwt: "", jwtExpHours: 512.0,
-      jwtExpTimestamp: atLocalTime(2, 14, 5), jwtStatus: "ok", checkedToday: true,
+      jwtExpTimestamp: Math.floor(futureAt(21, 14, 5) / 1000), jwtStatus: "ok", checkedToday: true,
       credits: 700, remainingCredits: 700, creditsExpireAt: Math.floor(futureAt(25, 0, 0) / 1000),
       creditPackages: [
         { packageCode: "pkg_work_month", packageName: t("shared.demo.trae.pack.month"), total: 1500, remaining: 700, used: 800, expireAt: Math.floor(futureAt(25, 0, 0) / 1000), expired: false, expiringSoon: false },
@@ -1740,6 +1741,81 @@ function demoQoderAccounts(scope: string): unknown {
         account("q2", t("shared.demo.qoder.name.team"), t("shared.demo.qoder.remark.team"), "dt-c3d4…7e", false),
       ];
   return { region, domain, accounts, foreignDomainCount: 0 };
+}
+
+function demoQoderCredits(scope: string, accountIds?: string[]): unknown {
+  const global = scope.endsWith("global");
+  const all = global
+    ? [{ uid: "qg1", name: t("shared.demo.qoder.name.intl"), remaining: 320, total: 500 }]
+    : [
+        { uid: "q1", name: t("shared.demo.qoder.name.jackey"), remaining: 558, total: 700 },
+        { uid: "q2", name: t("shared.demo.qoder.name.team"), remaining: 80, total: 100 },
+      ];
+  /* 与真机同语义：`undefined` = 全部；显式集合 = 只回这些账号（空集合 ⇒ 空结果）。 */
+  const rows = accountIds === undefined ? all : all.filter((row) => accountIds.includes(row.uid));
+  return {
+    region: global ? "global" : "cn",
+    summary: {
+      okAccounts: rows.length,
+      failedAccounts: 0,
+      remaining: rows.reduce((sum, row) => sum + row.remaining, 0),
+      total: rows.reduce((sum, row) => sum + row.total, 0),
+    },
+    accounts: rows.map((row, index) => ({
+      ...row,
+      ok: true,
+      used: row.total - row.remaining,
+      isExceeded: false,
+      expiresAt: futureAt(index === 0 ? 2 : 12),
+      plan: "Pro",
+    })),
+  };
+}
+
+function demoQoderCheckinStatus(scope: string): unknown {
+  const global = scope.endsWith("global");
+  if (global) {
+    return {
+      region: "global",
+      unavailable: true,
+      reason: t("shared.stat.checkinUnavailable"),
+      summary: { total: 1, checked: 0, claimable: 0 },
+      accounts: [],
+    };
+  }
+  const accounts = [
+    {
+      uid: "q1",
+      name: t("shared.demo.qoder.name.jackey"),
+      ok: true,
+      status: "CLAIMED",
+      active: true,
+      todayCheckedIn: true,
+      streakDays: 3,
+      totalClaimDays: 12,
+      rewardCredits: 100,
+      totalRewardCredits: 1200,
+    },
+    {
+      uid: "q2",
+      name: t("shared.demo.qoder.name.team"),
+      ok: true,
+      status: "CLAIMABLE",
+      active: true,
+      todayCheckedIn: false,
+      streakDays: 1,
+      totalClaimDays: 4,
+      rewardCredits: 0,
+      totalRewardCredits: 400,
+    },
+  ];
+  return {
+    region: "cn",
+    unavailable: false,
+    reason: null,
+    summary: { total: accounts.length, checked: 1, claimable: 1 },
+    accounts,
+  };
 }
 
 /**
@@ -2182,15 +2258,17 @@ function demoQoderCheckinStatusMap(ids: string[]): Record<string, CheckinStatusE
       };
       continue;
     }
+    const checked = uid === "q1";
+    const disabled = uid === "qg1";
     map[uid] = {
       ok: true,
-      todayCheckedIn: true,
-      status: "CLAIMED",
-      active: true,
+      todayCheckedIn: checked,
+      status: disabled ? "DISABLED" : checked ? "CLAIMED" : "CLAIMABLE",
+      active: !disabled,
       dailyCredit: 100,
-      todayCredit: 100,
-      totalCredits: 1200,
-      streakDays: 3,
+      todayCredit: checked ? 100 : 0,
+      totalCredits: checked ? 1200 : 400,
+      streakDays: disabled ? 0 : checked ? 3 : 1,
     };
   }
   return map;
@@ -2664,9 +2742,36 @@ function demoTraeLogs(args?: Record<string, unknown>): TraeLogsResponse {
     const date = new Date(atLocalTime(daysAgo, hour, minute));
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
   };
-  const all = [
-    { kind: "checkin" as const, time: stamp(0, 8, 6), date: day0, message: t("shared.demo.trae.log.checkinDone", { ok: 1, already: 1, failed: 1, total: 3 }) },
-    { kind: "app" as const, time: stamp(0, 8, 41), date: day0, message: t("shared.demo.trae.log.thawed", { uid: "7481999", credits: 64.5 }) },
+  const all: TraeLogEntry[] = [
+    { kind: "checkin", time: stamp(0, 8, 6), date: day0, message: t("shared.demo.trae.log.checkinDone", { ok: 1, already: 1, failed: 1, total: 3 }) },
+    /* ★ 2026-10-27：**结构化签到流水**（契约行，见 `trae::TRAE_CHECKIN_RECORD_PREFIX`）。
+       ⚠️ 刻意**不 i18n**：它是机器判定的格式，不是给人读的文案；翻译它等于改契约。
+       真实环境的 `checkin` 字段由后端解析产出（`logs::parse_checkin_record`），
+       演示模式没有后端 ⇒ 只能**手写**同一份结果，形状必须与后端一致（键名/枚举值）。
+       三行分别对应 `demoTraeCheckin` 里的成功 / 已签到 / 失败三个账号；
+       抽屉「签到历史」现在只认这些行（+ 积分明细），漏了就全片显示「未签到」。 */
+    {
+      kind: "checkin",
+      time: stamp(0, 8, 7),
+      date: day0,
+      message: "签到记录 userId=7481920 action=claim_ok delta=20 code=200",
+      checkin: { userId: "7481920", action: "claim_ok", delta: 20, code: 200 },
+    },
+    {
+      kind: "checkin",
+      time: stamp(0, 8, 7),
+      date: day0,
+      message: "签到记录 userId=7481999 action=skip_already delta=0 code=200",
+      checkin: { userId: "7481999", action: "skip_already", delta: 0, code: 200 },
+    },
+    {
+      kind: "checkin",
+      time: stamp(0, 8, 8),
+      date: day0,
+      message: "签到记录 userId=7482044 action=fail delta=0 code=401",
+      checkin: { userId: "7482044", action: "fail", delta: 0, code: 401 },
+    },
+    { kind: "app", time: stamp(0, 8, 41), date: day0, message: t("shared.demo.trae.log.thawed", { uid: "7481999", credits: 64.5 }) },
     { kind: "switch" as const, time: stamp(0, 9, 12), date: day0, message: t("shared.demo.trae.log.savedLogin", { uid: "7481920", count: 9 }) },
     { kind: "checkin" as const, time: stamp(0, 9, 20), date: day0, message: t("shared.demo.trae.log.jwtRefreshed", { uid: "7481920", hours: 320.5 }) },
     { kind: "app" as const, time: stamp(0, 10, 3), date: day0, message: t("shared.demo.trae.log.deviceReset", { count: 6 }) },
@@ -2678,18 +2783,21 @@ function demoTraeLogs(args?: Record<string, unknown>): TraeLogsResponse {
   const kind = typeof args?.kind === "string" ? args.kind : "";
   const date = typeof args?.date === "string" ? args.date : "";
   const keyword = typeof args?.keyword === "string" ? args.keyword.toLowerCase() : "";
+  const checkinUserId = typeof args?.checkinUserId === "string" ? args.checkinUserId : "";
   const entries = all.filter((entry) => {
     if (kind && kind !== "all" && entry.kind !== kind) return false;
     if (date && entry.date !== date) return false;
     if (keyword && !entry.message.toLowerCase().includes(keyword)) return false;
+    if (checkinUserId && entry.checkin?.userId !== checkinUserId) return false;
     return true;
   });
+  const limit = typeof args?.limit === "number" && args.limit > 0 ? Math.min(args.limit, 2000) : 500;
 
   const dates = [...new Set(all.map((entry) => entry.date))].sort().reverse();
   return {
-    entries,
+    entries: entries.slice(0, limit),
     total: entries.length,
-    limit: 500,
+    limit,
     dates,
     counts: {
       all: all.length,
@@ -3050,6 +3158,17 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "qoder_usage": {
       const scope = String((args as { scope?: unknown } | undefined)?.scope ?? "");
       return demoQoderUsage(scope);
+    }
+    case "qoder_credits": {
+      const creditArgs = args as { scope?: unknown; accountIds?: unknown } | undefined;
+      return demoQoderCredits(
+        String(creditArgs?.scope ?? ""),
+        Array.isArray(creditArgs?.accountIds) ? creditArgs.accountIds.map(String) : undefined,
+      );
+    }
+    case "qoder_checkin_status": {
+      const scope = String((args as { scope?: unknown } | undefined)?.scope ?? "");
+      return demoQoderCheckinStatus(scope);
     }
     /* issue #47：逐账号「今日签到状态」（只读；演示数据保留「缺席 / 未开放」两条边界）。 */
     case "qoder_checkin_status_map": return demoQoderCheckinStatusMap(demoAccountIds(args));

@@ -901,18 +901,35 @@ pub async fn refresh_remaining_for_variant(
     Ok(credits)
 }
 
-/// 批量刷新所有账号的剩余积分，返回成功账号数（默认变体，兼容壳）。
-pub async fn refresh_all_remaining() -> usize {
-    refresh_all_remaining_for(TraeVariant::default()).await
+/// 批量刷新剩余积分的结果汇总。
+///
+/// 只回「成功数」时，前端无法区分「全部成功」与「部分失败」—— 失败账号被跳过、
+/// 返回 `refreshed: 0` 也会被当成成功。这里把**总数**一并带回，判定交给调用方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshAllSummary {
+    /// 本轮尝试刷新的账号数（该变体账号库里的全部账号）。
+    pub total: usize,
+    /// 成功写入缓存的账号数。
+    pub succeeded: usize,
+    /// 失败（被跳过）的账号数。
+    pub failed: usize,
 }
 
-/// 批量刷新**该变体**所有账号的剩余积分（按变体分家），返回成功账号数。
+/// 批量刷新所有账号的剩余积分，返回成功账号数（默认变体，兼容壳）。
+pub async fn refresh_all_remaining() -> usize {
+    refresh_all_remaining_for(TraeVariant::default())
+        .await
+        .succeeded
+}
+
+/// 批量刷新**该变体**所有账号的剩余积分，返回成功 / 失败汇总。
 ///
 /// 顺带执行**自动解冻**：某账号查询成功、剩余积分 > 0、且其冷却类型不是
 /// `SessionDead`（会话彻底失效，积分再正常也不代表会话可用）时清除冷却。
 /// 这解决了「账号因临时 5xx 被冷却，实际早已恢复」导致的长期误封。
-pub async fn refresh_all_remaining_for(variant: TraeVariant) -> usize {
+pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummary {
     let accounts = crate::modules::trae::account::entries_for(variant);
+    let total = accounts.len();
     let mut remaining = load_remaining_for(variant);
     let mut cooldowns = load_cooldowns_for(variant);
     let mut succeeded = 0usize;
@@ -971,7 +988,11 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> usize {
         cooldowns.updated_at = Some(store::now_iso());
         let _ = store::write_json(&paths::cooldowns_file_for(variant), &cooldowns);
     }
-    succeeded
+    RefreshAllSummary {
+        total,
+        succeeded,
+        failed: total.saturating_sub(succeeded),
+    }
 }
 
 // ---------------------------------------------------------------------------

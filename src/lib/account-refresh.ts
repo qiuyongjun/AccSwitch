@@ -1,37 +1,54 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * 账号「单项刷新」的共用契约（三平台卡片 + 详情抽屉都按这一套来）。
  *
- * ## 为什么是**四项**而不是一个「刷新全部」
+ * ## 为什么是**多项**而不是一个「刷新全部」
  *
- * 四类数据来自**不同层**，耗时与失败原因都不一样：
+ * 各类数据来自**不同层**，耗时与失败原因都不一样：
  *
  * | 项 | 数据来源 | 特点 |
  * |:--|:--|:--|
  * | `credits` | 上游接口（查剩余积分 / 到期） | 最慢，可能被限流 |
- * | `tokens` | 本机客户端日志 + 网关日志 | 快，离线可读 |
+ * | `travel` | 上游接口（旅行 / 加速器状态） | 逐账号，webui 下一次批量；**仅 WorkBuddy** |
+ * | `tokens` | 本机客户端日志 + 网关日志 | 快，离线可读。**⚠️ 只用于指标块，不进菜单** |
  * | `checkin` | 本机签到记录 | 快 |
- * | `credential` | 本机凭据（JWT 有效期） | 最快，且**凭据失效时只有它能给出答案** |
+ * | `credential` | 本机账号库（JWT 有效期 / 需重登） | 最快；**实际重取整个账号库**（`getAccounts` 无单账号变体），菜单 tooltip 已标注「刷新所有账号」 |
  *
  * 合成一个动作时，慢的拖住快的，而且失败原因分不清 —— 凭据过期的账号其实只有
  * 「凭据状态」能刷出真值，另外三项必然失败。拆开之后用户能只刷要用的那项，
  * 也能从失败项里看出卡在哪一层（判据见 `docs/specs/PLAN.md` §3.3）。
  *
+ * ★ 2026-10-26（用户要求）：**「刷新今日 Token」不再出现在任何刷新菜单**——
+ * 卡片已不展示今日 Token，菜单里留入口会让人以为有东西会变。`tokens` 这个 kind
+ * 因此只服务「指标块上的刷新按钮」（Trae 卡片的今日 Token、抽屉的读数），
+ * 因而**不在** {@link ACCOUNT_REFRESH_KINDS} 里 —— 那个常量是**菜单可见项**的顺序来源。
+ *
+ * ★ 2026-10-26 新增 `travel`（用户要求）：旅行状态此前**只有「一键刷新」会写**
+ * （另一条路径是「续期凭据」顺带刷一次），单账号与批量都没有入口 —— 于是一枚
+ * 可见的卡片 chip（`TravelStatusBadge`）只能靠「刷新全部账号」更新。补成菜单项后，
+ * 三个作用域对旅行状态的口径一致；Trae / Qoder 没有旅行概念，不传即不渲染。
+ *
  * ## 为什么按「账号 + 项」记进行中，而不是一个全局布尔
  *
  * 列表里可能同时有多个账号在刷，同一个账号也可能同时刷两项（比如先刷凭据再刷积分）。
  * 用一个布尔会让后开始的把先开始的转圈吞掉；用一个 `Set<accountId>` 又会让
- * 「点了积分，四项一起转」。所以键是 `id:kind`。
+ * 「点了积分，全部项一起转」。所以键是 `id:kind`。
  */
-export type AccountRefreshKind = "credits" | "tokens" | "checkin" | "credential";
+export type AccountRefreshKind = "credits" | "tokens" | "travel" | "checkin" | "credential";
 
-/** 固定顺序：菜单分组与指标块都从这里取，避免两处各写一份顺序。 */
+/**
+ * **菜单里能出现**的刷新项，固定顺序（图标 / 文案的过滤依据）。
+ *
+ * ⚠️ 不含 `tokens`：它已从所有刷新菜单移除（见文件头）。若要恢复，需先在
+ * `components/account-menu-parts.tsx` 的 `REFRESH_ITEMS` 里补回一行，否则过滤后仍不渲染。
+ * ⚠️ 含 `travel`，但 Trae / Qoder 的 `refreshKinds` 显式不含它 ⇒ 那两侧不渲染。
+ */
 export const ACCOUNT_REFRESH_KINDS: readonly AccountRefreshKind[] = [
   "credits",
-  "tokens",
+  "travel",
   "checkin",
   "credential",
 ] as const;
@@ -39,7 +56,7 @@ export const ACCOUNT_REFRESH_KINDS: readonly AccountRefreshKind[] = [
 const keyOf = (accountId: string, kind: AccountRefreshKind) => `${accountId}:${kind}`;
 
 /**
- * 四项各自的成功文案键。
+ * 各项的成功文案键。
  *
  * 写死成字面量是为了让 `t()` 的**编译期键校验**生效（拼错 key 会直接报错，而不是静默回退成 key 本身）；
  * 也避免三个页面各自写一份「已刷新」的措辞 —— 用户需要知道刷的是哪一层。
@@ -47,6 +64,7 @@ const keyOf = (accountId: string, kind: AccountRefreshKind) => `${accountId}:${k
 export const REFRESH_DONE_LABEL = {
   credits: "shared.refreshPart.credits",
   tokens: "shared.refreshPart.tokens",
+  travel: "shared.refreshPart.travel",
   checkin: "shared.refreshPart.checkin",
   credential: "shared.refreshPart.credential",
 } as const;
@@ -77,6 +95,14 @@ export function useAccountRefreshBusy() {
   const [done, setDone] = useState<Map<string, Set<AccountRefreshKind>>>(() => new Map());
   /** 定时器句柄：同一项重复刷新时先撤掉旧的，避免「早就撤了却被旧定时器清了新状态」。 */
   const doneTimers = useRef(new Map<string, number>());
+  /**
+   * 在途去重（**同步**判据）。
+   *
+   * `busy` 是 React state，第二次点击可能发生在它生效之前（同一帧内的连点 / 菜单 + 指标块
+   * 两个入口）—— 只靠 `busy` 会并发打两次上游。这里用 ref 做同步闸门，键与 `busy` 同形。
+   * 作用域由**组件实例**承担（账号页按 scope 键控重挂载），因此键里不需要再拼 scope。
+   */
+  const inFlight = useRef(new Set<string>());
 
   const setOne = useCallback((accountId: string, kind: AccountRefreshKind, on: boolean) => {
     setBusy((prev) => {
@@ -144,33 +170,54 @@ export function useAccountRefreshBusy() {
   /**
    * 跑一次单项刷新：先标记进行中，**无论成功失败都撤掉**（`finally`）。
    *
-   * 成功后额外亮 {@link REFRESH_DONE_MS} 毫秒的「已更新」—— 与原型一致：菜单里要能看出
-   * 刚刚发生了什么，而不只是一个转圈的瞬间。
+   * 成功后才亮 {@link REFRESH_DONE_MS} 毫秒的「已更新」。以下三种结果**都不算成功**：
+   * 任务抛错、任务返回 `false`（缺目标条目 / `ok:false` / 快照读取失败）、同一项已在途。
    * 失败的处理（toast / 重试）交给调用方 —— 这个 hook 只管状态。
+   *
+   * 返回 `true` = 真的刷新成功；`false` = 没跑（已在途）或没拿到可信结果。
    */
   const run = useCallback(
-    async (accountId: string, kind: AccountRefreshKind, task: () => Promise<unknown>): Promise<boolean> => {
+    async (
+      accountId: string,
+      kind: AccountRefreshKind,
+      task: () => Promise<unknown>,
+    ): Promise<boolean> => {
+      const key = keyOf(accountId, kind);
+      /* 同一账号 + 同一动作在途 ⇒ 直接拒绝第二次，避免并发消耗材料 / 打两次上游。 */
+      if (inFlight.current.has(key)) return false;
+      inFlight.current.add(key);
       setOne(accountId, kind, true);
       try {
-        await task();
+        const outcome = await task();
+        /* `false` 是调用方的「没拿到可信数据」信号（不是异常）⇒ 不亮「已更新」。 */
+        if (outcome === false) return false;
         markDone(accountId, kind, true);
-        const timerKey = keyOf(accountId, kind);
-        const previous = doneTimers.current.get(timerKey);
+        const previous = doneTimers.current.get(key);
         if (previous !== undefined) window.clearTimeout(previous);
         doneTimers.current.set(
-          timerKey,
+          key,
           window.setTimeout(() => {
             markDone(accountId, kind, false);
-            doneTimers.current.delete(timerKey);
+            doneTimers.current.delete(key);
           }, REFRESH_DONE_MS),
         );
         return true;
       } finally {
+        inFlight.current.delete(key);
         setOne(accountId, kind, false);
       }
     },
     [setOne, markDone],
   );
+
+  /* 卸载时清掉所有「已更新」计时器：页面按作用域重挂载，残留计时器会写已卸载实例的 state。 */
+  useEffect(() => {
+    const timers = doneTimers.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   return { kindsOf, doneKindsOf, isBusy, run, keyOf };
 }

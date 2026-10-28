@@ -76,14 +76,23 @@ export const en = {
   "wbAccounts.card.forever": "Valid indefinitely",
   "wbAccounts.card.expirySuffix": "expires",
   "wbAccounts.card.arrivingSoon": "Arriving soon",
-  "wbAccounts.card.remainingHM": "{hours}h {minutes}m left",
-  "wbAccounts.card.remainingH": "{hours}h left",
-  "wbAccounts.card.remainingM": "{minutes}m left",
   "wbAccounts.card.traveling": "Traveling",
   "wbAccounts.card.finished": "Finished",
   "wbAccounts.card.noBuddy": "No Buddy",
   "wbAccounts.card.notTraveled": "Not traveling",
-  "wbAccounts.card.travelEst": "est. {points}",
+  // 2026-10-26 (user feedback): travel tooltip rewritten — the old copy read
+  // "place · +120 · 2h left": the reward had no unit and "left" never said until when.
+  // Each line now carries its own subject (where / when / how much); the arrival uses the
+  // same local-calendar-day phrasing as credit expiry (today / tomorrow / date + HH:mm).
+  "wbAccounts.card.travelHeadingTo": "Heading to \"{place}\"",
+  "wbAccounts.card.travelArriveToday": "Arriving today at {time}",
+  "wbAccounts.card.travelArriveTomorrow": "Arriving tomorrow at {time}",
+  "wbAccounts.card.travelArriveDate": "Arriving {date} at {time}",
+  "wbAccounts.card.travelReward": "+{points} credits on arrival",
+  "wbAccounts.card.travelFinishedAt": "Trip to \"{place}\" finished",
+  "wbAccounts.card.travelFinishedToday": "Today's trip finished",
+  "wbAccounts.card.travelRewardEarned": "Earned +{points} credits",
+  "wbAccounts.card.travelNoBuddyTip": "No Buddy is available for this account today, so no trip can be sent",
   "wbAccounts.card.currentWorkbuddy": "WorkBuddy current account",
   "wbAccounts.card.currentIde": "CodeBuddy IDE current account",
   "wbAccounts.card.currentCli": "CodeBuddy CLI current account",
@@ -108,15 +117,17 @@ export const en = {
   "wbAccounts.card.unnamed": "Unnamed account",
   "wbAccounts.card.checkedIn": "Checked in",
   "wbAccounts.card.notCheckedIn": "Not checked in today",
+  "wbAccounts.card.checkedInTip": "Checked in today",
+  "wbAccounts.card.notCheckedInTip": "Not checked in today",
   "wbAccounts.card.needRelogin": "Needs re-login",
   "wbAccounts.card.tokenExpired": "Credentials expired",
   "wbAccounts.card.growthClaimable": "{n} to claim",
   "wbAccounts.card.growthAutoable": "{n} automatable",
   "wbAccounts.card.growthProgress": "{claimed}/{total} claimed",
   "wbAccounts.card.growthDone": "Tasks done",
-  "wbAccounts.card.growthTip": "Growth tasks: {claimable} claimable · {autoable} automatable (click to open the Tasks tab)",
-  "wbAccounts.card.growthTipProgress": "Growth tasks: {claimed}/{total} claimed, nothing claimable or automatable right now (click to open the Tasks tab)",
-  "wbAccounts.card.growthTipDone": "Growth tasks: all {total} claimed (click to open the Tasks tab)",
+  "wbAccounts.card.growthTip": "Growth tasks: {claimable} claimable · {autoable} automatable",
+  "wbAccounts.card.growthTipProgress": "Growth tasks: {claimed}/{total} claimed, nothing claimable or automatable right now",
+  "wbAccounts.card.growthTipDone": "Growth tasks: all {total} claimed",
   "wbAccounts.card.priority": "Priority",
   "wbAccounts.card.priorityTip": "Recommended priority",
   "wbAccounts.card.nextExpiryToday": "{amount} credits expire today at {time}",
@@ -124,10 +135,17 @@ export const en = {
   "wbAccounts.card.nextExpiryDate": "{amount} credits expire on {date} at {time}",
   "wbAccounts.card.expiringTipTitle": "Expiring batches ({n})",
   "wbAccounts.card.expiringTipLine": "{time} · {amount} credits",
-  "wbAccounts.card.expiringTipMore": "… {n} more",
-  "wbAccounts.card.toolsInUse": "{n} tools in use",
+  "wbAccounts.card.expiringTipMore": "… {n} more batches",
+  "wbAccounts.card.credentialExpiry": "Credential expiry",
+  "wbAccounts.card.refreshTokenExpiry": "Refresh token expiry",
+  // 2026-10-26 (user feedback): each expiry gets its own tooltip — the two mean different
+  // things: a credential expiry only needs renewal, while a refresh-token expiry forces a
+  // re-login. Side by side on the card, the distinction has to be explicit.
+  "wbAccounts.card.credentialExpiryTip": "When the sign-in credential expires; the refresh token can renew it afterward",
+  "wbAccounts.card.refreshTokenExpiryTip": "The refresh token renews the sign-in credential; once it expires, the account must sign in again",
   "wbAccounts.card.currentLogin": "Signed in",
   "wbAccounts.card.metric.credits": "Credits",
+  "wbAccounts.card.creditsTip": "Remaining {remaining} · Total {total} · Used {used}",
   "wbAccounts.card.metric.todayTokens": "Today",
   "wbAccounts.card.metric.lastUsedTip": "Last used {time}",
   "wbAccounts.card.metric.atLeast": "≥{value}",
@@ -182,8 +200,6 @@ export const en = {
   "wbAccounts.detail.tokenExpiry": "Token expiry",
   "wbAccounts.detail.expired": "Expired",
   "wbAccounts.detail.checkedIn": "Checked in today",
-  "wbAccounts.detail.lastUsed": "Last used",
-  "wbAccounts.detail.neverUsed": "Never used",
   "wbAccounts.detail.refreshTokenExpiry": "Refresh token expiry",
   "wbAccounts.detail.refreshedAt": "Last renewed",
 
@@ -376,9 +392,12 @@ export const en = {
   "wbAccounts.toast.batchCancelled": "Cancelled, {n} not processed",
   "wbAccounts.toast.batchCancelledToast": "Bulk operation cancelled",
   "wbAccounts.toast.quickRefreshDone": "One-click refresh complete",
-  "wbAccounts.toast.quickRefreshScope": "Refreshed {n} account(s): account info · credits · travel · today's tokens · check-in status · task status",
-  "wbAccounts.toast.quickRefreshScopeNoTasks": "Refreshed {n} account(s): account info · credits · travel · today's tokens · check-in status",
+  "wbAccounts.toast.quickRefreshScope": "Refreshed {n} account(s): credits · travel · check-in status · credential status · task status",
+  "wbAccounts.toast.quickRefreshScopeNoTasks": "Refreshed {n} account(s): credits · travel · check-in status · credential status",
   "wbAccounts.toast.quickRefreshTasksFailed": "Refreshed {n} account(s), but task status refresh failed",
+  "wbAccounts.toast.quickRefreshTravelPartial": "Refreshed {n} account(s), but travel status failed for {failed}",
+  "wbAccounts.toast.travelFailed": "Failed to read travel status",
+  "wbAccounts.toast.travelPartial": "Travel status: {ok} updated, {failed} failed",
   "wbAccounts.toast.batchRefreshDesc": "Applied to {n} selected account(s)",
   "wbAccounts.toast.batchRefreshTokensRegion": "Recalculated today's tokens for every account in this edition (the endpoint aggregates per edition and cannot be limited to the selection)",
   "wbAccounts.toast.batchGrowthDone": "Growth task status refreshed",
@@ -389,11 +408,11 @@ export const en = {
   "wbAccounts.toast.batchTokenRenewed": "{n} renewed",
   "wbAccounts.toast.batchTokenRelogin": "{n} need re-login",
   "wbAccounts.toast.batchTokenFailed": "{n} failed",
-  "wbAccounts.toast.completeNone": "No tasks to complete for any account",
   "wbAccounts.toast.completeSelectedNone": "No tasks to complete for the selected accounts",
   "wbAccounts.toast.completeDone": "Tasks complete",
   "wbAccounts.toast.completeDoneFail": "Failed to complete tasks",
   "wbAccounts.toast.completeSummary": "{n} account(s) completed, {credit} credits claimed",
+  "wbAccounts.toast.completeProgressed": "{n} account(s) reported progress (rewards not reached yet)",
   "wbAccounts.toast.completeSkipped": "Skipped {n} without completable tasks",
   "wbAccounts.toast.completeFailed": "{n} failed",
   "wbAccounts.toast.switchCliLoading": "Switching CodeBuddy CLI…",
@@ -443,6 +462,10 @@ export const en = {
   // 2026-10-23: `wbAccounts.table.todayTokens` / `.expiry` / `.current` removed together
   // with their columns (usage lives in stats/detail; expiry is drawer-only; the
   // "current login" badge reuses `wbAccounts.card.currentLogin`).
+  // 2026-10-26: `.credential` added back — the card now shows credential / refresh-token
+  // expiry, so the table must say the same thing. Cell labels reuse
+  // `card.credentialExpiry` / `card.refreshTokenExpiry`.
+  "wbAccounts.table.credential": "Credentials",
   "wbAccounts.table.programs": "Programs",
 
   // =====================================================================

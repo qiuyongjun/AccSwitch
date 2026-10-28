@@ -40,6 +40,24 @@ pub const SOURCE_DESKTOP_APP: &str = "desktop-app";
 /// 账号来源：本机 CLI 凭据导入。
 pub const SOURCE_CLI: &str = "cli";
 
+/// 把账号库里的到期时刻归一成 **Unix 毫秒**（`null` = 未知）。
+///
+/// 两个写入来源单位不同：刷新 / OAuth 路径写的是毫秒，**本机导入**路径把上游
+/// `expiresAt` 原样抄了下来（上游给的是秒）。判据用量级：小于 10^11 的一律当秒
+/// （10^11 秒 ≈ 公元 5138 年，10^11 毫秒 ≈ 1973 年 —— 两侧都不会误判）。
+///
+/// ⚠️ 账号视图、保活判断与切换写回**必须共用这一份**：只修其中一处，
+/// 会出现「界面显示正确、写回客户端却是 1970」的分叉。
+pub fn normalize_expiry_ms(value: Option<i64>) -> Option<i64> {
+    value.filter(|raw| *raw > 0).map(|raw| {
+        if raw < 100_000_000_000 {
+            raw * 1000
+        } else {
+            raw
+        }
+    })
+}
+
 /// 一条账号记录（**落盘形态**，含令牌明文）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -150,9 +168,17 @@ pub fn load_accounts_for(region: QoderRegion) -> AccountsFile {
 }
 
 /// 读账号库并把「读不到 / 解析失败」如实报出来（写路径用）。
+///
+/// ★ 顺带把原文登记进写事务（[`crate::modules::accounts_txn::record_read`]）：
+/// 随后的 `save_accounts_for` 要拿它比对「读完之后有没有别的进程改过」，
+/// 不一致就整段重跑。只读路径（列表 / 导出）**不**登记，免得影响别人的写判定。
 pub fn load_accounts_checked_for(region: QoderRegion) -> Result<AccountsFile, String> {
     let path = paths::accounts_file_for(region);
-    Ok(store::read_json_checked::<AccountsFile>(&path)?.unwrap_or_default())
+    let Some(text) = store::read_text_checked(&path)? else {
+        return Ok(AccountsFile::default());
+    };
+    crate::modules::accounts_txn::record_read(&path, &text);
+    serde_json::from_str(&text).map_err(|error| format!("解析 {} 失败：{error}", path.display()))
 }
 
 /// 读账号库并附带归属校验结果。
@@ -170,8 +196,25 @@ pub fn snapshot_for(region: QoderRegion) -> AccountsSnapshot {
 }
 
 /// 写账号库（原子写 + 先建目录）。
+///
+/// ★ 写前先过 [`crate::modules::accounts_txn::ensure_unchanged`]：读到之后若别的**进程**
+/// 改过这份库，这里返回冲突哨兵，由外层 [`accounts_txn`] 重跑整段读改写。
+/// 事务外调用（测试造数据、导入直写）没有基准可比，直接放行。
 pub fn save_accounts_for(region: QoderRegion, file: &AccountsFile) -> Result<(), String> {
-    store::write_json(&paths::accounts_file_for(region), file)
+    let path = paths::accounts_file_for(region);
+    crate::modules::accounts_txn::ensure_unchanged(&path)?;
+    store::write_json(&path, file)
+}
+
+/// 在一份账号库的写事务里执行 `f`（见 [`crate::modules::accounts_txn`]）。
+///
+/// 所有「读整份 → 改一条 → 写整份」的函数都必须从这里进去：直接裸调
+/// `load_accounts_checked_for` + `save_accounts_for` 仍会丢更新（两个调用之间没有互斥）。
+fn accounts_txn<T>(
+    region: QoderRegion,
+    f: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    crate::modules::accounts_txn::with_txn(&paths::accounts_file_for(region), f)
 }
 
 /// 查一个账号。
@@ -221,45 +264,64 @@ pub enum UpsertOutcome {
 /// 放进去一个错区的账号比拒绝更糟。
 pub fn upsert_account_for(
     region: QoderRegion,
-    mut account: RawAccount,
+    account: RawAccount,
 ) -> Result<UpsertOutcome, String> {
+    // 归属与 uid 校验只读入参，不必进事务：失败就不该白占一次锁。
     ensure_region_matches(region, &account.domain)?;
     if account.uid.trim().is_empty() {
         return Err("账号缺少 uid —— 已拒绝写入（uid 是账号库的唯一键）。".to_string());
     }
 
-    let mut file = load_accounts_checked_for(region)?;
-    let now = store::now_iso();
-    let outcome = match file
-        .accounts
-        .iter_mut()
-        .find(|existing| existing.uid == account.uid)
-    {
-        Some(existing) => {
-            // 保留首次加入时刻；更新其余字段。
-            account.added_at = existing.added_at.clone().or(account.added_at.take());
-            account.updated_at = Some(now);
-            *existing = account;
-            UpsertOutcome::Replaced
-        }
-        None => {
-            account.added_at = account.added_at.or(Some(now.clone()));
-            account.updated_at = Some(now);
-            file.accounts.push(account);
-            UpsertOutcome::Added
-        }
-    };
-    save_accounts_for(region, &file)?;
-    Ok(outcome)
+    accounts_txn(region, || {
+        let mut account = account.clone();
+        let mut file = load_accounts_checked_for(region)?;
+        let now = store::now_iso();
+        let outcome = match file
+            .accounts
+            .iter_mut()
+            .find(|existing| existing.uid == account.uid)
+        {
+            Some(existing) => {
+                // 保留首次加入时刻；更新其余字段。
+                account.added_at = existing.added_at.clone().or(account.added_at.take());
+                account.updated_at = Some(now);
+                *existing = account;
+                UpsertOutcome::Replaced
+            }
+            None => {
+                account.added_at = account.added_at.or(Some(now.clone()));
+                account.updated_at = Some(now);
+                file.accounts.push(account);
+                UpsertOutcome::Added
+            }
+        };
+        save_accounts_for(region, &file)?;
+        Ok(outcome)
+    })
 }
 
 /// 回写刷新得到的新令牌（**只改令牌字段**——避免调用方走 upsert 把其它字段一起覆盖）。
 ///
 /// - `None` 的字段保持原值；空字符串同等忽略（不写空令牌）。
 /// - `expires_at` 单位 = **毫秒**（与本结构体字段声明一致；由本函数写入的值全部来自
-///   我们自己的刷新路径，单位可控；导入账号的该字段单位未取证，但页面不渲染它）。
+///   我们自己的刷新路径，单位可控）。判据与 [`normalize_expiry_ms`] 同一口径。
 /// - 返回是否找到了该账号（`false` = 刷新成功但账号已不在库，调用方**不得**当成功报）。
 pub fn set_tokens_for(
+    region: QoderRegion,
+    uid: &str,
+    access_token: Option<&str>,
+    refresh_token: Option<&str>,
+    expires_at: Option<i64>,
+) -> Result<bool, String> {
+    // ⚠️ 闭包里**不能**写 `return`：它会从外层 `set_tokens_for` 直接返回，
+    //    跳过 `with_txn` 的收尾（深度计数不归零 ⇒ 该线程此后同路径写操作全都不加锁）。
+    //    所以函数体一律拆到 `*_inner`，闭包只留一次调用。
+    accounts_txn(region, || {
+        set_tokens_inner(region, uid, access_token, refresh_token, expires_at)
+    })
+}
+
+fn set_tokens_inner(
     region: QoderRegion,
     uid: &str,
     access_token: Option<&str>,
@@ -298,11 +360,19 @@ pub fn set_remark_for(
     uid: &str,
     remark: Option<String>,
 ) -> Result<bool, String> {
+    accounts_txn(region, || set_remark_inner(region, uid, &remark))
+}
+
+fn set_remark_inner(
+    region: QoderRegion,
+    uid: &str,
+    remark: &Option<String>,
+) -> Result<bool, String> {
     let mut file = load_accounts_checked_for(region)?;
     let Some(account) = file.accounts.iter_mut().find(|a| a.uid == uid) else {
         return Ok(false);
     };
-    account.remark = remark.filter(|text| !text.trim().is_empty());
+    account.remark = remark.clone().filter(|text| !text.trim().is_empty());
     account.updated_at = Some(store::now_iso());
     save_accounts_for(region, &file)?;
     Ok(true)
@@ -314,11 +384,19 @@ pub fn set_group_for(
     uid: &str,
     group: Option<String>,
 ) -> Result<bool, String> {
+    accounts_txn(region, || set_group_inner(region, uid, &group))
+}
+
+fn set_group_inner(
+    region: QoderRegion,
+    uid: &str,
+    group: &Option<String>,
+) -> Result<bool, String> {
     let mut file = load_accounts_checked_for(region)?;
     let Some(account) = file.accounts.iter_mut().find(|a| a.uid == uid) else {
         return Ok(false);
     };
-    account.group = group.filter(|text| !text.trim().is_empty());
+    account.group = group.clone().filter(|text| !text.trim().is_empty());
     account.updated_at = Some(store::now_iso());
     save_accounts_for(region, &file)?;
     Ok(true)
@@ -339,6 +417,16 @@ pub fn set_group_for(
 ///
 /// 返回是否找到了该账号（`false` = 账号已不在库，调用方**不得**当成功报）。
 pub fn record_checkin_for(
+    region: QoderRegion,
+    uid: &str,
+    last_checkin: Option<&str>,
+    codes: &[(String, String)],
+    blocked: &[(String, i64)],
+) -> Result<bool, String> {
+    accounts_txn(region, || record_checkin_inner(region, uid, last_checkin, codes, blocked))
+}
+
+fn record_checkin_inner(
     region: QoderRegion,
     uid: &str,
     last_checkin: Option<&str>,
@@ -366,7 +454,6 @@ pub fn record_checkin_for(
     save_accounts_for(region, &file)?;
     Ok(true)
 }
-
 /// 该账号本地盖章的日期（`YYYY-MM-DD`）；没有戳 ⇒ `None`。
 ///
 /// 只截前 10 个字符 —— 戳的形态是 `YYYY-MM-DD HH:MM:SS`（见 [`record_checkin_for`]）。
@@ -415,7 +502,7 @@ pub fn account_view(account: &RawAccount, region: QoderRegion) -> Value {
         "source": display_opt(&account.source),
         "remark": display_opt(&account.remark),
         "group": display_opt(&account.group),
-        "expiresAt": account.expires_at,
+        "expiresAt": normalize_expiry_ms(account.expires_at),
         // 令牌**永不下发明文**：只给「有没有」与掩码。
         "hasAccessToken": shape.can_call(),
         "hasRefreshToken": shape.can_refresh(),
@@ -503,6 +590,28 @@ mod tests {
             error.contains("qoder.com") && error.contains("qoder.com.cn"),
             "{error}"
         );
+    }
+
+    /// ★ 到期时刻的**两种单位**归一成毫秒；未知/非法 ⇒ `None`（绝不编 1970）。
+    ///
+    /// 可证伪：删掉 `normalize_expiry_ms` 的量级判断 ⇒ 秒值断言变红；
+    /// 把 `account_view` 里的归一去掉 ⇒ 下面的视图断言变红。
+    #[test]
+    fn expiry_is_normalized_to_milliseconds_everywhere() {
+        let seconds = 1_790_000_000i64;
+        assert_eq!(normalize_expiry_ms(Some(seconds)), Some(seconds * 1000));
+        assert_eq!(
+            normalize_expiry_ms(Some(1_790_000_000_000)),
+            Some(1_790_000_000_000)
+        );
+        assert_eq!(normalize_expiry_ms(None), None);
+        assert_eq!(normalize_expiry_ms(Some(0)), None);
+        assert_eq!(normalize_expiry_ms(Some(-5)), None);
+
+        let mut raw = account("u1", "qoder.com.cn");
+        raw.expires_at = Some(seconds);
+        let view = account_view(&raw, QoderRegion::Cn);
+        assert_eq!(view["expiresAt"], json!(seconds * 1000));
     }
 
     /// ★ 下发形态**绝不包含令牌明文**。

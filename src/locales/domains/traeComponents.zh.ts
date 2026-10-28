@@ -93,18 +93,13 @@ export const zh = {
   // ---- 状态标签 ----
   "trae.comp.card.chip.checked": "已签到",
   // ★ 2026-10-12：与 WorkBuddy 卡片**同一组槽位**（原型对两个平台用同一个渲染器）。
-  "trae.comp.card.chip.toolsInUse": "使用中 {n} 个工具",
+  // ★ 2026-10-26：`chip.toolsInUse`（使用中 {n} 个工具）随卡片去重一并删除 ——
+  //   页脚程序位行已直接显示哪些工具在亮，计数是重复信息（与 WB 侧同批）。
   "trae.comp.card.chip.expired": "凭据已过期",
   "trae.comp.card.chip.needRelogin": "需重新登录",
-  // 「140 积分明天到期」——与 WorkBuddy 卡片同口径：只报**最急一批**（金额 + 到期日），
-  // 更远的批次留在 tooltip。旧文案「{amount} 积分 {days} 天内过期」把窗口内合计与
-  // 最晚一批拼在一句，既不是最急的也无法跨账号比较。
-  "trae.comp.card.chip.expiringToday": "{amount} 积分今天 {time} 到期",
-  "trae.comp.card.chip.expiringTomorrow": "{amount} 积分明天 {time} 到期",
-  "trae.comp.card.chip.expiringDate": "{amount} 积分 {date} {time} 到期",
-  "trae.comp.card.chip.expiringTipTitle": "按到期时间分批（共 {n} 批）",
-  "trae.comp.card.chip.expiringTipLine": "{time} · {amount} 积分",
-  "trae.comp.card.chip.expiringTipMore": "… 其余 {n} 批",
+  // ★ 2026-10-26（复刻 WB）：`chip.expiringToday / Tomorrow / Date / TipTitle / TipLine / TipMore`
+  //   六条已删 —— Trae 的临期不再是一枚徽章，改成指标行里的一段文字，文案与 tooltip 都走
+  //   共享的 `nextExpiryLabel` / `expiryTooltipLines`（与 WB 逐字一致）。
   "trae.comp.card.chip.unchecked": "今日未签到",
   "trae.comp.card.chip.cooling": "冷却中",
   "trae.comp.card.chip.jwtAuto": "自动刷新 JWT",
@@ -135,7 +130,6 @@ export const zh = {
   "trae.comp.card.menu.refreshCredits": "刷新积分",
   "trae.comp.card.menu.checkin": "手动签到",
   "trae.comp.card.menu.thaw": "解除冷却",
-  "trae.comp.card.menu.remark": "编辑备注",
   "trae.comp.card.menu.delete": "删除账号",
 
   // ---- 积分区 ----
@@ -165,31 +159,35 @@ export const zh = {
   "trae.comp.card.action.refreshCreditsTip": "只重新查询该账号的剩余积分，不必全选账号批量刷新",
   "trae.comp.card.footer.updatedAt": "{time} 更新",
   "trae.comp.card.footer.noUpdate": "未记录更新时间",
-  "trae.comp.card.footer.updatedTip": "该账号在本地账号库中的最近更新时间",
+  // ★ 2026-10-26：`footer.updatedTip` 已删 —— 卡片指标行不再显示「N 天前」，
+  //   更新时间只在详情抽屉的信息区出现。
 
   // ---- 卡片头部与指标行（原型 `.acct-top` / `.acct-metrics`）----
   // ★ 与 WorkBuddy 卡片**同名同义**（`wbAccounts.card.currentLogin` / `.metric.*`）：
   //   两个产品分区的卡片是同一套结构，文案也不该各写一版。
+  // ★ 2026-10-26：`metric.expiry`（「到期」）已删 —— 指标行不再有独立的「到期」格，
+  //   临期改用共享的 `nextExpiryLabel`（「21.07 积分 10-31 09:23 到期」）。
   "trae.comp.card.currentLogin": "当前登录",
   "trae.comp.card.metric.credits": "积分",
-  "trae.comp.card.metric.expiry": "到期",
+  // ★ 2026-10-26：没有积分明细（`creditPackages` 为空）时的临期兜底 —— 只报时刻、不编金额。
+  //   `creditsExpireAt` 是账号列表本来就带的，任何时刻都能给出「什么时候到期」。
+  "trae.comp.card.expiryOn": "{date} 到期",
+  "trae.comp.card.expiryOnTip": "积分到期时间（尚未刷新积分明细，因此不含金额）",
 
   // ---- 详情抽屉的信息区块（由 TraeAccountsPage 装配后注入）----
+  // ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的积分 / 凭据区块」）：
+  //   概览只留一个「账号信息」块，`section.credits` / `section.credential` 随区块一并删除。
   "trae.comp.card.detail.section.account": "账号信息",
-  "trae.comp.card.detail.section.credits": "积分",
-  "trae.comp.card.detail.section.credential": "凭据",
 
   // ---- 详情（P4 起由共享抽屉 `account-detail-drawer.tsx` 承载）----
-  "trae.comp.card.detail.open": "查看账号详情",
+  // （★ 2026-10-27：菜单的「查看详情」入口已删 —— 详情走卡片本体点击，键一并移除。）
   "trae.comp.card.detail.subtitle": "{name} · UID {uid}",
-  "trae.comp.card.detail.accountId": "账号 ID",
-  "trae.comp.card.detail.creditsExpiry": "积分到期",
-  "trae.comp.card.detail.jwtStatus": "JWT 状态",
+  // ★ 2026-10-27：概览不再重复账号 ID（抽屉副标题已带 UID），「凭据到期」只在凭据页签展示。
+  "trae.comp.card.detail.jwtExpiry": "凭据到期",
   "trae.comp.card.detail.jwtAutoRefresh": "自动刷新 JWT",
   "trae.comp.card.detail.deviceId": "设备标识",
   "trae.comp.card.detail.cooldown": "冷却",
   "trae.comp.card.detail.none": "无",
-  "trae.comp.card.detail.notQueried": "未查询",
   "trae.comp.card.detail.jwtAutoOn": "本次将续期",
   "trae.comp.card.detail.jwtAutoOff": "到期前自动续期",
   "trae.comp.card.detail.jwtAutoDisabled": "已关闭（仅可手动刷新）",

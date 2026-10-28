@@ -20,7 +20,9 @@
  * - `signal` 为**协作式中止**：只阻止**尚未开始**的项，已在途的请求一定会跑完。
  *   因此中止后的结果是「部分生效」，调用方**必须**把未处理的条数写进结果文案，
  *   不能报成「已完成」。
- * - 返回数组与入参**同序同长**；被中止而没跑的项为 `undefined`（缺席 ≠ 失败）。
+ * - 返回数组与入参**同序同长**，且**稠密**：被中止而没跑的项是 `undefined`
+ *   （缺席 ≠ 失败）。⚠️ 不要用 `new Array(total)` —— 稀疏数组会让 `filter` / `forEach`
+ *   **跳过空位**，取消场景下「未处理」会被静默统计成 0。
  */
 export interface MapWithConcurrencyOptions {
   /** worker 数上限（默认 3，与积分刷新同一档）。 */
@@ -40,7 +42,7 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<(R | undefined)[]> {
   const { concurrency = 3, gapMs = 0, signal, onProgress } = options;
   const total = items.length;
-  const results: (R | undefined)[] = new Array(total);
+  const results: (R | undefined)[] = Array.from({ length: total }, () => undefined);
   if (total === 0) return results;
 
   let cursor = 0;

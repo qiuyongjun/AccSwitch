@@ -66,22 +66,36 @@ export const zh = {
   "qoder.page.accounts.toolbar.statusBucket.normal": "正常",
   "qoder.page.accounts.toolbar.statusBucket.noCredential": "无可用凭据",
   "qoder.page.accounts.toolbar.statusBucket.unrecognized": "凭据未识别",
+  "qoder.page.accounts.quickRefreshDone": "已刷新 {n} 个账号：积分 · 签到状态 · 凭证状态",
+  "qoder.page.accounts.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
+  "qoder.page.accounts.quickRefreshFail": "刷新失败",
 
   "qoder.page.accounts.table.account": "账号",
   "qoder.page.accounts.table.status": "状态",
+  // ★ 2026-10-27（T05）：`expiresAt` 已由 core 归一成 Unix 毫秒 ⇒ 列表补「凭据」列
+  //   （与 WB / Trae 同列名；无值显示「—」）。
+  "qoder.page.accounts.table.credential": "凭据",
   "qoder.page.accounts.table.source": "来源",
   "qoder.page.accounts.table.remark": "备注",
 
   // ---- 详情抽屉（原型 `drawerAccount`：账号信息 + 备注**在抽屉里**编辑） ----
   "qoder.page.accounts.drawer.subtitle": "{name} · UID {uid}",
   "qoder.page.accounts.drawer.info": "账号信息",
-  "qoder.page.accounts.drawer.uid": "UID",
+  // ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的凭据信息」）：
+  //   概览不再重复账号 UID（副标题已带）与凭据摘要 / 掩码令牌（「凭据」页签更完整）。
   "qoder.page.accounts.drawer.domain": "域名",
   "qoder.page.accounts.drawer.source": "来源",
   "qoder.page.accounts.drawer.addedAt": "添加时间",
   "qoder.page.accounts.drawer.updatedAt": "最近更新",
   "qoder.page.accounts.drawer.credential": "凭据",
   "qoder.page.accounts.drawer.accessToken": "访问令牌",
+  // ★ 2026-10-26：凭据页签的明细行（此前页签里只有按钮、没有内容）。
+  "qoder.page.accounts.drawer.refreshToken": "刷新令牌",
+  "qoder.page.accounts.drawer.personalToken": "个人令牌",
+  "qoder.page.accounts.drawer.present": "有",
+  "qoder.page.accounts.drawer.absent": "无",
+  // ★ 2026-10-27（T02 时间契约落地后）：`expiresAt` 已在 core 归一成 Unix 毫秒 ⇒ 可以如实展示。
+  "qoder.page.accounts.drawer.expiresAt": "凭据到期",
 
   // ---- 删除（**软删除**：进回收站可恢复 ⇒ 文案如实说「可恢复」，别再写「永久删除」） ----
   "qoder.page.accounts.removed": "已删除 {name}",
@@ -182,8 +196,16 @@ export const zh = {
   "qoder.page.accounts.chip.notCheckedIn": "今日未签",
   "qoder.page.accounts.chip.checkinUnavailable": "签到不可用",
   "qoder.page.accounts.metric.credits": "积分",
-  "qoder.page.accounts.metric.creditsValue": "{remaining} / {total}",
+  // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
+  //   `<b>剩余</b>/总额`（千分位走 `formatCredits`），斜杠两侧不带空格，与 WB 的
+  //   `积分 4,678.19/4,788` 逐字同形。
+  // ★ 2026-10-26：`剩余/总额` 斜杠两侧不自明 ⇒ 补 tooltip（与 WB 卡片「积分 x/y」同口径）。
+  "qoder.page.accounts.metric.creditsTip": "剩余 {remaining} · 总额 {total} · 已用 {used}",
   "qoder.page.accounts.metric.plan": "套餐",
+  // ★ 2026-10-27：额度到期进抽屉积分包行（顶层 `expiresAt`，Unix 毫秒，Qoder SDK 口径）。
+  "qoder.page.accounts.metric.used": "已用 {n}",
+  "qoder.page.accounts.metric.expiresOn": "{date} 到期",
+  "qoder.page.accounts.metric.expired": "已到期",
   "qoder.page.accounts.credits.loading": "额度查询中…",
   "qoder.page.accounts.checkin.action": "签到",
   "qoder.page.accounts.checkin.already": "{name} 今日已签到",
@@ -194,6 +216,8 @@ export const zh = {
   "qoder.page.accounts.checkin.resultFail": "签到失败 {n} 个",
   "qoder.page.accounts.refresh.done": "{name} 的令牌已刷新",
   "qoder.page.accounts.refresh.batchDone": "已刷新 {n} 个账号的令牌",
+  "qoder.page.accounts.refresh.syncFailed": "续期已完成，界面同步失败",
+  "qoder.page.accounts.refresh.syncFailedDesc": "令牌已换新，但账号列表回读失败。请重新读取，不要重复续期。",
 
   "qoder.page.accounts.toolbar.sort.credits": "积分余额",
   "qoder.page.accounts.toolbar.group.source": "按来源",

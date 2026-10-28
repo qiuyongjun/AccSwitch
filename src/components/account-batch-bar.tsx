@@ -1,15 +1,9 @@
 import { Check, ChevronDown, Download, KeyRound, Loader2, RefreshCw, Trash2, XIcon } from "lucide-react";
 
-import { RefreshMenuGroup } from "@/components/account-menu-parts";
+import { RefreshMenuGroup, RefreshTasksItem } from "@/components/account-menu-parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AccountRefreshKind } from "@/lib/account-refresh";
 import { useT } from "@/lib/i18n";
 import { CheckinIcon, GrowthTaskIcon } from "@/lib/semantic-icons";
@@ -28,19 +22,30 @@ import { cn } from "@/lib/utils";
  * ⚠️ **不再用底部浮条**：浮条会盖住列表底部（网格视图尤甚），且「选择模式」是
  * **当前列表上下文**的动作，跟着列表走才符合直觉。
  *
- * ## 动作是可选的（`onCheckin?` / `onRefresh?` / `onRefreshPart?` / `onRefreshToken?` / `onRefreshGrowth?` / `onCompleteTasks?` / `onExport?` / `onDelete?`）
+ * ## 动作是可选的（`onCheckin?` / `onRefresh?` / `onRefreshPart?` / `onRefreshToken?` / `onRefreshTasks?` / `onCompleteTasks?` / `onExport?` / `onDelete?`）
  *
  * 平台能力不同（WB 有积分刷新与成长任务、Trae 侧动作集不同、Qoder 只有删除），**缺哪个就不渲染哪个**，
  * 而不是渲染一枚点了没反应的按钮 —— 后者比不渲染更差。
  *
- * 批量「刷新」要么给一个粗粒度 `onRefresh`，要么给四项细粒度 `onRefreshPart`（渲染成下拉，
+ * 批量「刷新」要么给一个粗粒度 `onRefresh`，要么给细粒度 `onRefreshPart`（渲染成下拉，
  * 与单账号菜单的「刷新」组同构）；**不要既给两者**，否则同一动作出现两个入口。
  *
- * ## ★ 作用域边界：批量 = **勾选范围**（2026-10-23 写入口径）
+ * ## ★ 刷新菜单里只有只读项，写操作在外（2026-10-26 用户要求）
+ *
+ * | 位置 | 动作 |
+ * |:--|:--|
+ * | 下拉（= 单账号菜单的刷新组） | 刷新积分 / 刷新签到状态 / 刷新凭证状态 / 刷新任务 |
+ * | 下拉**外部**的按钮行 | 签到 / 完成任务 / **续期凭据** / 导出 / 删除 |
+ *
+ * 判据是「读 / 写」：下拉里的只读项只重读现成数据；续期凭据会写 `refresh_token`，
+ * 与签到、完成任务同属账号级写动作，混进下拉会让人以为点「刷新积分」也会顺带续期。
+ * 「刷新今日 Token」已从所有刷新菜单移除（卡片不再展示它）。
+ *
+ * ## ★ 作用域边界：批量 = **勾选范围**（2026-10-26 修订）
  *
  * | 作用域 | 入口 | 允许做什么 |
  * |:--|:--|:--|
- * | 全量 | 页头「一键刷新 / 一键签到 / 一键完成」 | 只做安全、幂等、可重复执行的批处理；**不删除、不导出、不续期** |
+ * | 全量 | 页头「一键刷新 / 一键签到」 | 只做安全、幂等、可重复执行的批处理（只读刷新、自动跳过已完成项）；**不删除、不导出、不续期、不完成任务** |
  * | 勾选 | 本组件 | 用户显式选择后执行，**允许写操作与破坏性操作**（续期、删除） |
  * | 单账号 | 卡片 / 表格菜单、详情抽屉 | 单实例、需要上下文才能判断的动作 |
  *
@@ -56,11 +61,12 @@ import { cn } from "@/lib/utils";
  * 因此取消后**必须**报「N 个未处理」，不能报成全部完成 —— 文案键
  * `wbAccounts.toast.batchCancelled` 就是为此存在的。
  *
- * ## ★ 成长任务项（`onRefreshGrowth`）只由 WB·CN 注入
+ * ## ★ 任务项（`onRefreshTasks`）只由 WB·CN 注入
  *
- * 它**不是** `AccountRefreshKind`（那四项是「重读某一层现成数据」的通用语义），
+ * 它**不是** `AccountRefreshKind`（那几个是「重读某一层现成数据」的接口级语义），
  * 而是「对所选账号逐个强制重扫上游任务摘要」——只有 WorkBuddy 国内版有成长体系。
- * 因此它不进单账号菜单，也不进四项刷新组，单独成项 + 独立的分隔线。
+ * 但它在**展示上**属于刷新组：与积分 / 签到 / 凭据同组、无分隔线，共用
+ * `RefreshTasksItem`（单账号菜单用的也是同一个组件 ⇒ 两处不可能再漂移）。
  *
  * ## 为什么是自定义组件（AGENTS.md 要求记录理由）
  *
@@ -74,30 +80,33 @@ export interface AccountBatchBarProps {
   busy?: boolean;
   onCheckin?: () => void;
   onRefresh?: () => void;
-  /** 单项批量刷新（四项）；提供时「刷新」渲染为下拉菜单，与单账号菜单同构。 */
+  /** 单项批量刷新；提供时「刷新」渲染为下拉菜单，与单账号菜单同构。 */
   onRefreshPart?: (kind: AccountRefreshKind) => void;
-  /** 批量条真的能刷的刷新项（默认四项全给）。 */
+  /** 批量条真的能刷的刷新项（默认 {@link ACCOUNT_REFRESH_KINDS}，`tokens` 传了也不渲染）。 */
   refreshKinds?: readonly AccountRefreshKind[];
   /** 正在批量刷新的项（显示转圈并禁用）。 */
   refreshingKinds?: readonly AccountRefreshKind[];
   /** 刚刷新成功的项（显示对勾，调用方负责淡出）。 */
   doneKinds?: readonly AccountRefreshKind[];
   /**
-   * 批量续期凭据（写 refresh_token）。这是四项只读刷新之外的**写操作**，
-   * 与单账号抽屉里的「续期凭据」同一条路径，单独成项而不是混进刷新组。
+   * 批量续期凭据（写 refresh_token）。这是只读刷新之外的**写操作**，
+   * 与单账号抽屉里的「续期凭据」同一条路径，渲染为下拉**外部**的独立按钮
+   * （2026-10-26 用户要求：续期 / 签到 / 完成任务都在刷新菜单外）。
    */
   onRefreshToken?: () => void;
   refreshingToken?: boolean;
   doneToken?: boolean;
   /**
-   * 批量刷新**成长任务摘要**（仅 WorkBuddy 国内版注入）。
+   * 批量**重扫任务摘要**（仅 WorkBuddy 国内版注入）。
    *
    * 对所选账号**逐个** `growth_tasks_scan(force, accountId)` —— 不能用全量扫描，
    * 那会越界更新未勾选账号的卡片标签。见 `docs/specs/GROWTH-TASKS.md` §6。
+   * 与单账号菜单的「刷新任务」是**同一项**（同一个 `RefreshTasksItem`），不执行任务。
+   *
+   * 转圈 / 「已更新」由 `RefreshTasksItem` 与 {@link busy} 决定 ⇒ 不再单独要一组
+   * `refreshing` / `done` prop（此前那组只服务批量条自己那份内联实现）。
    */
-  onRefreshGrowth?: () => void;
-  refreshingGrowth?: boolean;
-  doneGrowth?: boolean;
+  onRefreshTasks?: () => void;
   /** 批量完成成长任务（仅 WorkBuddy 国内版有成长体系）。 */
   onCompleteTasks?: () => void;
   /** 导出所选账号（原型 `batch-export`：批量条上的第四个动作）。 */
@@ -131,9 +140,7 @@ export function AccountBatchBar({
   onRefreshToken,
   refreshingToken,
   doneToken,
-  onRefreshGrowth,
-  refreshingGrowth,
-  doneGrowth,
+  onRefreshTasks,
   onCompleteTasks,
   onExport,
   onDelete,
@@ -148,7 +155,7 @@ export function AccountBatchBar({
 
   return (
     <div
-      /* ★ `flex-wrap`：动作最多时（刷新组 + 成长 + 续期 + 签到 + 完成任务 + 导出 + 删除 + 清除）
+      /* ★ `flex-wrap`：动作最多时（刷新下拉 + 签到 + 完成任务 + 续期 + 导出 + 删除 + 清除）
          再加「进度 + 取消」在窄窗会挤出一行 —— 换行比横向溢出好，溢出会把最右侧的
          「清除选择」推到可视区外，用户找不到退出选择模式的出口。 */
       className="mb-3 flex min-w-0 w-full flex-wrap items-center gap-2.5 rounded-lg border border-primary/35 px-3.5 py-2.5"
@@ -193,6 +200,9 @@ export function AccountBatchBar({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
+              {/* ★ 下拉里**只有只读刷新项**（积分 / 签到状态 / 凭证状态 / 任务），与单账号菜单同构：
+                  「续期凭据」是写操作，已挪到下拉**外部**的按钮行（2026-10-26 用户要求）；
+                  「刷新今日 Token」不再出现在任何刷新菜单。 */}
               <RefreshMenuGroup
                 kinds={refreshKinds}
                 refreshingKinds={refreshingKinds}
@@ -200,68 +210,8 @@ export function AccountBatchBar({
                 disabled={busy}
                 onPick={onRefreshPart}
               />
-              {/* ★ 成长任务摘要（仅 WB·CN）：与四项只读刷新分线 —— 它是「重扫上游任务」，
-                  不是「重读某一层现成数据」，语义与失败原因都不同。 */}
-              {onRefreshGrowth && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={busy}
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      onRefreshGrowth();
-                    }}
-                  >
-                    <span className="grid size-4 shrink-0 place-items-center">
-                      {refreshingGrowth ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : doneGrowth ? (
-                        <Check className="size-4 text-primary" />
-                      ) : (
-                        <GrowthTaskIcon />
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{t("shared.batch.refreshGrowth")}</span>
-                    {refreshingGrowth ? (
-                      <span className="ml-2 shrink-0 text-[10.5px] text-muted-foreground">
-                        {t("shared.cardMenu.busy")}
-                      </span>
-                    ) : doneGrowth ? (
-                      <span className="ml-2 shrink-0 text-[10.5px] text-primary">{t("shared.cardMenu.done")}</span>
-                    ) : null}
-                  </DropdownMenuItem>
-                </>
-              )}
-              {onRefreshToken && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    disabled={busy}
-                    onSelect={(event) => {
-                      event.preventDefault();
-                      onRefreshToken();
-                    }}
-                  >
-                    <span className="grid size-4 shrink-0 place-items-center">
-                      {refreshingToken ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : doneToken ? (
-                        <Check className="size-4 text-primary" />
-                      ) : (
-                        <KeyRound />
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{t("shared.batch.refreshToken")}</span>
-                    {refreshingToken ? (
-                      <span className="ml-2 shrink-0 text-[10.5px] text-muted-foreground">
-                        {t("shared.cardMenu.busy")}
-                      </span>
-                    ) : doneToken ? (
-                      <span className="ml-2 shrink-0 text-[10.5px] text-primary">{t("shared.cardMenu.done")}</span>
-                    ) : null}
-                  </DropdownMenuItem>
-                </>
-              )}
+              {/* 任务项（仅 WB·CN 注入）：与刷新项同组、**无分隔线** —— 单账号菜单里也是这个位置。 */}
+              {onRefreshTasks && <RefreshTasksItem busy={busy} onPick={onRefreshTasks} />}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : onRefresh ? (
@@ -298,6 +248,28 @@ export function AccountBatchBar({
           >
             <GrowthTaskIcon />
             {t("shared.batch.completeTasks")}
+          </Button>
+        )}
+        {/* ★ 续期凭据（写 `refresh_token`）：与签到 / 完成任务同为账号级写动作，
+            因此摆在刷新下拉**外部**（2026-10-26 用户要求）—— 混进下拉会让人以为
+            「点刷新积分」也会顺带续期。 */}
+        {onRefreshToken && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-full px-3 text-xs"
+            disabled={busy}
+            title={t("shared.cardMenu.refreshTokenHint")}
+            onClick={onRefreshToken}
+          >
+            {refreshingToken ? (
+              <Loader2 className="animate-spin" />
+            ) : doneToken ? (
+              <Check className="text-primary" />
+            ) : (
+              <KeyRound />
+            )}
+            {t("shared.batch.refreshToken")}
           </Button>
         )}
         {onExport && (

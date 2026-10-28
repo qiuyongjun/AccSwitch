@@ -39,7 +39,7 @@
 | `accessToken` | 访问令牌 | 前缀 `dt-`（设备流）或 `jt-`（jobToken） |
 | `refreshToken` | 刷新令牌 | 前缀 `drt-` / `jrt-`，按前缀决定走哪个刷新端点 |
 | `personalToken` | PAT（长期兜底） | 前缀 **`pt-`** |
-| `expiresAt` | 过期时刻 | |
+| `expiresAt` | 过期时刻 | ★ 2026-10-27：落盘值可能是秒（本机导入原样抄上游）或毫秒（刷新/OAuth 写入）；**所有读取方统一走 `qoder::account::normalize_expiry_ms`**，下发给前端的 `account_view.expiresAt` 恒为 Unix 毫秒或 `null` |
 | `source` | 来源 | `oauth` / `pat` / `desktop-app`（本机导入） |
 | `credits` / `plan` | 额度快照 / 套餐名 | |
 | `lastCheckin` | 最近签到 | |
@@ -72,7 +72,7 @@
 | 能力 | 有 | 说明 |
 |:---|:---:|:---|
 | 每日签到领积分 | ✅ | 走**活动平台**：`GET /sash/api/v1/me/campaigns` → 筛 `CLAIM_BENEFIT` + `CLAIMABLE` → 逐个 `POST …/{id}/claim`，累加 Credits；已领 ⇒ 幂等「今日已领」。旧 `/sash/daily-check-in` 只在**整区没有活动平台**（404/405/410）时兜底。三档语义不变：**没有积分类活动 ⇒ 未开放（`ok:false` + `disabled`）**，不谎报成功。⚠️ 真机未复验（本仓无 Qoder 账号），当前只有协议级单测 + `#[ignore]` 探针（`live_campaigns_probe`） |
-| 积分 / 额度查询 | ✅ | quota/usage + 套餐快照 |
+| 积分 / 额度查询 | ✅ | quota/usage + 套餐快照；顶层 `expiresAt`（Unix **毫秒**，SDK References 口径）驱动卡片 / 抽屉的「X 积分 … 到期」 |
 | Pro 福利包 | ❌ | **未实现**：`PATH_PRO_CLAIM` 只有常量定义、零调用点（issue #58 第 1 阶段一并落地） |
 | OAuth 设备授权 | ✅ | **PKCE S256**；两区 URL 参数不同（国内带 `redirect_uri`，国际不带） |
 | PAT 导入 | ✅ | 前缀 `pt-`，导入后自动交换 jobToken |

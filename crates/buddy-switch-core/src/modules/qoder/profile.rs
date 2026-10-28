@@ -255,10 +255,21 @@ fn account_from_record(region: QoderRegion, raw: &Value, source: &str) -> Option
         access_token: access,
         refresh_token: refresh,
         personal_token: personal,
+        /* 到期时刻在**导入边界**按来源解析：桌面明文是 RFC3339 字符串，其余来源可能是
+        数字（秒或毫秒）。数字形状不在本层猜单位 —— 读取方统一走
+        `account::normalize_expiry_ms`，那里是唯一判据。 */
         expires_at: raw
             .get("expiresAt")
             .or_else(|| raw.get("expires_at"))
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))),
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_f64().map(|f| f as i64))
+                    .or_else(|| {
+                        v.as_str()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|when| when.timestamp_millis())
+                    })
+            }),
         source: Some(source.to_string()),
         remark: None,
         group: None,

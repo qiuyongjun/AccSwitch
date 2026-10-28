@@ -28,8 +28,9 @@
 | 改前端某个页面 | [`specs/PLAN.md`](specs/PLAN.md) 对应 §3.x + 该期 `P*-ARCH.md` |
 | 加一个可自动完成的成长任务 / 改事件链 | [`specs/GROWTH-TASKS.md`](specs/GROWTH-TASKS.md) |
 | 新增一个平台 / 产品线 | [`specs/P5-ARCH.md`](specs/P5-ARCH.md) + [`specs/UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) §11 |
+| 改账号库的读写 / 续期回写 / 软删除 | [`specs/ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md)（**写路径必须进事务**） |
 | 用词拿不准（region / scope / 作用域…） | [`specs/VOCABULARY.md`](specs/VOCABULARY.md)（**冻结，不许自创**） |
-| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D46） |
+| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D51） |
 | 加新交互（先原型、后代码） | [`prototype/`](prototype/) → `index.html` 可直接打开 |
 | 查这版改了什么 | [`releases/`](releases/) |
 
@@ -44,9 +45,10 @@
 | 文档 | 内容 | 状态 |
 |:--|:--|:--|
 | [`PLAN.md`](specs/PLAN.md) | 架构与交互重构总方案 v2.8（P0–P16 分期表、交互规范、Playbook） | 现行 · P0–P16 已落地 |
-| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D46，逐条有结论 | 现行 · 已拍板 |
+| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D51，逐条有结论 | 现行 · 已拍板 |
 | [`VOCABULARY.md`](specs/VOCABULARY.md) | 词汇表（P0 冻结）。**新代码只许用「新词汇」** | 现行 · 冻结 |
 | [`COVERAGE-REPORT.md`](specs/COVERAGE-REPORT.md) | 原型 112 条行为 vs 真实应用的覆盖度实测 | 现行 · 随原型更新 |
+| [`ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md) | 账号库写事务：并发丢更新 / 跨进程覆盖 / 容错读抹库的收敛与使用纪律 | 现行 · 2026-10-28 落地 |
 | [`P5-P12-TASKS.md`](specs/P5-P12-TASKS.md) | P5–P12 的执行级任务清单 | 现行 |
 | [`UPDATE-NOTES-ARCH.md`](specs/UPDATE-NOTES-ARCH.md) | 升级前说明弹窗（版本内容）：四阶段交互、数据契约、发布侧产出与切片口径 | 现行 · 2026-10-17 落地 |
 
@@ -81,7 +83,7 @@
 | [`UNIFIED-GATEWAY-UI.md`](specs/UNIFIED-GATEWAY-UI.md) | 统一入口的交互规格：三张卡 / 状态矩阵 / 危险动作分档 |
 | [`QODER-PLATFORM.md`](specs/QODER-PLATFORM.md) | Qoder 平台事实与建模决策 |
 | [`QODER-INTEGRATION-PLAN.md`](specs/QODER-INTEGRATION-PLAN.md) | Qoder 集成的模块 / 接口 / 依赖梳理 |
-| [`trae-parity-design.md`](specs/trae-parity-design.md) | Trae 分区对齐 WorkBuddy 的增量架构与任务分解 |
+| [`trae-parity-design.md`](specs/trae-parity-design.md) | Trae / Qoder 对齐 WorkBuddy；§11 为账号界面修复方案（2026-10-27，规划：T01–T08） |
 | [`trae-parity-matrix.md`](specs/trae-parity-matrix.md) | Trae 差距矩阵与需求池（带 `文件:行号` 证据） |
 
 ### 待拍板方案（还没写码）

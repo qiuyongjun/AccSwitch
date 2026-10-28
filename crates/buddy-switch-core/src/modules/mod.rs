@@ -1,4 +1,7 @@
 pub mod account;
+// 账号库「读 → 改 → 写」的事务边界（进程内互斥 + 跨进程乐观校验）—— Qoder / Trae 共用。
+// 放在 `account` 之后、`activity` 之前：它只依赖 std，被各账号模块引用。
+pub mod accounts_txn;
 pub mod activity;
 // P15 · 外部 Agent 会话监听：`hook 事件 → 会话状态` 的纯状态机 —— 悬浮窗的**第二个数据源**
 // （第一个是 `companion.rs` 消费的自家切换进度）。**零周期任务**：过期靠读取时惰性判定。

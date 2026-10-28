@@ -1,4 +1,6 @@
-import { Check, CircleCheck, CircleSlash, Coins, Ellipsis, Info, KeyRound, Loader2, RefreshCw, Save, StickyNote, Trash2 } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
+import type { DrawerTab } from "@/lib/drawer-tab-preference";
+import { Check, CircleCheck, CircleSlash, Coins, Ellipsis, KeyRound, Loader2, RefreshCw, Save, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,16 +9,28 @@ import { DemoAction } from "@/components/demo-action";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { MenuGroupLabel, MenuHead, MenuNote, RefreshMenuGroup } from "@/components/account-menu-parts";
 import type { AccountRefreshKind } from "@/lib/account-refresh";
-import type { AccountTokenTodayEntry } from "@/lib/types";
-import { compactTokens } from "@/components/usage/format";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { AVATAR_TEXT_CLASS, accountInitials, avatarTone } from "@/components/account-card";
+import {
+  AVATAR_TEXT_CLASS,
+  CredentialExpiryMeta,
+  accountInitials,
+  avatarTone,
+  expiryTooltipLines,
+  nextExpiryLabel,
+} from "@/components/account-card";
 import { displayText } from "@/lib/display-text";
-import { EXPIRY_TIP_LIMIT, expiryDay, isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
-import { formatAbsoluteTime, formatRelativeTime } from "@/lib/catalog-source";
+import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { useT, type Translate } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import type { TraeAccount, TraeJwtStatus, TraeProgramId, TraeRegionId, TraeVariantId } from "@/lib/trae-types";
+import type {
+  TraeAccount,
+  TraeCreditPackage,
+  TraeJwtStatus,
+  TraeProgramId,
+  TraeRegionId,
+  TraeVariantId,
+} from "@/lib/trae-types";
 
 /* 与 WB 卡片同一处理：几何交给 `Badge` 基础样式（已逐值对齐原型 `.badge`），
    这里只抵消它的 1px 透明边框（原型 `.badge` 没有边框）。 */
@@ -39,7 +53,60 @@ export function shortTime(seconds: number | null): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * 积分总量（`积分 X/Y` 里的 `Y`）—— 卡片与表格共用。
+ *
+ * ## 为什么分母只能来自 `creditPackages`（2026-10-27 修正）
+ *
+ * 上一版为了「让列表也显示分母」，曾拿 `account.credits` 当总量。那是**错的**：
+ * `account.credits` 在后端是 `latest_credits`，取自 `credits_history` 里该账号
+ * **最近一条每日余额快照**（`CreditRecord { date, credits, delta }`，见
+ * `crates/buddy-switch-core/src/modules/trae/credits.rs:290`）—— 是「某一天的余额」，
+ * 不是「额度容量」。于是屏幕上出现了 `2,521.07/100` 这种剩余大于总量的自相矛盾读数。
+ *
+ * 唯一真实的总量是逐包 `total` 之和（`user_entitlement_pack_list` 的每个包都有
+ * 总量与剩余），而它**只有刷过积分才有**（`creditPackages === null` 表示还没查过）。
+ *
+ * ⇒ 没有明细就返回 `null`，调用方**只显示剩余、不写分母**。
+ * 要分母就得让明细就位：抽屉打开时会自动拉一次（见 `TraeAccountsPage` 的
+ * `autoCreditsFor`），列表侧靠「一键刷新 / 勾选后刷新积分」。
+ */
+export function traeCreditTotal(account: Pick<TraeAccount, "creditPackages">): number | null {
+  const pkgs = account.creditPackages ?? [];
+  if (pkgs.length === 0) return null;
+  const sum = pkgs.reduce((acc, pkg) => acc + pkg.total, 0);
+  return sum > 0 ? sum : null;
+}
+
+/**
+ * 逐包明细的**唯一合并口径**：积分总览（`get_trae_credits` 的 `packages[uid]`）优先，
+ * 回落账号快照自带的 `creditPackages`。
+ *
+ * ⚠️ 卡片侧一直这么合并，表格侧此前只读账号快照 ⇒ 同一账号在卡片上有
+ * `剩余/总数` 与到期金额、在列表里只剩剩余与到期时刻（2026-10-27 用户报障）。
+ * 两个视图都从这里取，明细来源不可能再分叉。
+ */
+export function traeCreditPackages(
+  account: Pick<TraeAccount, "userId" | "creditPackages">,
+  overviewPackages?: Record<string, TraeCreditPackage[]> | null,
+): TraeCreditPackage[] | null {
+  return overviewPackages?.[account.userId] ?? account.creditPackages ?? null;
+}
+
 /** JWT 状态 → Badge 变体与文案。 */
+/**
+ * JWT 到期时刻（**毫秒**）—— 单位换算的**唯一入口**。
+ *
+ * ⚠️ `TraeAccount.jwtExpTimestamp` 是 **Unix 秒**，不是毫秒：后端 `trae/jwt.rs:20` 的
+ * 字段注释写着「`exp` 的 Unix 秒时间戳」，同文件的 `exp_hours` 也是 `(exp - now) / 3600`
+ * 用秒算的。直接把它当毫秒传给 `formatDate` 会渲染成 **1970**。
+ *
+ * 抽成函数而不是就地 `* 1000`：卡片与表格两处都要换算，散着写迟早有一处漏。
+ */
+export function traeJwtExpiryMs(account: Pick<TraeAccount, "jwtExpTimestamp">): number | null {
+  return account.jwtExpTimestamp == null ? null : account.jwtExpTimestamp * 1000;
+}
+
 export function jwtBadge(status: TraeJwtStatus, hours: number | null, t: Translate) {
   switch (status) {
     case "ok":
@@ -59,6 +126,135 @@ export function jwtBadge(status: TraeJwtStatus, hours: number | null, t: Transla
     default:
       return { variant: "outline" as const, className: "", text: t("trae.comp.card.jwt.unparsable") };
   }
+}
+
+/** 冷却的 tooltip 文案（类型 · 解除时刻 · 原因）—— 卡片状态徽章与表格「冷却中」共用。 */
+export function traeCooldownTip(account: TraeAccount, t: Translate): string {
+  return account.cooldownType
+    ? [
+        account.cooldownType,
+        account.cooldownUntil ? t("trae.comp.card.cooldown.until", { time: shortTime(account.cooldownUntil) }) : "",
+        account.cooldownReason ?? "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+}
+
+/**
+ * 账号**状态徽章**（卡片 chips 行与表格「状态」列**同一份实现**，与 WB 的
+ * `AccountStatusBadge` 同一角色）：
+ *
+ * ```
+ * 凭据已过期 / 需重新登录(bad) → 今日未签到(warn) → 已签到(ok)   ＋  冷却中(warn)  ＋  有效 13 天
+ * ```
+ *
+ * ★ 2026-10-27（用户报障「今日未签到，卡片和列表标签不一致」）：表格此前另写一份 ——
+ * 未签到是 secondary 灰、无图标，卡片是 warning 琥珀 + `CheckinIcon` ⇒ 同一状态两种画法。
+ * 现在两处都走这里；`checkedToday` 由调用方传**合并后**的值（上游 `checkinMap` 优先）。
+ *
+ * 冷却也收进来了（后端只在**未到期**时下发 `cooldownType`，见 `trae/account.rs` 的
+ * `active_cooldown`）：此前只有表格画「冷却中」、卡片藏在签到徽章的 tooltip 里，
+ * 两种视图对同一条账号摆出的标签集合不一样。tooltip 仍给类型 / 解除时刻 / 原因。
+ */
+export function TraeStatusChips({
+  account,
+  checkedToday,
+  onOpenTab,
+}: {
+  account: TraeAccount;
+  /** 页面侧合并后的签到态；不传 ⇒ 读账号快照。 */
+  checkedToday?: boolean;
+  /** 标签直达详情页签（R10）：签到 / 凭据 → 对应页签；冷却 → 凭据。 */
+  onOpenTab?: (tab: DrawerTab) => void;
+}) {
+  const t = useT();
+  /** 可点标签包一层 `button`：整卡可点开详情，标签必须自己能拦下冒泡。 */
+  const wrap = (badge: ReactNode, tab: DrawerTab) =>
+    onOpenTab ? (
+      <button
+        type="button"
+        className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenTab(tab);
+        }}
+      >
+        {badge}
+      </button>
+    ) : (
+      badge
+    );
+  /* 已过期 / SessionDead 是**互斥的一枚**：凭据都坏了，「签没签到」是次要信息。
+     签到两态共用 `CheckinIcon`（与 WB 的 `AccountStatusBadge` 同一枚）。 */
+  const statusChip =
+    account.jwtStatus === "expired" || account.cooldownType === "SessionDead" ? (
+      <Badge variant="destructive" className={chipClass}>
+        {account.cooldownType === "SessionDead"
+          ? t("trae.comp.card.chip.needRelogin")
+          : t("trae.comp.card.chip.expired")}
+      </Badge>
+    ) : !(checkedToday ?? account.checkedToday) ? (
+      <Badge variant="warning" className={chipClass}>
+        <CheckinIcon /> {t("trae.comp.card.chip.unchecked")}
+      </Badge>
+    ) : (
+      <Badge variant="success" className={chipClass}>
+        <CheckinIcon /> {t("trae.comp.card.chip.checked")}
+      </Badge>
+    );
+
+  const coolingChip = account.cooldownType ? (
+    <Badge variant="warning" className={chipClass} title={traeCooldownTip(account, t)}>
+      {t("trae.comp.card.chip.cooling")}
+    </Badge>
+  ) : null;
+
+  /* 凭据有效期（`有效 13 天` / `临期 5.2 小时`）——`expired` 由上面那枚表达，
+     这里不再叠一枚「已过期」。 */
+  const validity = jwtBadge(account.jwtStatus, account.jwtExpHours, t);
+  const validityChip =
+    account.jwtStatus === "expired" ? null : (
+      <Badge variant={validity.variant} className={cn(chipClass, validity.className)}>
+        {validity.text}
+      </Badge>
+    );
+
+  return (
+    <>
+      {wrap(
+        statusChip,
+        account.jwtStatus === "expired" || account.cooldownType === "SessionDead" ? "credential" : "checkin",
+      )}
+      {coolingChip ? wrap(coolingChip, "credential") : null}
+      {validityChip ? wrap(validityChip, "credential") : null}
+    </>
+  );
+}
+
+/**
+ * 「该程序位此刻登录的就是这个账号」的只读角标 —— 卡片页脚与表格「程序位」列**同一份**。
+ *
+ * 样式出处：原型 `.prog.on`（`demo.css:332`）—— primary **18%** 底 + primary 40% 描边 +
+ * primary 字 + **字重 600**；硬编码的 `inset 0 1px 0 rgba(255,255,255,.8)` 在深色下是
+ * 一条刺眼白线，故不抄。
+ */
+export function TraeCurrentProgramChip({ className, children, ...props }: ComponentProps<"span">) {
+  return (
+    <span
+      {...props}
+      role="status"
+      className={cn(
+        /* `whitespace-nowrap`：表格列窄时「Trae CN」会被折成两行（实测 840px 窗口）；
+           卡片里是短名不会暴露，但同一个组件两个场景都得站得住。 */
+        "inline-flex h-[26px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[8px] border border-primary/40 bg-primary/18 px-2 text-[11px] font-semibold text-primary",
+        className,
+      )}
+    >
+      <Check className="size-3" strokeWidth={2.25} />
+      <span>{children}</span>
+    </span>
+  );
 }
 
 /** 数字 → 千分位字符串（`null` / 非有限值回落 `—`）。导出给账号页装配 `DetailPack` 复用，避免两处格式化漂移。 */
@@ -190,18 +386,12 @@ interface Props {
    * 却重取整页会让「点一下刷新」变成整页闪烁；这里把最新事实单独交给卡片渲染。
    */
   checkedTodayOverride?: boolean;
-  /**
-   * 「今日 Token」（`get_trae_account_token_today` 的单账号条目；issue #47）。
-   *
-   * ⚠️ **缺席不补 0**：Trae 没有客户端会话落盘，客户端那一档不可得
-   * （响应带 `clientSource: "unavailable"`），因此这里只有网关那一档。
-   * 没有这一行时菜单里的「刷新今日 Token」会显得「点了没反应」——
-   * 刷新出来的数字必须有个落点，否则那条入口就是假的。
-   */
-  todayTokens?: AccountTokenTodayEntry | null;
-  /** 网关日志的今日部分可能被裁 ⇒ 渲染成「≥N」（下界）。 */
-  todayTokensTruncated?: boolean;
-  /** 本平台真的能刷的项（缺省四项）；见 `RefreshMenuGroup` 的注释。 */
+  /* ★ 2026-10-26：`todayTokens` / `todayTokensTruncated` 已删 —— 卡片不再展示今日 Token
+     （与 WorkBuddy 同口径：卡片只回答「这个号要不要先用掉」，用量归用量页与详情抽屉）。
+     今日 Token 的正式去处是抽屉指标块（`TraeAccountsPage` 的 `tokensBlock`），那里的 ⟳
+     仍走 `onRefreshPart(account, "tokens")`。数据本身仍在页面 state 里，只是不再有一份
+     卡片渲染。 */
+  /** 本平台真的能刷的项（见 `RefreshMenuGroup` 的注释）。 */
   refreshKinds?: readonly AccountRefreshKind[];
   onSaveLogin: (account: TraeAccount) => void;
   onRefreshJwt: (account: TraeAccount) => void;
@@ -212,8 +402,13 @@ interface Props {
   onToggleSelect?: (account: TraeAccount) => void;
   /** 打开详情抽屉（抽屉状态由页面持有）。 */
   onOpenDetail?: (account: TraeAccount) => void;
-  /** 「更多 → 编辑备注」：打开抽屉并进入编辑态。 */
-  onEditRemark?: (account: TraeAccount) => void;
+  /** 标签 / 指标直达详情页签（R10）。 */
+  onOpenTab?: (account: TraeAccount, tab: DrawerTab) => void;
+  /**
+   * 「更多」菜单节点（由**页面装配**）：卡片与表格消费同一份，卡片只负责摆到页脚。
+   * 不传 ⇒ 退回卡片内的旧装配。
+   */
+  menu?: ReactNode;
 }
 
 /**
@@ -250,8 +445,6 @@ export function TraeAccountCard({
   refreshingKinds,
   doneKinds,
   checkedTodayOverride,
-  todayTokens,
-  todayTokensTruncated,
   refreshKinds,
   onSaveLogin,
   onRefreshJwt,
@@ -260,7 +453,8 @@ export function TraeAccountCard({
   selected = false,
   onToggleSelect,
   onOpenDetail,
-  onEditRemark,
+  onOpenTab,
+  menu,
 }: Props) {
   const t = useT();
   const name = displayText(account.name) || `UID · ${account.userId}`;
@@ -283,51 +477,37 @@ export function TraeAccountCard({
    * 状态标签 —— **槽位与顺序照原型 `.acct-chips`**（`buddy-switch-prototype.html:2505-2508`）：
    *
    * ```
-   * 使用中 N 个工具 → 状态 → X 积分 N 天后过期 → 优先
+   * 状态 → X 积分 N 天后过期
    * ```
    *
    * 原型对**两个平台用同一个渲染器**，所以 Trae 卡片的标签形状与 WorkBuddy 完全一致。
+   *
+   * ★ 2026-10-26（与 WorkBuddy 同批）：`使用中 N 个工具` **已移除** —— 页脚程序位行
+   * 直接显示哪些工具在亮，计数是重复信息。原型的槽位表里那一枚也因此不再渲染；
+   * 判定「当前登录」仍走 `current`（与左侧竖条同源），与计数无关。
    *
    * ⚠️ 2026-10-12：此前这里挂的是 Trae 专有标签（JWT 有效期 / 冷却 · 时间戳 / 分组 /
    * 自动刷新）—— 5~6 枚、折成两三行，卡片 **243px**，而原型是 **170px**。
    * 信号没有丢，只是**换进原型规定的槽位**：
    *   · JWT 过期 / `SessionDead` 冷却 ⇒ 第 2 槽「状态」（凭据已过期 / 需重新登录）
-   *   · 冷却的时间与原因 ⇒ 该标签的 tooltip
-   *   · 分组 / 自动刷新 JWT ⇒ 详情抽屉（chips 行是原型的固定四槽，不塞第五枚）
+   *   · 冷却的时间与原因 ⇒ 「冷却中」徽章的 tooltip（见 {@link TraeStatusChips}）
+   *   · 分组 / 自动刷新 JWT ⇒ 详情抽屉（chips 行是原型的固定槽位，不塞多余标签）
+   *
+   * ★ 2026-10-27（用户要求两种视图标签一致）：**有效期重新回到 chips 行**，但只保留
+   * 一枚（`有效 13 天` / `临期 5.2 小时`），文案与表格「状态」列共用 {@link jwtBadge}；
+   * 已过期时不重复渲染 —— 第 2 槽此时已经是「凭据已过期」。
+   *
+   * ★ 2026-10-27（用户报障「今日未签到，卡片和列表标签不一致」）：渲染收进
+   * {@link TraeStatusChips}，表格「状态」列读**同一份** —— 此前表格自写一份，
+   * 未签到在列表里是灰色无图标、在卡片里是琥珀 + 日历勾。
    */
-  const activeProgramCount = programs.filter((program) => program.current).length;
-  const cooling = Boolean(account.cooldownType) && (account.cooldownUntil ?? 0) * 1000 > Date.now();
-  const cooldownTip = account.cooldownType
-    ? [
-        account.cooldownType,
-        account.cooldownUntil ? t("trae.comp.card.cooldown.until", { time: shortTime(account.cooldownUntil) }) : "",
-        account.cooldownReason ?? "",
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-
-  /** 第 2 槽「状态」—— 与原型 `accountStatus()` 同一口径（互斥的一枚）。 */
-  const statusChip =
-    account.jwtStatus === "expired" || account.cooldownType === "SessionDead" ? (
-      <Badge
-        variant="destructive"
-        className={chipClass}
-        title={account.cooldownType === "SessionDead" ? cooldownTip : undefined}
-      >
-        {account.cooldownType === "SessionDead"
-          ? t("trae.comp.card.chip.needRelogin")
-          : t("trae.comp.card.chip.expired")}
-      </Badge>
-    ) : !(checkedTodayOverride ?? account.checkedToday) ? (
-      <Badge variant="warning" className={chipClass} title={cooling ? cooldownTip : undefined}>
-        {t("trae.comp.card.chip.unchecked")}
-      </Badge>
-    ) : (
-      <Badge variant="success" className={chipClass} title={cooling ? cooldownTip : undefined}>
-        <CircleCheck /> {t("trae.comp.card.chip.checked")}
-      </Badge>
-    );
+  const statusChips = (
+    <TraeStatusChips
+      account={account}
+      checkedToday={checkedTodayOverride ?? account.checkedToday}
+      onOpenTab={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
+    />
+  );
 
   /**
    * 「140 积分明天到期」—— 与 WorkBuddy 卡片**同一份**汇总（`summarizeExpiry`）：
@@ -342,58 +522,12 @@ export function TraeAccountCard({
   const expiryNow = Date.now();
   const expiry = summarizeExpiry(account.creditPackages, { unit: "s", now: expiryNow });
   const nextExpiry = expiry?.batches[0] ?? null;
-  const expiryLabel = nextExpiry
-    ? (() => {
-        const day = expiryDay(nextExpiry.expireAt, expiryNow);
-        const amount = formatCredits(nextExpiry.amount);
-        if (day.kind === "today") return t("trae.comp.card.chip.expiringToday", { amount, time: day.time });
-        if (day.kind === "tomorrow") return t("trae.comp.card.chip.expiringTomorrow", { amount, time: day.time });
-        return t("trae.comp.card.chip.expiringDate", { amount, date: day.text, time: day.time });
-      })()
-    : "";
-  const expiringChip = nextExpiry && expiry ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge
-          variant={isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "warning" : "secondary"}
-          className={chipClass}
-          aria-label={expiryLabel}
-        >
-          {expiryLabel}
-        </Badge>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        <div className="whitespace-nowrap font-medium">
-          {t("trae.comp.card.chip.expiringTipTitle", { n: expiry.batches.length })}
-        </div>
-        {expiry.batches.slice(0, EXPIRY_TIP_LIMIT).map((batch) => (
-          <div key={batch.expireAt} className="whitespace-nowrap tabular-nums">
-            {t("trae.comp.card.chip.expiringTipLine", {
-              time: formatAbsoluteTime(batch.expireAt),
-              amount: formatCredits(batch.amount),
-            })}
-          </div>
-        ))}
-        {expiry.batches.length > EXPIRY_TIP_LIMIT ? (
-          <div className="whitespace-nowrap text-muted-foreground">
-            {t("trae.comp.card.chip.expiringTipMore", { n: expiry.batches.length - EXPIRY_TIP_LIMIT })}
-          </div>
-        ) : null}
-      </TooltipContent>
-    </Tooltip>
-  ) : null;
 
-  const statusChips = (
-    <>
-      {activeProgramCount >= 2 && (
-        <Badge variant="info" className={chipClass}>
-          <CircleCheck /> {t("trae.comp.card.chip.toolsInUse", { n: activeProgramCount })}
-        </Badge>
-      )}
-      {statusChip}
-      {expiringChip}
-    </>
-  );
+  /* ★ 2026-10-26（复刻 WB）：**临期不再是 chips 行的一枚徽章**，改成指标行里的一段文字。
+     理由与 WB 定稿同源：chips 行只放「账号状态」（已签到 / 需重登），到期是**关于积分的数据**，
+     与积分数字连读才成句（「积分 2,521/3,050 · 21.07 积分 10-31 09:23 到期」）；
+     做成贴纸会让它看起来像另一种状态，也更占宽度。
+     渲染见下方 `metricsRow` 的 `expiringNote`。 */
 
   /**
    * 程序按钮的 tooltip：**先说清为什么不能点，再说点了会怎样**。
@@ -452,17 +586,9 @@ export function TraeAccountCard({
       return (
         <Tooltip key={key}>
           <TooltipTrigger asChild>
-            <span
-              role="status"
-              aria-label={t("trae.comp.card.currentOf", { label })}
-              /* 与 `account-card` 的「当前账号」同口径（原型 `.prog.on`，`demo.css:332`：
-                 底 primary **18%** + 描边 primary 40% + 字 primary + **字重 600**；
-                 硬编码的 `inset 0 1px 0 rgba(255,255,255,.8)` 在深色下是一条刺眼白线）： */
-              className="inline-flex h-[26px] items-center gap-1 rounded-[8px] border border-primary/40 bg-primary/18 px-2 text-[11px] font-semibold text-primary"
-            >
-              <Check className="size-3" strokeWidth={2.25} />
-              <span>{short}</span>
-            </span>
+            <TraeCurrentProgramChip aria-label={t("trae.comp.card.currentOf", { label })}>
+              {short}
+            </TraeCurrentProgramChip>
           </TooltipTrigger>
           <TooltipContent side="top">{t("trae.comp.card.currentOf", { label })}</TooltipContent>
         </Tooltip>
@@ -520,66 +646,113 @@ export function TraeAccountCard({
   const identity = `UID · ${account.userId}`;
 
   /* 「当前登录」徽章**单独拆出来**、与昵称同一行（原型 `:2502`）。
-     ⚠️ 不能塞进下面的 `statusChips` 行：那会把头部撑成三行（WorkBuddy 侧已踩过）。 */
+     ⚠️ 不能塞进下面的 `statusChips` 行：那会把头部撑成三行（WorkBuddy 侧已踩过）。
+     ★ 2026-10-26：改用 `variant="info"`，不再手写 `bg-primary/16 text-primary` ——
+     那串正是 `info` 的定义（`ui/badge.tsx:51`），手写一份等于给三张卡片留了三个漂移点。 */
   const currentLoginBadge = current ? (
-    <Badge variant="secondary" className={cn(chipClass, "shrink-0 border-transparent bg-primary/16 text-primary")}>
+    <Badge variant="info" className={cn(chipClass, "shrink-0")}>
       {t("trae.comp.card.currentLogin")}
     </Badge>
   ) : null;
 
-  /* 指标行（原型 `.acct-metrics` `:2510`）：与 WorkBuddy 同位置、同字号、同「标签 + 粗体值」形状。
-     ⚠️ Trae **没有**「今日 Token」数据源 ⇒ 该项不渲染（不摆一个永远「—」的假指标）；
-     取而代之的是 Trae 真实有的「到期」（WorkBuddy 侧对应的是积分包最早到期）。 */
-  const updatedSeconds = account.updatedAt ? Math.floor(new Date(account.updatedAt).getTime() / 1000) : null;
-  /* ★ 指标行 —— 与 WorkBuddy 卡片、原型 `.acct-metrics`（`demo.css:341-342`）同一形状：
-     `display:flex; gap:14px; font-size:11.5px; color:var(--muted-fg)`，**不换行**、无下边距。
-     Trae 没有「今日 Token」数据源 ⇒ 第二格用真实有的「到期」，**不摆一个永远「—」的假指标**。
-     第三格与原型一致：**无标签的相对时间**（`2 分钟前`），绝对时刻挂 `title`。 */
-  /* 积分总量 = 各包 `total` 之和（原型 `.acct-metrics` 是 `积分 X/Y`）。取不到包 ⇒ 不写「/Y」。 */
-  const creditTotal = (() => {
-    const pkgs = account.creditPackages ?? [];
-    if (pkgs.length === 0) return null;
-    const sum = pkgs.reduce((acc, pkg) => acc + pkg.total, 0);
-    return sum > 0 ? sum : null;
-  })();
+  /* 指标行（原型 `.acct-metrics` `:2510`）：与 WorkBuddy 同位置、同字号、同「标签 + 粗体值」形状。 */
+  /**
+   * ★ 指标行 —— **与 WorkBuddy 卡片逐项同形**（2026-10-26 复刻）：
+   *
+   * ```
+   * 积分 2,521.07/3,050 · 21.07 积分 10-31 09:23 到期
+   * ```
+   *
+   * 三条口径与 WB 完全一致（此前 Trae 侧自有一套，看起来像另一个产品）：
+   *
+   * 1. **只有两格**：`积分 x/y` + 临期。旧版还有「到期 10/31」（与临期重复）、
+   *    「今日 Token」（WB 卡片已删：卡片只回答「要不要先用掉」）、「5 天前」
+   *    （WB 的「最近使用」已按用户要求从卡片与抽屉一并移除）。三格都在别处有正式去处
+   *    —— 到期批次与今日 Token 在详情抽屉，更新时间在抽屉的信息区。
+   * 2. **项间用 `·` 分隔、间距 9px、允许换行**：两格都以数字开头，只靠间距会读成
+   *    一串数字；窄卡不换行会被 `overflow-hidden` 直接裁掉。
+   * 3. **临期用颜色分轻重而不是徽章**：3 天内 `text-warning`，更远 muted ——
+   *    贴纸是状态（chips 行），文字是数据（本行）。临期文案走共享的
+   *    `nextExpiryLabel`，三平台对「最急一批」的措辞只可能有一份。
+   */
+  /* 积分总量走共享的 `traeCreditTotal`（表格同一函数）。 */
+  const creditTotal = traeCreditTotal(account);
 
-  /** 今日 Token 合计（客户端 + 网关；Trae 客户端档恒为 0）。 */
-  const todayTokenTotal = (entry: AccountTokenTodayEntry) =>
-    entry.clientIn + entry.clientOut + entry.gatewayIn + entry.gatewayOut;
+  /* 临期（最急一批）：文案与 tooltip 都走 `account-card.tsx` 的共享实现 ——
+     WB / Trae 的「90.19 积分 10-29 09:25 到期」必须逐字一致。 */
+  const expiringLabel = nextExpiryLabel(expiry, t, expiryNow);
+  const expiringTip = expiry ? expiryTooltipLines(expiry, t) : null;
+  /**
+   * ★ 2026-10-26（用户报障「没有显示临期标签」）：**没有包明细时也要给出到期时刻**。
+   *
+   * `creditPackages` 只有「单独刷过积分」才存在，而 `creditsExpireAt` 是账号列表**本来就带**的
+   * 到期时刻。此前只认前者 ⇒ 没刷过积分的账号，卡片上整段临期直接消失，看起来像「这个号不会到期」。
+   *
+   * 兜底只报「何时到期」，**不编金额**：没有包明细就不知道到期的是多少积分。
+   */
+  const expiringNote = nextExpiry ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "tabular-nums",
+            isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "text-warning" : "text-muted-foreground",
+          )}
+          aria-label={expiringLabel}
+        >
+          {expiringLabel}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {expiringTip ? (
+          <>
+            <div className="whitespace-nowrap font-medium">{expiringTip.title}</div>
+            {expiringTip.lines.map((line) => (
+              <div key={line} className="whitespace-nowrap tabular-nums">
+                {line}
+              </div>
+            ))}
+            {expiringTip.more ? (
+              <div className="whitespace-nowrap text-muted-foreground">{expiringTip.more}</div>
+            ) : null}
+          </>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
+  ) : account.creditsExpireAt ? (
+    <span
+      className={cn(
+        "tabular-nums",
+        /* `creditsExpireAt` 是**秒**（后端透传上游 `expire_time`），判临期要换成毫秒。 */
+        isExpiryUrgent(account.creditsExpireAt * 1000, expiryNow) ? "text-warning" : "text-muted-foreground",
+      )}
+      title={t("trae.comp.card.expiryOnTip")}
+    >
+      {t("trae.comp.card.expiryOn", { date: shortTime(account.creditsExpireAt) })}
+    </span>
+  ) : null;
 
-  const lastUpdatedRelative = formatRelativeTime(updatedSeconds === null ? null : updatedSeconds * 1000, t);
   const metricsRow = (
-    <div className="flex min-w-0 gap-[14px] text-[11.5px] text-muted-foreground">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
       <span>
         {t("trae.comp.card.metric.credits")}{" "}
         <b className="font-semibold tabular-nums text-foreground">{formatCredits(account.remainingCredits)}</b>
-{creditTotal === null ? "" : `/${formatCredits(creditTotal)}`}
+        {creditTotal === null ? "" : `/${formatCredits(creditTotal)}`}
       </span>
-      <span>
-        {t("trae.comp.card.metric.expiry")}{" "}
-        <b className="font-semibold tabular-nums text-foreground">
-          {formatExpiryDate(account.creditsExpireAt) ?? t("trae.comp.card.expiry.permanent")}
-        </b>
-      </span>
-      {todayTokens ? (
-        <span title={t("shared.cardMenu.refresh.tokensHint")}>
-          {t("shared.stat.tokens")}{" "}
-          <b className="font-semibold tabular-nums text-foreground">
-            {todayTokensTruncated
-              ? t("wbAccounts.card.metric.atLeast", { value: compactTokens(todayTokenTotal(todayTokens)) })
-              : compactTokens(todayTokenTotal(todayTokens))}
-          </b>
-        </span>
-      ) : null}
-      {lastUpdatedRelative !== null && (
-        <span title={t("trae.comp.card.footer.updatedTip")}>{lastUpdatedRelative}</span>
+      {expiringNote && (
+        <>
+          <span aria-hidden className="select-none text-muted-foreground/50">
+            ·
+          </span>
+          {expiringNote}
+        </>
       )}
     </div>
   );
 
   /* 「更多」菜单（**单一定义**，页脚 `.acct-actions` 用它）——与 WorkBuddy 卡片同形：
      演示模式下包一层 `DemoAction`（控件保持可见可聚焦，点击只解释为什么不可用）。 */
-  const menu = featuresDisabled ? (
+  const inlineMenu = featuresDisabled ? (
     <DemoAction>
       <Button variant="ghost" size="sm" className="!px-[10px] text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("trae.comp.card.manage.aria", { name })} title={t("trae.comp.card.manage.title")}>
         <Ellipsis className="size-4" />
@@ -594,25 +767,13 @@ export function TraeAccountCard({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <MenuHead>{displayText(account.name) || account.userId}</MenuHead>
-        <DropdownMenuItem disabled={!onOpenDetail} onSelect={() => onOpenDetail?.(account)}>
-          <Info />{t("trae.comp.card.detail.open")}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          disabled={featuresDisabled || saving || !canSaveLogin}
-          onSelect={() => onSaveLogin(account)}
-          title={canSaveLogin ? t("trae.comp.card.action.saveTip") : t("trae.comp.card.action.saveNoLogin")}
-        >
-          <Save />{t("trae.comp.card.menu.save")}
-        </DropdownMenuItem>
-        {account.hasRefreshToken && (
-          <DropdownMenuItem disabled={featuresDisabled || refreshingJwt} onSelect={() => onRefreshJwt(account)} title={t("trae.comp.card.action.refreshJwtTip")}>
-            <KeyRound />{t("trae.comp.card.menu.refreshJwt")}
-          </DropdownMenuItem>
-        )}
-        {/* ★ issue #44：菜单里**真的**要有「刷新积分」，卡片上的提示才不是空口指路。
-            此前提示文案指向这个菜单项，而菜单里只有「刷新 JWT」 —— 用户点了也不会刷新积分。
-            可见入口在下面未查询到积分的那一行，这里补的是「已有积分时也想强制更新」的路径。 */}
+        {/* ★ 2026-10-27（用户要求）：菜单不再放「查看详情 / 编辑备注」——
+            详情走**卡片本体点击**（下方 `onOpenDetail` 的整卡交互），
+            备注在抽屉「备注」区编辑；菜单只留动作类条目。 */}
+        {/* ★ 刷新组只放**只读**项（2026-10-26，与 WorkBuddy 同结构）：
+            积分 / 签到状态 / 凭证状态。`tokens` 不在 `refreshKinds` 里 ⇒ 不渲染
+            （Trae 卡片的「今日 Token」指标块自带刷新按钮，走同一个 `onRefreshPart`）。
+            ★ issue #44 仍然成立：菜单里**真的**要有「刷新积分」，卡片上的提示才不是空口指路。 */}
         {onRefreshPart ? (
           <RefreshMenuGroup refreshingKinds={refreshingKinds} doneKinds={doneKinds} kinds={refreshKinds} onPick={(kind) => onRefreshPart(account, kind)} />
         ) : (
@@ -625,7 +786,24 @@ export function TraeAccountCard({
             {t("trae.comp.card.menu.refreshCredits")}
           </DropdownMenuItem>
         )}
+        <DropdownMenuSeparator />
         <MenuGroupLabel>{t("shared.cardMenu.accountGroup")}</MenuGroupLabel>
+        {/* ★ 2026-10-26（与 WorkBuddy 同结构）：**写操作**一律在刷新菜单之外。
+            「保存登录态」与「刷新 JWT」（用 `refresh_token` 续期）此前挂在刷新组**之前**
+            且没有分组归属，读起来像「刷新的前置步骤」；它们实际是账号级写动作，
+            与签到 / 解除冷却同类 ⇒ 一并收进「账号」组。 */}
+        <DropdownMenuItem
+          disabled={featuresDisabled || saving || !canSaveLogin}
+          onSelect={() => onSaveLogin(account)}
+          title={canSaveLogin ? t("trae.comp.card.action.saveTip") : t("trae.comp.card.action.saveNoLogin")}
+        >
+          <Save />{t("trae.comp.card.menu.save")}
+        </DropdownMenuItem>
+        {account.hasRefreshToken && (
+          <DropdownMenuItem disabled={featuresDisabled || refreshingJwt} onSelect={() => onRefreshJwt(account)} title={t("trae.comp.card.action.refreshJwtTip")}>
+            <KeyRound />{t("trae.comp.card.menu.refreshJwt")}
+          </DropdownMenuItem>
+        )}
         {/* 「手动签到」与 WorkBuddy 卡片菜单同位（刷新之后、删除之前）。
             只在今日未签到时出现：已签到的账号再点一次只会被跳过策略拦下，
             摆一个点不动的入口比不摆更差。 */}
@@ -639,9 +817,6 @@ export function TraeAccountCard({
             <CircleSlash />{t("trae.comp.card.menu.thaw")}
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem disabled={featuresDisabled || !onEditRemark} onSelect={() => onEditRemark?.(account)}>
-          <StickyNote />{t("trae.comp.card.menu.remark")}
-        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:bg-destructive/5 focus:text-destructive"
@@ -696,6 +871,8 @@ export function TraeAccountCard({
              ⇒ 卡片是「**四个块 + 统一 10px 间距**」，内边距在**根**上，各块不再自带 padding。
              与 WorkBuddy 卡片逐值一致（`rounded-lg` = `var(--radius)` = 12px）。 */
           "relative flex min-w-0 flex-col gap-2.5 overflow-hidden rounded-lg border border-border bg-card px-3.5 py-[13px] shadow-card transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-card-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          /* 整卡可点 ⇒ 指针光标；否则文字上默认的 I 形光标会被读成「可编辑文本」。 */
+          onOpenDetail && "cursor-pointer",
           selected && "border-ring bg-primary/[0.07]",
         )}
       >
@@ -742,10 +919,25 @@ export function TraeAccountCard({
             **始终渲染** —— 取不到的项显示「—」，不闪不藏。
             ⚠️ 2026-10-12 按原型删掉了「大数字行 + 近期到期逐包列表」：原型卡片只有 4 个块
             （`.acct-top` / `.acct-chips` / `.acct-metrics` / `.acct-actions`），逐包明细改由
-            **详情抽屉**承载（`TraeAccountsPage` 装配时读 `creditPackages`）。 */}
-        <section className="flex min-w-0 flex-1 flex-col">
-          {metricsRow}
+            **详情抽屉**承载（`TraeAccountsPage` 装配时读 `creditPackages`）。
+            ★ 2026-10-26（复刻 WB）：指标行与凭据行都是**根容器的直接子元素**（根 `gap-2.5`
+            = 10px），不再塞进下面的 `<section>` —— 否则两行间距变成 section 自己的 0/6px，
+            与 WB 卡片的节奏对不上。 */}
+        {metricsRow}
 
+        {/* ★ 2026-10-26（与 WorkBuddy 同批）：凭据不在卡片别处展示 ⇒ 指标行下面单起一行
+            给出凭据到期。`showRefreshToken={false}` 是**诚实边界**：Trae 的账号模型只有
+            `hasRefreshToken`（有没有），**没有刷新令牌的到期时间** —— 用「有」冒充「到期日」
+            会造出一行看似完整、实则答非所问的信息。
+            ⚠️ `jwtExpTimestamp` 是 **Unix 秒**（后端 `trae/jwt.rs:20`），换算走 `traeJwtExpiryMs`；
+            JWT 不可解析时为 `null` ⇒ 落到「—」，不编时间。 */}
+        <CredentialExpiryMeta
+          account={{ expiresAt: traeJwtExpiryMs(account) }}
+          showRefreshToken={false}
+          className="text-[11.5px]"
+        />
+
+        <section className="flex min-w-0 flex-1 flex-col">
           {/* 冷却 / 未查询提示：与 WorkBuddy 的积分错误行同形（同一图标位、同一配色语义）。 */}
           {account.cooldownType ? (
             <div className="flex min-w-0 items-center gap-2 py-3 text-sm text-destructive">
@@ -780,7 +972,7 @@ export function TraeAccountCard({
            与 WorkBuddy 卡片页脚逐字同构。 */}
         <footer className="flex items-center gap-1.5 border-t border-border pt-2.5">
           {programRow}
-          {menu}
+          {menu ?? inlineMenu}
         </footer>
       </article>
     </TooltipProvider>

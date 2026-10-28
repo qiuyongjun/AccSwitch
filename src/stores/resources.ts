@@ -46,7 +46,7 @@ export interface ResourceEntry<T = unknown> {
 const EMPTY: ResourceEntry = { value: undefined, error: null, pending: false, at: 0 };
 
 /** 同键在飞请求：重挂载（含 StrictMode 双调用）与快速来回切都复用它，不再发第二轮。 */
-const inFlight = new Map<string, Promise<void>>();
+const inFlight = new Map<string, Promise<ResourceLoadResult>>();
 
 /**
  * 同键请求序号。
@@ -100,9 +100,35 @@ export interface ResourceLoadOptions {
   freshMs?: number;
 }
 
+/**
+ * 一次取数的**显式结果**。
+ *
+ * `load` 原先只回 `Promise<void>` —— 失败被静默写进条目，调用方无法区分「刚刷新成功」
+ * 与「刷新失败但保留了旧值」。刷新按钮的「已更新」状态、以及需要按层汇总的部分失败
+ * 提示，都必须拿到这个判定；否则错误 toast 旁边仍会亮着「已更新」。
+ *
+ * ## `superseded`：被后续请求取代
+ *
+ * 同键允许多个 `force` 请求并发。先发请求随后成功时，其结果会因序号过期**不被写入**
+ * （缓存保留后发请求的结果 / 错误）。此时既不能说「成功」（写入的不是它），
+ * 也不能说「失败」（它自己没失败）—— 必须让调用方知道「结果已被取代」，
+ * 避免把过期结果当成本轮刷新结论去弹提示或点亮「已更新」。
+ */
+export interface ResourceLoadResult {
+  /** 本次请求是否可视为「刷新成功并已写入缓存」。被取代时为 false。 */
+  ok: boolean;
+  /** 本次结果是否因更新的同键请求而作废（缓存里的不是它）。 */
+  superseded: boolean;
+  error: unknown;
+}
+
 interface ResourceState {
   entries: Record<string, ResourceEntry>;
-  load: (key: string, loader: () => Promise<unknown>, opts?: ResourceLoadOptions) => Promise<void>;
+  load: (
+    key: string,
+    loader: () => Promise<unknown>,
+    opts?: ResourceLoadOptions,
+  ) => Promise<ResourceLoadResult>;
   /**
    * 就地改写快照值（乐观更新）。刻意不动 `at`：它表达的是「上次校验时刻」。
    *
@@ -125,7 +151,9 @@ export const useResourceStore = create<ResourceState>((set, get) => ({
 
     if (!force) {
       const entry = get().entries[key];
-      if (entry?.value !== undefined && freshMs > 0 && Date.now() - entry.at < freshMs) return;
+      if (entry?.value !== undefined && freshMs > 0 && Date.now() - entry.at < freshMs) {
+        return { ok: true, superseded: false, error: null };
+      }
       const existing = inFlight.get(key);
       if (existing) return existing;
     }
@@ -138,18 +166,20 @@ export const useResourceStore = create<ResourceState>((set, get) => ({
       entries: { ...s.entries, [key]: { ...(s.entries[key] ?? EMPTY), pending: true } },
     }));
 
-    const run = (async () => {
+    const run = (async (): Promise<ResourceLoadResult> => {
       try {
         const value = await loader();
-        if (isStale()) return;
+        // 过期结果**不写入**，并且不能回报成功：缓存里留的是后发请求的结果。
+        if (isStale()) return { ok: false, superseded: true, error: null };
         set((s) => ({
           entries: pruneOldest({
             ...s.entries,
             [key]: { value, error: null, pending: false, at: Date.now() },
           }),
         }));
+        return { ok: true, superseded: false, error: null };
       } catch (error) {
-        if (isStale()) return;
+        if (isStale()) return { ok: false, superseded: true, error };
         set((s) => ({
           entries: {
             ...s.entries,
@@ -158,6 +188,7 @@ export const useResourceStore = create<ResourceState>((set, get) => ({
             [key]: { ...(s.entries[key] ?? EMPTY), error, pending: false },
           },
         }));
+        return { ok: false, superseded: false, error };
       } finally {
         // 只有「自己仍是最新那次请求」时才清在飞标记，否则会把新请求的标记一起清掉。
         if (seqOf.get(key) === mySeq) inFlight.delete(key);

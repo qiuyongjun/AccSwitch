@@ -1,4 +1,4 @@
-import { CalendarCheck, Trophy, type LucideIcon } from "lucide-react";
+import { CalendarCheck, Coins, Trophy, type LucideIcon } from "lucide-react";
 
 /**
  * 语义图标注册表 —— **一个概念一枚图标**，跨入口、跨状态一律复用。
@@ -7,7 +7,8 @@ import { CalendarCheck, Trophy, type LucideIcon } from "lucide-react";
  *
  * 同一个「签到」此前有四枚图标：页头「一键签到」`CalendarCheck`、批量条「批量签到」与
  * 卡片「已签到」`CircleCheck`、菜单「刷新签到状态」`Sparkles`、菜单「今日已签到」裸 `Check`；
- * 「成长任务」有三枚：页头「一键完成」`CheckCheck`、批量条与菜单「完成任务」`Trophy`、
+ * 「成长任务」有三枚：页头「一键完成」`CheckCheck`（该按钮 2026-10-26 已删除）、
+ * 批量条与菜单「完成任务」`Trophy`、
  * 卡片「可自动 N」`Sparkles`。后果不是「不好看」，而是图标**不再传递信息**：
  *
  * - `Sparkles` 同时代表「刷新签到状态」与「成长任务自动完成」；
@@ -41,3 +42,11 @@ export const CheckinIcon: LucideIcon = CalendarCheck;
 
 /** 成长任务（领取 / 一键完成 / 摘要徽章 / 任务页签）的统一图标。 */
 export const GrowthTaskIcon: LucideIcon = Trophy;
+
+/**
+ * 积分（余额 / 刷新 / 统计）的统一图标。
+ *
+ * ★ 2026-10-26：菜单「刷新积分」此前用通用 `RefreshCw` —— 四项刷新里只有它不回答
+ * 「刷的是哪一层数据」，看起来像「整组刷新」而不是「积分」。
+ */
+export const CreditsIcon: LucideIcon = Coins;

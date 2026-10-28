@@ -2,17 +2,38 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
+  CircleSlash,
   Download,
   Loader2,
   QrCode,
   RefreshCw,
   Rocket,
+  Save,
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AddAccountDrawer, type AddAccountWay } from "@/components/add-account-drawer";
 import { AccountsTableAvatar } from "@/components/account-list-parts";
+import {
+  ACCOUNT_CHIP_CLASS,
+  CredentialExpiryMeta,
+  expiryTooltipLines,
+  formatTodayTokens,
+  nextExpiryLabel,
+} from "@/components/account-card";
+import {
+  QuickActionButton,
+  QuickRefreshAction,
+  quickRefreshCoolingDown,
+  startQuickRefreshCooldown,
+} from "@/components/account-quick-actions";
+import { CheckinIcon } from "@/lib/semantic-icons";
+import {
+  AccountMoreMenu,
+  AccountMoreMenuDemo,
+  type AccountCheckinState,
+} from "@/components/account-more-menu";
 import { AccountWorkbench } from "@/components/account-workbench";
 import { type AccountColumn } from "@/components/account-table";
 import { type ToolbarOption } from "@/components/account-toolbar";
@@ -20,6 +41,7 @@ import {
   AccountDetailDrawer,
   type DetailActions,
   type DetailCheckinHistoryRow,
+  type DetailCredential,
   type DetailPack,
   type DetailStat,
   type DetailProgramBadge,
@@ -27,9 +49,23 @@ import {
   type DetailSnapshot,
   type DetailSwitchTarget,
 } from "@/components/account-detail-drawer";
+import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
-import { TraeAccountCard, formatCredits, jwtBadge, shortTime, type TraeProgram } from "@/components/trae-account-card";
+import {
+  TraeAccountCard,
+  TraeCurrentProgramChip,
+  TraeStatusChips,
+  formatCredits,
+  jwtBadge,
+  shortTime,
+  traeCreditPackages,
+  traeCreditTotal,
+  traeJwtExpiryMs,
+  type TraeProgram,
+} from "@/components/trae-account-card";
+import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { REFRESH_DONE_LABEL, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { TraeExportAccountsDialog } from "@/components/trae-export-accounts-dialog";
 import { TraeImportAccountsDialog } from "@/components/trae-import-accounts-dialog";
 import { ClientlessEmptyCard, ClientlessStrip } from "@/components/clientless-notice";
@@ -51,7 +87,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { compactTokens } from "@/components/usage/format";
 import * as api from "@/lib/api";
 import type { CheckinStatusEntry } from "@/lib/api";
 import type { AccountTokenTodayEntry } from "@/lib/types";
@@ -96,6 +131,7 @@ import type {
   TraeSnapshotCarryReport,
   TraeVariantId,
   TraeVariantStatus,
+  TraeRegionId,
 } from "@/lib/trae-types";
 import { cn } from "@/lib/utils";
 import { scopeOf } from "@/lib/scope";
@@ -124,6 +160,23 @@ type ActionVerdict = {
   message?: string;
   description?: string;
 };
+
+/** 一键刷新里**单层**的结果（积分 / 签到 / 快照各判一次，再汇总提示）。 */
+type RefreshLayerOutcome = "ok" | "partial" | "fail";
+
+/**
+ * 本轮快照读取被**更新的同键请求**取代 —— 既不是成功也不是失败。
+ *
+ * 为什么要单独一类：并发强制刷新时先发请求的结果会因序号过期被丢弃，
+ * 若把它当成功，错误 toast 旁仍会亮「已更新」；当失败又会误报。调用方应当
+ * **不弹任何回执**、也不点亮「已更新」。
+ */
+class SupersededRefreshError extends Error {
+  constructor() {
+    super("refresh superseded by a newer request");
+    this.name = "SupersededRefreshError";
+  }
+}
 
 /**
  * 账号页的快照。
@@ -172,23 +225,21 @@ interface AccountsSnapshot {
  *   两者是不同层，因此并排出现并不重复；
  * - 没有自动旅行（Trae 侧不存在该客户端）。
  */
+/**
+ * Trae 账号页 —— 作用域外壳。
+ *
+ * 按**完整作用域**渲染带 `key` 的内容面板（`docs/specs/P4-TOOLBAR-ARCH.md` §1.11①）。
+ * 产品线是账号库的分家维度：Trae Work 与 Trae CN 的 userId 可能同名（同一用户两条线），
+ * 只换 prop 不换实例会把 A 线的勾选、抽屉、签到快照与结果条显示到 B 线。
+ */
 export default function TraeAccountsPage() {
-  /**
-   * 当前正在管理的**产品线变体**，由侧栏分区决定（URL `?line=`）。
-   *
-   * 为什么**不再**用「自动探测挑中的那一条」：探测是无入参、横跨全部变体的
-   * 全局行为，它回答的是「本机哪条线最近活跃」，而不是「用户此刻想管哪条线」。
-   * 用户点了侧栏的「Trae CN」，页面就必须是 Trae CN —— 哪怕 Trae Work 更活跃。
-   *
-   * 探测结果仍然有用：它作为**兜底**（URL 没有显式指定时）以及用于展示
-   * 「该线的安装/运行状态」。两者分工不同，不要混为一谈。
-   */
-  /* ⚠️ 只取值、不取 setter：切区域的动作在**顶栏 `ScopeSwitch`**（作用域是路由状态的一部分）。
-     2026-10-10 前这里还取了 setter 给卡片「跨区域程序位」引导用 —— 那条支路已随
-     「国内版不显示国际版程序位」一起删除，setter 因此不再需要。 */
   const [variant] = useTraeVariant();
-  const t = useT();
+  const scope = scopeOf("trae", variant);
+  return <TraeAccountsPanel key={scope} variant={variant} />;
+}
 
+function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
+  const t = useT();
   /**
    * 一次取齐本页快照。四份分家数据全部按**当前选中的产品线**读取，与侧栏分区同源。
    * `env` 仍然单独取：它是「单一视角」的环境快照，用于展示该线的安装/运行状态。
@@ -230,6 +281,7 @@ export default function TraeAccountsPage() {
     loading,
     error,
     refresh: loadAll,
+    refreshWithResult: loadAllWithResult,
   } = useCachedResource<AccountsSnapshot>(`trae:accounts:${variant}`, loadSnapshot);
 
   /**
@@ -380,12 +432,14 @@ export default function TraeAccountsPage() {
    *
    * 抽屉状态由**页面**持有（卡片只发 `onOpenDetail`）：抽屉需要「这个账号的全部明细」，
    * 而那些数据（逐包积分、程序位、凭据）只有页面手里齐全。
-   * `detailAutoEditRemark` 区分两个入口：点「查看详情」只打开抽屉；点「更多 → 编辑备注」
-   * 打开抽屉并**直接进入编辑态**（`autoEditRemark`）。
+   * （★ 2026-10-27：菜单的「编辑备注」入口已删，抽屉不再需要 `autoEditRemark` 直达编辑态；
+   * 备注在抽屉「备注」区就地编辑。）
    *
    * 选择集用 `Set<userId>`：Trae 账号的身份就是 `userId`（改名不改身份）。
    */
   const [detailAccount, setDetailAccount] = useState<TraeAccount | null>(null);
+  /** 本次打开要直达的页签（`null` = 按账号记忆）。 */
+  const [detailTab, setDetailTab] = useState<DrawerTab | null>(null);
   /**
    * ★ 抽屉「签到历史（近 7 天）」的数据源（打开抽屉时拉取）。
    *
@@ -394,7 +448,7 @@ export default function TraeAccountsPage() {
    * （不摆一张空表，也不臆造「+N」）。
    */
   const [detailCheckinLogs, setDetailCheckinLogs] = useState<TraeLogEntry[] | null>(null);
-  const [detailAutoEditRemark, setDetailAutoEditRemark] = useState(false);
+  const detailCheckinLogsRequest = useRef(0);
   /**
    * 抽屉「快照」页签的数据源（打开抽屉时按需拉取）。
    *
@@ -453,6 +507,44 @@ export default function TraeAccountsPage() {
   const selectionKey = (userId: string) => `${scope}:${userId}`;
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
+  /** 批量续期凭据进行中（与 `batchBusy` 分开：批量条要单独给「续期凭据」转圈）。 */
+  const [renewBusy, setRenewBusy] = useState(false);
+  /** 当前批次的协作式中止句柄与进度（只对逐账号循环的动作有意义）。 */
+  const batchAbortRef = useRef<AbortController | null>(null);
+  /** 当前签到任务 id（协作式取消用；`null` = 没有在跑的签到）。 */
+  const checkinTaskIdRef = useRef<string | null>(null);
+  /** 统一取消入口：签到走任务 id（后端逐账号检查），逐账号循环走 AbortController。 */
+  function cancelBatch() {
+    const taskId = checkinTaskIdRef.current;
+    if (taskId) void api.traeCheckinCancel(taskId);
+    batchAbortRef.current?.abort();
+  }
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  /**
+   * 组件是否仍挂载（切换产品线即卸载）。
+   *
+   * 卸载时中止**尚未开始**的批处理，并抑制在途批次的收尾 toast ——
+   * 否则切区后仍会收到上一条产品线的「已刷新 N 个」，而界面已换成另一条线。
+   */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      /* 卸载（切产品线）：中止尚未开始的逐账号任务，并取消后端批签到任务。 */
+      const taskId = checkinTaskIdRef.current;
+      if (taskId) void api.traeCheckinCancel(taskId);
+      batchAbortRef.current?.abort();
+    };
+  }, []);
+  /**
+   * 页头「一键」动作的进行中标识（同一时刻只跑一个）。
+   *
+   * 与 {@link batchBusy} **分开**：一键作用于**全部账号**、批量作用于**勾选账号**，
+   * 两者误触代价不同（PLAN §3.4 三作用域），共享一个布尔会让「一键刷新」把批量条的
+   * 按钮也一起转起来，用户分不清是哪一个在跑。
+   */
+  const [quickActionBusy, setQuickActionBusy] = useState<"refresh" | "checkin" | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   /**
    * 批量签到**结果条**（原型 `state.checkinResult`，`buddy-switch-prototype.html:2339-2354`）。
@@ -460,7 +552,12 @@ export default function TraeAccountsPage() {
    * ⚠️ 与 WorkBuddy **同一条**结果条、同一位置（工具栏与列表之间）——
    * 此前 Trae 侧是一张页面底部的大 Card，形状与位置都与 WB 不同。
    */
-  const [checkinResult, setCheckinResult] = useState<{ ok: number; failedIds: string[] } | null>(null);
+  const [checkinResult, setCheckinResult] = useState<{
+    ok: number;
+    failedIds: string[];
+    /** 协作式取消后**未处理**的账号 id（没有发出请求，既不是成功也不是失败）。 */
+    unprocessedIds: string[];
+  } | null>(null);
 
   /**
    * 状态条第二行（每条产品线各自已登录哪个账号）的数据由**本页持有并注入**，
@@ -573,14 +670,35 @@ export default function TraeAccountsPage() {
       try {
         const { listen } = await import("@tauri-apps/api/event");
         dispose = await listen<TraeCheckinEvent>("trae-checkin-progress", (event) => {
-          setProgress(event.payload);
+          const payload = event.payload;
+          /* ★ 只消费**本产品线**的事件；带 taskId 时还必须是**当前任务** ——
+             切区后旧任务收尾 / 新旧任务重叠都不能污染新批次进度（如 2 个账号显示 4/2）。 */
+          /* 后端直传 `region`（`TraeVariant::region()` 是唯一的变体→区域映射）；
+             老版本后端没有该字段时，才回落到按 `variant` 前缀反推。 */
+          const eventRegion = payload.region
+            ? payload.region
+            : payload.variant
+              ? payload.variant.startsWith("global")
+                ? "global"
+                : "cn"
+              : undefined;
+          if (eventRegion && eventRegion !== variant) return;
+          const currentTask = checkinTaskIdRef.current;
+          if (payload.taskId && payload.taskId !== currentTask) return;
+          setProgress(payload);
+          /* 批量条进度只跟**当前任务**的事件走；单账号签到（无 taskId）只更新结果面板。 */
+          if (!payload.taskId || payload.taskId !== currentTask) return;
+          if (payload.type === "start") setBatchProgress({ done: 0, total: payload.total });
+          else if (payload.type === "account") {
+            setBatchProgress((prev) => (prev ? { done: payload.index, total: prev.total } : prev));
+          }
         });
       } catch {
         // 事件通道不可用不影响主流程（仍可用返回的完整报告渲染结果）。
       }
     })();
     return () => dispose?.();
-  }, []);
+  }, [variant]);
 
   /**
    * 统一的动作执行：加忙标记、**判定结果**、提示、随后刷新聚合数据。
@@ -729,7 +847,15 @@ export default function TraeAccountsPage() {
               : label,
         });
       }
+      /* 签到成功是「今日已签到」的**确定性事实**：就地更新签到状态快照，
+         别让用户点完「签到」还看着刷新时刻留下的「未签到」。 */
+      markCheckinMapChecked(
+        (result.results ?? []).filter((row) => row.ok && row.userId).map((row) => row.userId),
+      );
       await loadAll();
+      /* 抽屉开着时同步重取签到流水：签到历史读的是**结构化流水 + 积分明细**，
+         不重取的话刚签完的那一行还停在旧结论（要关掉抽屉重开才更新）。 */
+      if (detailAccount) loadDetailCheckinLogs(detailAccount);
     } catch (e) {
       toast.error(t("trae.page.accounts.checkinFailed"), { description: api.asError(e) });
     } finally {
@@ -821,8 +947,8 @@ export default function TraeAccountsPage() {
    * ⚠️ 它们原先全是卡片上的内联箭头。抽屉要复用就只能再抄一遍 ——
    * 而「同一动作两处实现」正是本仓反复出现的分叉来源（确认流程、保存登录态都栽过）。
    */
-  function refreshJwt(account: TraeAccount) {
-    void run(`jwt-${account.userId}`, "trae.page.accounts.actionRefreshJwt", () =>
+  async function refreshJwt(account: TraeAccount) {
+    await run(`jwt-${account.userId}`, "trae.page.accounts.actionRefreshJwt", () =>
       api.traeRefreshJwt(account.userId, variant),
     );
   }
@@ -838,21 +964,25 @@ export default function TraeAccountsPage() {
    * 用户会以为没生效而反复点。
    */
   /**
-   * 本平台**真的能刷**的项（issue #47 后是四项）。
+   * 本平台**真的能刷**的项 → 刷新菜单里能出现的项。
    *
-   * 新增两项的**数据来源**与诚实边界：
-   * - `tokens` → `get_trae_account_token_today`（**只读**网关日志）。Trae 没有客户端
-   *   会话落盘 ⇒ 客户端那一档**不可得**（响应带 `clientSource: "unavailable"`），
-   *   绝不能渲染成「客户端用了 0」；
+   * ★ 2026-10-26（用户要求）：**`tokens` 不再进菜单**（与 WB 同步 —— 刷新菜单只放
+   * 积分 / 签到状态 / 凭证状态 / 任务）。Trae 卡片上的「今日 Token」指标块仍带自己的
+   * 刷新按钮，走的是同一个 `onRefreshPart(account, "tokens")`，所以 `tokens` 这个
+   * kind 与其数据来源（`get_trae_account_token_today`，**只读**网关日志）都保留 ——
+   * 只是不再作为菜单项出现。
+   *
+   * 其余两项的诚实边界：
    * - `checkin` → `get_trae_checkin_status_map`（**只读**上游状态端点）。本地台账只记
    *   「本工具签过谁」，用户在 IDE 里手动签时台账里没有 ⇒ 必须真去问上游。
    *   **绝不**借刷新之名触发 claim（那是写操作，走独立的「签到」入口）。
    */
-  const TRAE_REFRESH_KINDS = ["credits", "tokens", "checkin", "credential"] as const;
+  const TRAE_REFRESH_KINDS = ["credits", "checkin", "credential"] as const;
   const refreshBusy = useAccountRefreshBusy();
 
   /**
-   * 「今日 Token」按账号（`get_trae_account_token_today`）——抽屉指标块的数据源。
+   * 「今日 Token」按账号（`get_trae_account_token_today`）—— 抽屉概览信息行的数据源
+   * （打开抽屉时静默补一次，见 `loadDetailTokens`）。
    *
    * **缺席即「—」**：只存后端真的返回的账号，不给缺席的账号补 0。
    */
@@ -867,14 +997,64 @@ export default function TraeAccountsPage() {
    */
   const [checkinMap, setCheckinMap] = useState<Record<string, CheckinStatusEntry>>({});
 
+  /**
+   * 把「本轮签到**确实成功**」的账号在 `checkinMap` 里就地置为已签到。
+   *
+   * ## 为什么必须就地改，而不是等下一次「刷新签到状态」
+   *
+   * `checkinMap` 是用户点过「刷新签到状态」后留下的上游快照，**优先级高于本地台账**
+   * （`detailCheckinToday` / 卡片徽章都先读它）。签到成功只会写台账与积分明细，
+   * 不会动这份快照 ⇒ 用户点完「签到」，同一屏上历史表已显示「成功 +100」，
+   * 「今日签到」却还挂着刷新时刻的「未签到」—— 2026-10-27 用户报的正是这个组合。
+   *
+   * 只改**已有**的条目：没有条目时台账兜底本来就正确，不臆造一个半空的
+   * 上游条目（`streakDays` 等字段编不出来）；`source` 改标 `"ledger"`，
+   * 如实说明这个「已签到」是本工具刚写入的事实、不是上游回答。
+   *
+   * ★ 2026-10-27（用户复现）：旧条目 **`ok:false`**（上一次查询失败）也必须被替换 ——
+   * 成功签到是**更新的事实**，优先级高于一条过期失败。此前只改 `ok` 条目 ⇒
+   * 失败条目原样留着，抽屉优先读它 ⇒ 历史已显示「签到成功」，今日签到仍是「读不到」。
+   * 失败条目没有可信统计字段，整体替换为「已签到 + ledger」，未知统计保持为空。
+   */
+  function markCheckinMapChecked(userIds: string[]) {
+    if (userIds.length === 0) return;
+    setCheckinMap((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const userId of userIds) {
+        const entry = prev[userId];
+        /* 没有上游条目 ⇒ **不写**：这里只修正已有快照，不凭空造一条上游条目。
+           （「台账里已签到」由读侧 `detailCheckinToday` 自己优先取，不靠这里补。） */
+        if (!entry) continue;
+        /* 已经是「确认已签到」⇒ 不用重复改。 */
+        if (entry.ok && entry.todayCheckedIn) continue;
+        next[userId] = entry.ok
+          ? /* 成功的上游条目只改签到事实，保留它已有的统计字段。 */
+            { ...entry, todayCheckedIn: true, source: "ledger" }
+          : /* 旧的失败条目整体替换：错误字段不能留，失败条目也没有可信统计。 */
+            { ok: true, todayCheckedIn: true, source: "ledger" };
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }
+
   /** 单项刷新（与卡片「更多」里的四项同源）。 */
   const onRefreshPart = useCallback(
     async (account: TraeAccount, kind: AccountRefreshKind) => {
       const label = displayText(account.name) || account.userId;
-      await refreshBusy.run(account.userId, kind, async () => {
-        try {
+      /* ⚠️ 错误 toast 放在 `run` **外面**：任务抛错 ⇒ `run` 不亮「已更新」。
+         此前 catch 在任务内部吞掉错误，失败项也会亮绿勾（错误提示旁挂着「已更新」）。 */
+      try {
+        await refreshBusy.run(account.userId, kind, async () => {
           if (kind === "credits") {
             await api.traeRefreshCredits(account.userId, variant);
+            /* ★ 落盘后必须同步页面快照：卡片 / 表格读的是 `accounts` 与积分总览，
+               不重取的话「刷新成功」只体现在 toast 上，数字还是旧的。
+               快照读取失败也要让本轮算失败 —— 否则失败提示旁仍会亮「已更新」。 */
+            const synced = await loadAllWithResult();
+            if (synced.superseded) throw new SupersededRefreshError();
+            if (!synced.ok) throw synced.error;
           } else if (kind === "tokens") {
             /* 一次调用取全部账号（网关日志是区域共用的），按 uid 落到 state。 */
             const today = await api.getTraeAccountTokenToday(variant, true);
@@ -886,18 +1066,26 @@ export default function TraeAccountsPage() {
             /* 只问这一个账号（批量接口传 1 个 id 即可，不新增「单账号」变体）。 */
             const map = await api.getTraeCheckinStatusMap(variant, [account.userId]);
             setCheckinMap((prev) => ({ ...prev, ...map }));
+            const current = map[account.userId];
+            /* ★ 缺条目 = 没取得数据（账号已删 / 后端未回）⇒ 读取失败，不亮「已更新」。 */
+            if (!current || !current.ok) throw new Error(current?.error ?? t("shared.refreshPart.fail"));
           } else {
-            /* 凭据状态 = 重取账号元数据（JWT 有效期 / 需重登标记都在列表载荷里）。 */
-            await loadAll();
+            /* 凭据状态 = 重取账号元数据（JWT 有效期 / 需重登标记都在列表载荷里）。
+               同样把快照读取失败抛给刷新状态管理层。 */
+            const synced = await loadAllWithResult();
+            if (synced.superseded) throw new SupersededRefreshError();
+            if (!synced.ok) throw synced.error;
           }
           /* 单账号回执合成一行（同 AccountsPage 2026-10-23 调整）。 */
           toast.success(`${label}${t("shared.punct.colon")}${t(REFRESH_DONE_LABEL[kind])}`);
-        } catch (e) {
-          toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
-        }
-      });
+        });
+      } catch (e) {
+        /* 被后续刷新取代 ⇒ 不弹任何回执（`run` 也不会亮「已更新」）。 */
+        if (e instanceof SupersededRefreshError) return;
+        toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
+      }
     },
-    [refreshBusy, variant, loadAll, t],
+    [refreshBusy, variant, loadAllWithResult, t],
   );
 
   function refreshCreditsOne(account: TraeAccount) {
@@ -941,26 +1129,52 @@ export default function TraeAccountsPage() {
     });
   }
 
-  /** 拉一次本机签到日志（抽屉的「近 7 天」用它；失败 ⇒ 该区块不渲染）。 */
-  function loadDetailCheckinLogs() {
+  /** 按账号与日期各取最新一条，避免全局日志上限截断近 7 天历史。 */
+  function loadDetailCheckinLogs(account: TraeAccount) {
+    const request = ++detailCheckinLogsRequest.current;
+    setDetailCheckinLogs(null);
+    void Promise.all(
+      lastSevenDays().map((date) =>
+        api.getTraeLogs({ kind: "checkin", variant, date, checkinUserId: account.userId, limit: 1 }),
+      ),
+    )
+      .then((responses) => {
+        if (request === detailCheckinLogsRequest.current) {
+          setDetailCheckinLogs(responses.flatMap((response) => response.entries));
+        }
+      })
+      .catch(() => {
+        if (request === detailCheckinLogsRequest.current) setDetailCheckinLogs(null);
+      });
+  }
+
+  /**
+   * 概览「今日 Token」行：打开抽屉时静默补一次（`force=false`，后端按 TTL 决定是否重扫）。
+   *
+   * 每个区域每轮会话最多拉一次（卡片不展示 Token，页面快照里也没有这份数据）；
+   * 失败不打扰，下次打开抽屉再试 —— 读不到就保持「—」，绝不补 0。
+   */
+  const detailTokensLoadedFor = useRef<string | null>(null);
+  function loadDetailTokens() {
+    if (detailTokensLoadedFor.current === variant) return;
+    detailTokensLoadedFor.current = variant;
     void api
-      .getTraeLogs({ kind: "checkin", variant })
-      .then((res) => setDetailCheckinLogs(res.entries))
-      .catch(() => setDetailCheckinLogs(null));
+      .getTraeAccountTokenToday(variant, false)
+      .then((res) => {
+        setTodayTokens(Object.fromEntries((res.accounts ?? []).map((entry) => [entry.uid, entry])));
+        setTodayTokensTruncated(Boolean(res.gatewayTruncated));
+      })
+      .catch(() => {
+        detailTokensLoadedFor.current = null;
+      });
   }
 
-  /** 点「查看详情」：打开抽屉。 */
-  function openDetail(account: TraeAccount) {
-    setDetailAutoEditRemark(false);
+  /** 点卡片 / 表格行：打开抽屉。`tab` 非空 ⇒ 直达该页签（R10）。 */
+  function openDetail(account: TraeAccount, tab: DrawerTab | null = null) {
+    setDetailTab(tab);
     setDetailAccount(account);
-    loadDetailCheckinLogs();
-  }
-
-  /** 点「更多 → 编辑备注」：打开抽屉并**直接进入编辑态**。 */
-  function openRemark(account: TraeAccount) {
-    setDetailAutoEditRemark(true);
-    setDetailAccount(account);
-    loadDetailCheckinLogs();
+    loadDetailCheckinLogs(account);
+    loadDetailTokens();
   }
 
   /**
@@ -982,51 +1196,102 @@ export default function TraeAccountsPage() {
     if (targets.length === 0) return;
     setBatchBusy(true);
     const label = t("trae.page.accounts.actionBatchCheckin");
+    /* ★ 任务 id + 进度：签到是后端一次批处理，取消走 traeCheckinCancel(taskId)（只拦未开始项）。 */
+    const taskId = `trae-checkin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    checkinTaskIdRef.current = taskId;
+    setBatchProgress({ done: 0, total: targets.length });
     try {
       const result = await api.traeCheckin({
         scope: "selected",
         userIds: targets.map((account) => account.userId),
+        taskId,
         variant,
       });
       setReport(result);
+      /* 与单账号签到同一条规则：成功的账号就地置为已签到，
+         不让签到状态快照继续说上一轮刷新时刻的「未签到」。 */
+      markCheckinMapChecked(
+        (result.results ?? []).filter((row) => row.ok && row.userId).map((row) => row.userId),
+      );
       /* ★ 结果**留在页面上**（原型 `checkinResult`），与 WorkBuddy 同一形状同一位置。 */
+      /* ★ 「未处理」由**后端**给出：只含计划内未执行的账号（取消）；
+         被策略跳过（已签到 / 过期 / 冷却）的账号不在其中 —— 正常完成的一批不该出现未处理项。 */
+      const unprocessedIds = result.unprocessedIds ?? [];
+      const failedIds = (result.results ?? [])
+        .filter((row) => !row.ok && row.userId)
+        .map((row) => row.userId);
       setCheckinResult({
         ok: result.totalOk + result.already,
-        failedIds: (result.results ?? []).filter((row) => !row.ok && row.userId).map((row) => row.userId),
+        failedIds,
+        unprocessedIds,
       });
       const parts: string[] = [];
       if (result.totalOk > 0) parts.push(t("trae.page.accounts.checkinBatchSuccess", { n: result.totalOk }));
       if (result.already > 0) parts.push(t("trae.page.accounts.checkinBatchAlready", { n: result.already }));
       if (result.failed > 0) parts.push(t("trae.page.accounts.checkinBatchFailed", { n: result.failed }));
       const description = parts.join(t("shared.punct.comma"));
-      /* ★ 从逐条结果里挑出真正失败的 id（`ok === false`）；`results` 可能缺失 ⇒ 兜底不重试。
-         只在「本轮确实跑过 (`total > 0`) 且有失败项」时给出口，否则重试无意义。 */
-      const failedIds = (result.results ?? [])
-        .filter((row) => !row.ok && row.userId)
-        .map((row) => row.userId);
+      /* 重试名单 = 失败 + 未处理（取消后没开始的）；已成功 / 被策略跳过的不重试。 */
+      const retryIds = [...failedIds, ...unprocessedIds];
       const retryAction =
-        result.total > 0 && failedIds.length > 0
+        result.total > 0 && retryIds.length > 0
           ? {
               label: t("trae.page.accounts.checkinRetryFailed"),
-              onClick: () => void batchCheckin(failedIds),
+              onClick: () => void batchCheckin(retryIds),
             }
           : undefined;
+      /* ★ 判定顺序：取消（仍有未处理）⇒ 全失败 ⇒ 成功。取消绝不能报「完成」。 */
       if (result.total === 0) {
-        toast.success(t("trae.page.accounts.noNeedCheckin"));
+        if (aliveRef.current) toast.success(t("trae.page.accounts.noNeedCheckin"));
+      } else if (unprocessedIds.length > 0) {
+        if (aliveRef.current) {
+          toast.warning(t("shared.batch.cancelled", { n: unprocessedIds.length }), {
+            description,
+            action: retryAction,
+          });
+        }
       } else if (result.failed === result.total) {
-        toast.error(t("trae.page.accounts.actionFailed", { label }), { description, action: retryAction });
+        if (aliveRef.current) toast.error(t("trae.page.accounts.actionFailed", { label }), { description, action: retryAction });
       } else {
-        toast.success(t("trae.page.accounts.actionDone", { label }), { description, action: retryAction });
+        if (aliveRef.current) toast.success(t("trae.page.accounts.actionDone", { label }), { description, action: retryAction });
       }
       await loadAll();
+      if (detailAccount) loadDetailCheckinLogs(detailAccount);
     } catch (e) {
-      toast.error(t("trae.page.accounts.actionFailed", { label }), { description: api.asError(e) });
+      if (aliveRef.current) toast.error(t("trae.page.accounts.actionFailed", { label }), { description: api.asError(e) });
     } finally {
+      checkinTaskIdRef.current = null;
+      setBatchProgress(null);
       setBatchBusy(false);
     }
   }
 
-  /** 批量刷新积分：逐账号走**单账号**接口（无批量端点），跑完重取快照。 */
+  /**
+   * 批量执行器（与 WorkBuddy / Qoder **同一档位**：并发 3 + 间隔 150ms）。
+   * 返回与入参同序同长；被取消而没跑的项是 `undefined`（缺席 ≠ 失败）。
+   */
+  async function runBatch<T, R>(targets: T[], worker: (item: T) => Promise<R>): Promise<(R | undefined)[]> {
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setBatchProgress({ done: 0, total: targets.length });
+    try {
+      return await mapWithConcurrency(targets, worker, {
+        concurrency: 3,
+        gapMs: 150,
+        signal: controller.signal,
+        onProgress: (done, total) => setBatchProgress({ done, total }),
+      });
+    } finally {
+      batchAbortRef.current = null;
+      setBatchProgress(null);
+    }
+  }
+
+  /**
+   * 批量**只读刷新**积分：逐账号走**单账号**接口（无批量端点），跑完重取快照。
+   *
+   * ★ 走并发池而非串行：20 个账号的串行刷新是分钟级等待，且界面上只有一个转圈。
+   * 结果区分成功 / 失败 / 未处理（取消）；全部失败才报 error。
+   */
   async function batchRefresh() {
     if (batchBusy) return;
     const targets = accounts.filter((account) => selectedKeys.has(selectionKey(account.userId)));
@@ -1034,21 +1299,321 @@ export default function TraeAccountsPage() {
     setBatchBusy(true);
     const label = t("trae.page.accounts.actionRefreshCredits");
     try {
-      for (const account of targets) {
-        await api.traeRefreshCredits(account.userId, variant);
-      }
+      const outcomes = await runBatch(targets, async (account) => {
+        try {
+          await api.traeRefreshCredits(account.userId, variant);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      const ok = outcomes.filter((outcome) => outcome === true).length;
+      const failed = outcomes.filter((outcome) => outcome === false).length;
+      const unprocessed = outcomes.filter((outcome) => outcome === undefined).length;
+      /* 无论成败都回读：成功的那批已经落盘。 */
       await loadAll();
-      toast.success(t("trae.page.accounts.actionDone", { label }));
-    } catch (e) {
-      toast.error(t("trae.page.accounts.actionFailed", { label }), { description: api.asError(e) });
+      if (!aliveRef.current) return;
+      if (failed === 0 && unprocessed === 0) {
+        if (aliveRef.current) toast.success(t("trae.page.accounts.actionDone", { label }));
+      } else if (ok === 0) {
+        if (aliveRef.current) toast.error(t("trae.page.accounts.actionFailed", { label }), {
+          description: unprocessed > 0 ? t("shared.batch.cancelled", { n: unprocessed }) : undefined,
+        });
+      } else {
+        if (aliveRef.current) toast.warning(t("trae.page.accounts.quickRefreshPartial", { n: targets.length }), {
+          description: t("trae.page.accounts.batchRefreshPartial", { ok, failed }),
+        });
+      }
     } finally {
       setBatchBusy(false);
+    }
+  }
+
+  /** 批量「刷新签到状态」：一次调用问全部勾选账号（只读端点，不触发领取）。 */
+  async function batchRefreshCheckin() {
+    if (batchBusy) return;
+    const targets = accounts.filter((account) => selectedKeys.has(selectionKey(account.userId)));
+    if (targets.length === 0) return;
+    setBatchBusy(true);
+    try {
+      const map = await api.getTraeCheckinStatusMap(variant, targets.map((account) => account.userId));
+      setCheckinMap((prev) => ({ ...prev, ...map }));
+      const failed = targets.filter((account) => !map[account.userId]?.ok).length;
+      if (!aliveRef.current) return;
+      if (failed === 0) toast.success(t("trae.page.accounts.quickRefreshDone", { n: targets.length }));
+      else toast.warning(t("trae.page.accounts.quickRefreshPartial", { n: failed }));
+    } catch (e) {
+      if (aliveRef.current) toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  /** 批量「刷新凭据状态」：只重取账号元数据（JWT 有效期 / 需重登标记都在列表载荷里）。 */
+  async function batchRefreshCredential() {
+    if (batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const result = await loadAllWithResult();
+      if (!result.ok || result.superseded) throw result.error ?? new Error(t("shared.refreshPart.fail"));
+      if (aliveRef.current) toast.success(t("trae.page.accounts.actionDone", { label: t("shared.cardMenu.refresh.credential") }));
+    } catch (e) {
+      if (aliveRef.current) toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  /**
+   * 批量**续期凭据**（写 `refresh_token`）：逐账号走 `trae_refresh_jwt`。
+   *
+   * 与只读刷新分开：这是写操作，重试名单**不含**已成功项（重复续期会白耗材料）。
+   */
+  async function batchRenewTokens() {
+    if (batchBusy) return;
+    const targets = accounts.filter((account) => selectedKeys.has(selectionKey(account.userId)));
+    if (targets.length === 0) return;
+    setBatchBusy(true);
+    setRenewBusy(true);
+    const label = t("trae.page.accounts.actionRefreshJwt");
+    try {
+      const outcomes = await runBatch(targets, async (account) => {
+        try {
+          await api.traeRefreshJwt(account.userId, variant);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      const ok = outcomes.filter((outcome) => outcome === true).length;
+      const failed = outcomes.filter((outcome) => outcome === false).length;
+      const unprocessed = outcomes.filter((outcome) => outcome === undefined).length;
+      await loadAll();
+      if (failed === 0 && unprocessed === 0) {
+        if (aliveRef.current) toast.success(t("trae.page.accounts.actionDone", { label }));
+      } else {
+        if (aliveRef.current) toast.error(t("trae.page.accounts.actionFailed", { label }), {
+          description: t("trae.page.accounts.batchRefreshPartial", { ok, failed }),
+        });
+      }
+    } finally {
+      setBatchBusy(false);
+      setRenewBusy(false);
+    }
+  }
+
+  /** 批量条「刷新」下拉的分派：只走读接口（续期凭据在独立按钮）。 */
+  function batchRefreshPart(kind: AccountRefreshKind) {
+    if (kind === "credits") void batchRefresh();
+    else if (kind === "checkin") void batchRefreshCheckin();
+    else void batchRefreshCredential();
+  }
+
+  /** 签到状态的显式取值（与卡片标签同源：上游读数优先，回落列表快照）。 */
+  function checkinStateOf(account: TraeAccount): AccountCheckinState {
+    const entry = checkinMap[account.userId];
+    if (entry) {
+      if (!entry.ok) return { kind: "unreadable", reason: entry.error };
+      return entry.todayCheckedIn ? { kind: "checked" } : { kind: "unchecked" };
+    }
+    return account.checkedToday ? { kind: "checked" } : { kind: "unchecked" };
+  }
+
+  /**
+   * 单账号「更多」菜单 —— **卡片页脚与表格行尾消费同一份**（R07/R09）。
+   *
+   * 平台差异全部以数据表达：签到状态值、平台扩展动作（保存登录态 / 解除冷却）。
+   */
+  function renderAccountMenu(account: TraeAccount, compact = false) {
+    if (api.isDemoMode()) return <AccountMoreMenuDemo />;
+    const canSaveLogin = programsFor(account).some((program) => program.current);
+    return (
+      <AccountMoreMenu
+        accountName={displayText(account.name) || account.userId}
+        compact={compact}
+        onRefreshPart={(kind) => void onRefreshPart(account, kind)}
+        refreshKinds={TRAE_REFRESH_KINDS}
+        refreshingKinds={refreshBusy.kindsOf(account.userId)}
+        doneKinds={refreshBusy.doneKindsOf(account.userId)}
+        /* 续期凭据 = 用 refresh_token 换新 JWT（写操作）。返回 Promise，菜单忙态才准。 */
+        onRefresh={() => refreshJwt(account)}
+        refreshingToken={busy === `jwt-${account.userId}`}
+        checkinState={checkinStateOf(account)}
+        onCheckin={() => checkinOne(account)}
+        onSwitch={() => openDetail(account)}
+        onExport={() => {
+          setExportTargets([account]);
+          setExportOpen(true);
+        }}
+        extraActions={[
+          {
+            id: "save-login",
+            label: t("trae.comp.card.menu.save"),
+            icon: <Save className="size-4" />,
+            disabled: !canSaveLogin,
+            title: canSaveLogin ? t("trae.comp.card.action.saveTip") : t("trae.comp.card.action.saveNoLogin"),
+            busy: busy === `save-${account.userId}`,
+            onSelect: () => saveLogin(account),
+          },
+          /* 冷却中的账号才需要「解除冷却」；没有冷却时该项不出现（不摆永远无效的入口）。 */
+          ...(account.cooldownType
+            ? [
+                {
+                  id: "clear-cooldown",
+                  label: t("trae.comp.card.menu.thaw"),
+                  icon: <CircleSlash className="size-4" />,
+                  busy: busy === `thaw-${account.userId}`,
+                  onSelect: () => clearCooldown(account),
+                },
+              ]
+            : []),
+        ]}
+        onDelete={() => requestDelete(account)}
+      />
+    );
+  }
+
+  /**
+   * 页头「一键刷新」：把**卡片上能看到的读数**刷到最新 —— 积分 / 签到状态 / 凭据状态。
+   *
+   * 与「批量刷新」的分工照 PLAN §3.4：一键作用于**全部账号**、只做只读刷新；
+   * 批量作用于**勾选账号**、允许写操作。两者的按钮位置与文案也不同（页头 vs 勾选条）。
+   *
+   * ★ 2026-10-27（用户报障「刷新后积分还是旧值」）：**顺序**是这里的关键 ——
+   * 积分刷新与签到查询可以并行，但账号快照必须在**积分刷新结束之后**再读。
+   * 此前三项 `allSettled` 并行 ⇒ 快照先回来、积分后落盘 ⇒ 刷新结束仍显示旧值。
+   * 积分部分失败时同样要回读（成功的那批已落盘，不能因为另一批失败就不显示）。
+   *
+   * 结果按**层**判定（成功 / 部分失败 / 失败），三层全失败才报整体失败；
+   * 快照读取失败也计入 —— 否则错误提示旁仍会亮起「已刷新 N 个账号」。
+   */
+  async function quickRefreshAll(): Promise<boolean> {
+    if (batchBusy || quickActionBusy || accounts.length === 0) return false;
+    /* 前置校验 + **立即占位**：
+       - 校验挡住「切页回来、按钮暂时可点」的重复请求；
+       - 占位是必要的、不是冗余：按钮的 `coolingDown` 来自 state，state 在下一轮渲染才生效，
+         连点两次时第二次进到这里，第一次的 await 还没结束 —— 只有写进模块级表才拦得住。
+         完成后 `QuickRefreshAction` 会按**发起时的作用域**再写一次（起点因此落在「结束」）。 */
+    if (quickRefreshCoolingDown(scope)) return false;
+    startQuickRefreshCooldown(scope);
+    setQuickActionBusy("refresh");
+    try {
+      const ids = accounts.map((account) => account.userId);
+      /* 积分（批量端点）与签到状态（一次批量查询）互不依赖 ⇒ 并行。 */
+      const [credits, checkin] = await Promise.allSettled([
+        /* 不传 userId = 该产品线全部（后端有批量端点，不必逐账号）。 */
+        api.traeRefreshCredits(undefined, variant),
+        api.getTraeCheckinStatusMap(variant, ids),
+      ]);
+      if (checkin.status === "fulfilled") {
+        setCheckinMap((prev) => ({ ...prev, ...checkin.value }));
+      }
+      /* 必须在积分落盘**之后**读快照；积分请求失败也要回读（部分成功的账号已更新）。 */
+      const snapshotResult = await loadAllWithResult();
+
+      const creditsOutcome: RefreshLayerOutcome =
+        credits.status === "rejected"
+          ? "fail"
+          : credits.value.total == null || credits.value.failed == null
+            ? credits.value.refreshed > 0
+              ? "ok"
+              : "fail"
+            : credits.value.total === 0 || credits.value.failed === 0
+              ? "ok"
+              : credits.value.failed >= credits.value.total
+                ? "fail"
+                : "partial";
+
+      const checkinEntries = checkin.status === "fulfilled" ? Object.values(checkin.value) : [];
+      const checkinFailed = checkinEntries.filter((entry) => !entry.ok).length;
+      const checkinMissing = Math.max(0, ids.length - checkinEntries.length);
+      const checkinOutcome: RefreshLayerOutcome =
+        checkin.status === "rejected"
+          ? "fail"
+          : checkinFailed === 0 && checkinMissing === 0
+            ? "ok"
+            : checkinFailed + checkinMissing >= ids.length
+              ? "fail"
+              : "partial";
+
+      /* 快照被后发请求取代时，既不是成功也不是失败：本轮结论不可得，按「部分失败」处理，
+         避免把过期结果说成「已刷新」。 */
+      const snapshotOutcome: RefreshLayerOutcome = snapshotResult.superseded
+        ? "partial"
+        : snapshotResult.ok
+          ? "ok"
+          : "fail";
+      const outcomes = [creditsOutcome, checkinOutcome, snapshotOutcome];
+      /* ★ 与 `batchRefresh` / `batchRefreshCheckin` 同一守卫：切产品线即卸载，
+         上一条产品线的「已刷新」不该出现在新页面上。返回 `true` 而非 `false` ——
+         上游请求确实打过了，仍应进冷却，否则切回来可以立刻重刷。 */
+      if (!aliveRef.current) return true;
+      if (outcomes.every((outcome) => outcome === "ok")) {
+        toast.success(t("trae.page.accounts.quickRefreshDone", { n: ids.length }));
+      } else if (outcomes.every((outcome) => outcome === "fail")) {
+        toast.error(t("trae.page.accounts.quickRefreshFail"));
+      } else {
+        /* 部分失败：**不报成全部成功**，也不报成全部失败 —— 说清有一层没拿到。 */
+        toast.warning(t("trae.page.accounts.quickRefreshPartial", { n: ids.length }));
+      }
+      return true;
+    } finally {
+      setQuickActionBusy(null);
+    }
+  }
+
+  /** 页头「一键签到」：对**全部账号**跑签到（后端先查状态，已签的自动跳过）。 */
+  async function quickCheckinAll() {
+    if (batchBusy || quickActionBusy || accounts.length === 0) return;
+    setQuickActionBusy("checkin");
+    try {
+      /* 复用批量的执行与文案 —— 差别只在「谁来选账号」，不该有两套签到实现。 */
+      await batchCheckin(accounts.map((account) => account.userId));
+    } finally {
+      setQuickActionBusy(null);
     }
   }
 
   /** Trae 账号的撤销 toast 副标题（过 `displayText` 白屏防线；全空则不显示副标题）。 */
   function traeUndoLabel(account: TraeAccount): string | undefined {
     return displayText(account.name) || displayText(account.userId) || undefined;
+  }
+
+  /**
+   * 抽屉里的**分组编辑**（★ 2026-10-26 用户报障「没有分组功能」）。
+   *
+   * Trae 的分组是**实体**（`groupId` + `TraeGroup{name,color,order}`），不像 WB 那样是自由文本
+   * ⇒ 抽屉给的「组名」要先落到 id 上：已有同名组就复用，没有就先 `create` 再 `move`。
+   * 空串 = 移出分组（`groupId` 传 `null`）。
+   *
+   * 三个动作都走 `trae_group_op`（后端唯一入口），成功后 `loadAll()` 让列表与抽屉同时刷新 ——
+   * 与备注保存同一套「先落库、再同步界面」的做法。
+   */
+  async function saveGroupFor(account: TraeAccount, name: string): Promise<boolean> {
+    const target = name.trim();
+    try {
+      let groupId: string | null = null;
+      if (target) {
+        const existing = groups.find((group) => group.name === target);
+        if (existing) {
+          groupId = existing.id;
+        } else {
+          const created = await api.traeGroupOp("create", { name: target }, variant);
+          groupId = created.id ?? null;
+          if (!groupId) {
+            toast.error(t("trae.page.accounts.groupCreateFailed"));
+            return false;
+          }
+        }
+      }
+      await api.traeGroupOp("move", { userId: account.userId, groupId }, variant);
+      await loadAll();
+      toast.success(t("trae.page.accounts.groupSaved", { name: target || t("trae.page.accounts.groupNone") }));
+      return true;
+    } catch (e) {
+      toast.error(api.asError(e));
+      return false;
+    }
   }
 
   /**
@@ -1112,7 +1677,7 @@ export default function TraeAccountsPage() {
     try {
       const deleted: TraeAccount[] = [];
       let failed = 0;
-      for (const account of targets) {
+    for (const account of targets) {
         try {
           await api.traeDeleteAccount(account.userId, false, variant);
           deleted.push(account);
@@ -1294,9 +1859,11 @@ export default function TraeAccountsPage() {
         }
         if (key === "status") {
           // 状态集**各平台自备**（决策 #8）：Trae 有「冷却」等独有状态，不强行与 WB 统一。
+          // 签到态走 `checkinTodayOf`（与徽章同源）：只看快照的话，刷新过签到状态后
+          // 行里的徽章说「已签到」、分桶却把它归进「未签到」。
           if (account.cooldownType) return t("trae.page.accounts.toolbar.statusBucket.cooling");
           if (account.jwtStatus === "expired") return t("trae.page.accounts.toolbar.statusBucket.expired");
-          if (!account.checkedToday) return t("trae.page.accounts.toolbar.statusBucket.notCheckedIn");
+          if (!checkinTodayOf(account)) return t("trae.page.accounts.toolbar.statusBucket.notCheckedIn");
           return t("trae.page.accounts.toolbar.statusBucket.normal");
         }
         if (key === "group") return groupNameOf(account) ?? t("trae.page.accounts.toolbar.groupBucket.default");
@@ -1305,8 +1872,9 @@ export default function TraeAccountsPage() {
       availableSorts: ["priority", "name", "expiry"],
       availableGroups: ["none", "program", "status", "group"],
     };
-    // `programsFor` / `groupNameOf` 读 `variantStatuses` / `logins` / `groups`，故一并入依赖。
-  }, [t, groups, variantStatuses, logins]);
+    // `programsFor` / `groupNameOf` / `checkinTodayOf` 读 `variantStatuses` / `logins` / `groups`
+    // / `checkinMap`，故一并入依赖。
+  }, [t, groups, variantStatuses, logins, checkinMap]);
 
   /** 筛选（搜索）→ 排序 → 分桶；视图参数全部留在页内。 */
   const filtered = filterAccounts(accounts, listConfig, query);
@@ -1380,34 +1948,24 @@ export default function TraeAccountsPage() {
     setGroup("none");
   }
 
-  /** Trae 状态徽标（表格用；与卡片同一套语义，只是排布不同）。 */
+  /**
+   * Trae 状态徽标（表格「状态」列）。
+   *
+   * ★ 2026-10-27（用户报障「今日未签到，卡片和列表标签不一致」）：**整列直接复用卡片的
+   * `TraeStatusChips`**，不再在这里另拼一套。此前这边自己写了一份：未签到是 secondary
+   * 灰、无图标，卡片是 warning 琥珀 + 日历勾 ⇒ 同一账号在两个视图像两种状态；
+   * 凭据过期也一样（卡片「凭据已过期」、列表「已过期」）。冷却中徽章同样收进共享组件，
+   * 两个视图的标签集合从此完全一致。
+   *
+   * `checkinTodayOf`：用户点过「刷新签到状态」后，上游 `checkinMap` 优先于列表快照 ——
+   * 只读快照会让列表停在刷新前的签到态，而卡片已经变了。
+   */
   function renderStatusBadges(account: TraeAccount) {
-    const jwt = jwtBadge(account.jwtStatus, account.jwtExpHours, t);
     return (
       <div className="flex flex-wrap items-center gap-1">
-        <Badge
-          variant={account.checkedToday ? "success" : "secondary"}
-          className={cn("rounded-md px-1.5 py-0 text-[11px] font-medium", !account.checkedToday && "text-muted-foreground")}
-        >
-          {account.checkedToday ? t("trae.comp.card.chip.checked") : t("trae.comp.card.chip.unchecked")}
-        </Badge>
-        {account.cooldownType && (
-          <Badge variant="warning" className="rounded-md px-1.5 py-0 text-[11px] font-medium">
-            {t("trae.comp.card.chip.cooling")}
-          </Badge>
-        )}
-        <Badge variant={jwt.variant} className={cn("rounded-md px-1.5 py-0 text-[11px] font-medium", jwt.className)}>
-          {jwt.text}
-        </Badge>
+        <TraeStatusChips account={account} checkedToday={checkinTodayOf(account)} />
       </div>
     );
-  }
-
-  /** 表格「到期」列：积分到期（无到期时间 → 「长期有效」）。 */
-  function formatAccountExpiry(account: TraeAccount): string {
-    return account.creditsExpireAt
-      ? t("trae.comp.card.expiry.short", { date: shortTime(account.creditsExpireAt) })
-      : t("trae.comp.card.expiry.permanent");
   }
 
   /**
@@ -1429,9 +1987,12 @@ export default function TraeAccountsPage() {
               <span className="truncate font-medium" title={traeAccountName(account)}>
                 {traeAccountName(account)}
               </span>
+              {/* ★ 2026-10-27（用户要求）：与卡片头部**同一枚**徽章 —— 同一文案
+                  （`trae.comp.card.currentLogin`）与同一变体（`info` = primary 16% 底）。
+                  此前列表写「当前」+ secondary（几乎无底色），看起来像另一种状态。 */}
               {isCurrentAccount(account) && (
-                <Badge variant="secondary" className="rounded-md px-1.5 py-0 text-[11px] font-medium">
-                  {t("trae.page.accounts.table.current")}
+                <Badge variant="info" className={ACCOUNT_CHIP_CLASS}>
+                  {t("trae.comp.card.currentLogin")}
                 </Badge>
               )}
             </div>
@@ -1445,16 +2006,80 @@ export default function TraeAccountsPage() {
       header: t("trae.page.accounts.table.status"),
       render: (account) => renderStatusBadges(account),
     },
+    /* ★ 2026-10-26（复刻 WB）：积分列 = **主行（剩余/总量）+ 副行（最急一批的到期）**，
+       与卡片指标行同一份口径；原来的独立「到期」列随之下线 —— 两列都写「到期」，
+       读者分不清哪一列是积分到期、哪一列是凭据到期（WB 侧 2026-10-23 就删过同一列）。 */
     {
       key: "credits",
       header: t("trae.page.accounts.table.credits"),
       align: "right",
-      render: (account) => <span className="tabular-nums">{formatCredits(traeCredits(account))}</span>,
+      render: (account) => {
+        /* ★ 2026-10-27（用户报障）：与卡片**同一份合并口径**（`traeCreditPackages`）。
+           此前这里只读账号快照的 `creditPackages`，而逐包明细其实在 `get_trae_credits`
+           的 `packages[uid]` 里 ⇒ 卡片有 `剩余/总数` 与到期金额，列表只剩剩余和到期时刻。 */
+        const packages = traeCreditPackages(account, credits?.packages);
+        const expiry = summarizeExpiry(packages, { unit: "s", now: Date.now() });
+        const next = expiry?.batches[0] ?? null;
+        const label = nextExpiryLabel(expiry, t);
+        const tip = expiry ? expiryTooltipLines(expiry, t) : null;
+        const total = traeCreditTotal({ creditPackages: packages });
+        return (
+          <div className="flex w-full flex-col items-end gap-0.5 text-right tabular-nums">
+            <span className="whitespace-nowrap">
+              {account.remainingCredits == null ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                <>
+                  <b className="font-semibold text-foreground">{formatCredits(account.remainingCredits)}</b>
+                  {total === null ? null : (
+                    <span className="text-muted-foreground">/{formatCredits(total)}</span>
+                  )}
+                </>
+              )}
+            </span>
+            {next ? (
+              <span
+                className={cn(
+                  "whitespace-nowrap text-[11px]",
+                  isExpiryUrgent(next.expireAt) ? "text-warning" : "text-muted-foreground",
+                )}
+                title={
+                  tip ? [tip.title, ...tip.lines, tip.more ?? ""].filter(Boolean).join("\n") : undefined
+                }
+              >
+                {label}
+              </span>
+            ) : account.creditsExpireAt ? (
+              /* ★ 与卡片同一兜底：没有包明细（`creditPackages` 为空）也要给出到期时刻，
+                 否则「这个号会不会过期」在表格里根本看不出来。`creditsExpireAt` 是**秒**。 */
+              <span
+                className={cn(
+                  "whitespace-nowrap text-[11px]",
+                  isExpiryUrgent(account.creditsExpireAt * 1000) ? "text-warning" : "text-muted-foreground",
+                )}
+                title={t("trae.comp.card.expiryOnTip")}
+              >
+                {t("trae.comp.card.expiryOn", { date: shortTime(account.creditsExpireAt) })}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     },
+    /* ★ 2026-10-26（与 WorkBuddy 同批）：卡片当日补了「凭据到期」⇒ 表格同批补列，
+       两边说法一致。⚠️ 与左边「到期」列（积分包到期）**不是同一件事**，列名必须分开。
+       单元格走卡片导出的 `CredentialExpiryMeta`（同一份日期格式与缺值分支），
+       不在这里另拼字符串；`showRefreshToken={false}` 同卡片理由（Trae 无该字段）。 */
     {
-      key: "expiry",
-      header: t("trae.page.accounts.table.expiry"),
-      render: (account) => <span className="tabular-nums text-muted-foreground">{formatAccountExpiry(account)}</span>,
+      key: "credential",
+      header: t("trae.page.accounts.table.credential"),
+      render: (account) => (
+        <CredentialExpiryMeta
+          account={{ expiresAt: traeJwtExpiryMs(account) }}
+          showRefreshToken={false}
+          layout="column"
+        />
+      ),
     },
     {
       key: "programs",
@@ -1463,15 +2088,17 @@ export default function TraeAccountsPage() {
         const active = programsFor(account).filter((program) => program.current);
         return active.length > 0 ? (
           <div className="flex flex-wrap gap-1">
-            {active.map((program) => (
-              <Badge
-                key={`${program.region}:${program.variant}`}
-                variant="secondary"
-                className="rounded-md px-1.5 py-0 text-[11px] font-medium"
-              >
-                {displayText(program.label) ?? traeVariantLabel(program.variant)}
-              </Badge>
-            ))}
+            {/* ★ 2026-10-27（用户要求）：与卡片页脚的当前程序位**同一枚胶囊**
+                （`TraeCurrentProgramChip`：primary 18% 底 + primary 40% 描边 + ✓）。
+                此前这里是 secondary 徽章，主题下几乎看不到底色。 */}
+            {active.map((program) => {
+              const label = displayText(program.label) ?? traeVariantLabel(program.variant);
+              return (
+                <TraeCurrentProgramChip key={`${program.region}:${program.variant}`} title={label}>
+                  {label}
+                </TraeCurrentProgramChip>
+              );
+            })}
           </div>
         ) : (
           <span className="text-muted-foreground">—</span>
@@ -1481,10 +2108,92 @@ export default function TraeAccountsPage() {
   ];
 
   // ---- 详情抽屉的数据装配（字段全部过 `displayText` 出口，见 display-text.ts）----
-  const detail = detailAccount;
+  /* 抽屉的**身份**仍是打开时的快照（`detailAccount`），但展示数据必须跟随列表：
+     续期 JWT / 单项刷新只会替换 `accounts`，**不会回写** `detailAccount`。
+     直接用快照会让凭据块的「JWT 有效期」永远停在打开抽屉那一刻 —— 用户点完只看到
+     toast，下方数字不动（与 WorkBuddy 侧 2026-10-26 修的同一个 bug）。
+     ⚠️ 找不到（账号被删）时回落到快照：抽屉已经开着，此时切空态比留旧值更突兀。 */
+  const detail = detailAccount
+    ? accounts.find((account) => account.userId === detailAccount.userId) ?? detailAccount
+    : null;
+  /**
+   * ★ 2026-10-27：抽屉的逐包明细与卡片 / 表格走**同一份合并口径**（`traeCreditPackages`）。
+   *
+   * 账号视图（`list_account_views_for`）只带聚合积分，逐包明细在积分总览的
+   * `packages[uid]` 里；而 `TraeAccount` 的 `creditPackages` 字段只在演示数据里存在。
+   * 此前抽屉直接读 `detail.creditPackages` ⇒ 生产上恒为空 ⇒ 积分页是空态、指标块没有分母，
+   * 同一账号在卡片上有 `剩余/总量`、在抽屉里只剩剩余（2026-10-27 用户报障）。
+   * `null` = **尚未查询**，`[]` = 已查询但没有积分包 —— 两者必须区分（见自动补拉）。
+   */
+  const detailPackages = detail ? traeCreditPackages(detail, credits?.packages) : null;
   const detailName = detail
     ? displayText(detail.name) || `UID · ${displayText(detail.userId) ?? "—"}`
     : "";
+
+  /**
+   * ★ 2026-10-27（用户报障「积分信息不正常」连带暴露）：**打开抽屉时静默补一次积分明细**。
+   *
+   * 为什么需要：`creditPackages`（逐包总量 / 剩余 / 到期）只在「单独刷过积分」后才存在，
+   * 而抽屉的积分页与卡片的分母 `X/Y` 都依赖它 ⇒ 没刷过的账号，积分页是空态、卡片只有剩余。
+   * WB 侧是打开抽屉时懒加载积分（`ensureCredits`），Trae 之前没有对应动作。
+   *
+   * 三条约束：
+   * 1. **只读**（`traeRefreshCredits` 只查询，不改账号状态），每账号每次会话最多一次
+   *    （`autoCreditsTried` 挡住重复进入抽屉时的重复请求）；
+   * 2. **静默**：不弹 toast —— 用户只是打开看一眼，不需要一条「已刷新」的回执；
+   * 3. **失败不打扰**：失败时保持空态，⟳ 仍是手动重试的出口。
+   *
+   * ⚠️ 去重键是 `scope:userId`（不是裸 `userId`）：国内版 / 国际版的同一个 uid 是两个账号，
+   * 共用一把键会让切区后的补拉被上一区的记录挡掉。
+   * ⚠️ 判据用**合并后的** `detailPackages`：`null` = 尚未查询（要补拉），
+   * `[]` = 已查询但没有积分包（**不该再打一次**）—— 此前直接读 `detail.creditPackages`，
+   * 生产上恒为 `null`，于是每次进抽屉都重复请求。
+   */
+  const autoCreditsTried = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!detail) return;
+    if (detailPackages != null) return;
+    const triedKey = `${scope}:${detail.userId}`;
+    if (autoCreditsTried.current.has(triedKey)) return;
+    autoCreditsTried.current.add(triedKey);
+    void api
+      .traeRefreshCredits(detail.userId, variant)
+      .then(() => loadAll())
+      .catch(() => {
+        /* 静默失败：空态 + ⟳ 已足够表达。 */
+      });
+  }, [detail, detailPackages, scope, variant, loadAll]);
+  /**
+   * 概览「今日签到」行与顶部指标块**同一个判据**：上游读数（`checkinMap`）优先，
+   * 没有时回落列表快照；上游读失败要显示「读不到」而不是「未签到」。
+   * 两处各写一遍三元链，刷新失败时会出现「指标块说读不到、概览说未签到」的同屏矛盾。
+   */
+  const detailCheckinText = detail
+    ? (() => {
+        const entry = checkinMap[detail.userId];
+        if (entry && !entry.ok) return t("shared.stat.checkinUnreadable");
+        if (entry) {
+          return entry.todayCheckedIn
+            ? t("shared.stat.checkedIn")
+            : entry.active === false
+              ? t("shared.stat.checkinUnavailable")
+              : t("shared.stat.notCheckedIn");
+        }
+        return detail.checkedToday ? t("shared.stat.checkedIn") : t("shared.stat.notCheckedIn");
+      })()
+    : "—";
+
+  /**
+   * 概览只留「账号信息」一块，字段对齐 WorkBuddy 的概览（凭据到期 / 今日签到 / 今日 Token）。
+   *
+   * ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的积分 / 凭据区块」）：
+   * 此前概览把「积分」「凭据」各摆成一整块，逐字段重复上方的指标块与下方同名页签 ——
+   * 打开概览看到的是缩小版的积分页 + 凭据页。现在：
+   * - 积分明细去「积分」页签看；
+   * - JWT 自动刷新 / 设备标识去「凭据」页签看（那里还有续期动作）；
+   * - 概览只答「这是哪个号、现在什么状态」。
+   * 账号 ID 不再重复：抽屉副标题已经是 `{name} · UID {uid}`。
+   */
   const detailSections: DetailSection[] = detail
     ? [
         {
@@ -1492,131 +2201,125 @@ export default function TraeAccountsPage() {
           title: t("trae.comp.card.detail.section.account"),
           rows: [
             {
-              label: t("trae.comp.card.detail.accountId"),
-              value: displayText(detail.userId) ?? "—",
-              mono: true,
-            },
-            {
               label: t("trae.comp.card.detail.cooldown"),
               value: detail.cooldownType
                 ? `${detail.cooldownType}${detail.cooldownUntil ? ` · ${shortTime(detail.cooldownUntil)}` : ""}`
                 : t("trae.comp.card.detail.none"),
             },
-          ],
-        },
-        {
-          key: "credits",
-          title: t("trae.comp.card.detail.section.credits"),
-          rows: [
             {
-              label: t("trae.comp.card.credits.remaining"),
-              value:
-                detail.remainingCredits !== null
-                  ? formatCredits(detail.remainingCredits)
-                  : t("trae.comp.card.detail.notQueried"),
-            },
-            {
-              label: t("trae.comp.card.detail.creditsExpiry"),
-              value: detail.creditsExpireAt
-                ? t("trae.comp.card.expiry.short", { date: shortTime(detail.creditsExpireAt) })
-                : t("trae.comp.card.expiry.permanent"),
-            },
-          ],
-        },
-        {
-          key: "credential",
-          title: t("trae.comp.card.detail.section.credential"),
-          rows: [
-            {
-              label: t("trae.comp.card.detail.jwtStatus"),
-              value: jwtBadge(detail.jwtStatus, detail.jwtExpHours, t).text,
-            },
-            {
-              label: t("trae.comp.card.detail.jwtAutoRefresh"),
-              /* 三态：没 refresh_token（换不了）／总开关关着（只能手动）／开着（分「本次将续期」
-                 与「未到期」）。★ 判据与后台续期任务同源（`account::needs_jwt_refresh`
-                 → `jwtAutoRefresh`），所以这里说「本次将续期」的账号，正是下一轮会被换掉的那批。 */
-              value: !detail.hasRefreshToken
-                ? t("trae.comp.card.detail.noRefreshToken")
-                : schedule?.trae_jwt_refresh_enabled === false
-                  ? t("trae.comp.card.detail.jwtAutoDisabled")
-                  : detail.jwtAutoRefresh
-                    ? t("trae.comp.card.detail.jwtAutoOn")
-                    : t("trae.comp.card.detail.jwtAutoOff"),
-            },
-            {
-              label: t("trae.comp.card.detail.deviceId"),
-              value: displayText(detail.deviceIdMasked) ?? t("trae.comp.card.detail.none"),
+              label: t("trae.comp.card.detail.jwtExpiry"),
+              value: detail.jwtExpTimestamp
+                ? shortTime(detail.jwtExpTimestamp)
+                : t("trae.comp.card.detail.none"),
               mono: true,
+            },
+            { label: t("shared.stat.checkin"), value: detailCheckinText },
+            /* 与 WB 概览同一行：只给 headline，客户端 / 网关拆分在用量统计页。 */
+            {
+              label: t("shared.stat.tokens"),
+              value: formatTodayTokens(todayTokens[detail.userId], todayTokensTruncated, t),
             },
           ],
         },
       ]
     : [];
+
+  /**
+   * ★ 2026-10-26（用户报障「凭证页不显示内容」）：抽屉的**凭据页签**（`shared.drawer.tab.credential`）
+   * 只渲染调用方注入的 `credential` 块 —— Trae 此前没传，页签里只剩两枚按钮。
+   *
+   * 数据来自本页已有的 JWT 字段，**不新增读法**：状态词 / 语气 / 三行明细。
+   *
+   * ★ 2026-10-27（用户要求「概览去掉重复的凭据区块」）：概览不再摆凭据明细，
+   * 「自动刷新 JWT」「设备标识」只在这里出现 —— 所以这两行必须完整，
+   * 包括「总开关关着（只能手动）」这一态，不能因为概览删了就把信息一起丢掉。
+   */
+  const detailCredential: DetailCredential | null = detail
+    ? {
+        statusText: jwtBadge(detail.jwtStatus, detail.jwtExpHours, t).text,
+        tone:
+          detail.jwtStatus === "expired"
+            ? "bad"
+            : detail.jwtStatus === "warn" || detail.jwtStatus === "unknown"
+              ? "warn"
+              : "ok",
+        /* 第一行「凭据到期」是主时间；后两行是 Trae 有、WB 没有的字段。
+           ⚠️ 不写 hint：WB 的 hint 是「可正常使用 / 建议续期」这类语气说明，
+           Trae 的凭据状态已由徽章 + 到期行说清，再加一句就是同一件事说三遍。 */
+        rows: [
+          {
+            label: t("trae.comp.card.detail.jwtExpiry"),
+            value: detail.jwtExpTimestamp
+              ? shortTime(detail.jwtExpTimestamp)
+              : t("trae.comp.card.detail.none"),
+            mono: true,
+          },
+          {
+            label: t("trae.comp.card.detail.jwtAutoRefresh"),
+            /* 三态：没 refresh_token（换不了）／总开关关着（只能手动）／开着（分「本次将续期」
+               与「未到期」）。★ 判据与后台续期任务同源（`account::needs_jwt_refresh`
+               → `jwtAutoRefresh`），所以这里说「本次将续期」的账号，正是下一轮会被换掉的那批。 */
+            value: !detail.hasRefreshToken
+              ? t("trae.comp.card.detail.noRefreshToken")
+              : schedule?.trae_jwt_refresh_enabled === false
+                ? t("trae.comp.card.detail.jwtAutoDisabled")
+                : detail.jwtAutoRefresh
+                  ? t("trae.comp.card.detail.jwtAutoOn")
+                  : t("trae.comp.card.detail.jwtAutoOff"),
+          },
+          {
+            label: t("trae.comp.card.detail.deviceId"),
+            value: displayText(detail.deviceIdMasked) ?? t("trae.comp.card.detail.none"),
+            mono: true,
+          },
+        ],
+      }
+    : null;
   /** 判定「临期」的同一时刻（下界与上界取同一个 `now`，口径见后端 `trae/credits.rs`）。 */
   const now = Date.now();
   /**
-   * 抽屉顶部的指标块（Trae 侧只有三个：积分 / 签到 / 凭据 —— 没有「今日 Token」的数据源，
-   * 不摆一个永远「—」的块）。
+   * 抽屉顶部的指标块（Trae 侧只有三个：积分 / 签到 / 凭据）。
    *
    * ⚠️ 文本全部在这里格式化（抽屉只排版）；`refreshKind` 只给本平台真的能刷的项
    * （Trae 没有签到状态的只读重取接口，所以签到块不带 ⟳）。
+   *
+   * ★ 2026-10-26（用户报障）：**临期阈值原来是坏的** —— 旧代码写
+   * `creditsExpireAt - Date.now() <= 7 * 86400000`，而 `creditsExpireAt` 是**秒**、
+   * `Date.now()` 是毫秒 ⇒ 差值恒为巨大负数 ⇒ `soon` 永远为真，于是**再远的到期日也是黄色**
+   * （用户看到的正是这个）。现在与卡片同一判据：`isExpiryUrgent(秒 * 1000)` = 3 天内。
+   *
+   * ★ 2026-10-27：指标块**只留这三块**；「今日 Token」不作块，而是像 WB 一样
+   * 放进概览的信息行（见 `detailSections`），完整拆分仍在用量统计页。
    */
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detail) return [];
     const badge = jwtBadge(detail.jwtStatus, detail.jwtExpHours, t);
-    const soon =
-      detail.creditsExpireAt != null && detail.creditsExpireAt - Date.now() <= 7 * 86_400_000;
+    /* 与卡片 / 表格同一份汇总：有包明细就报最急一批，没有就回落账号自带的到期时刻。 */
+    const expiryForDetail = summarizeExpiry(detailPackages, { unit: "s", now });
+    const totalForDetail = traeCreditTotal({ creditPackages: detailPackages });
+    const nextBatchForDetail = expiryForDetail?.batches[0] ?? null;
+    const soon = nextBatchForDetail
+      ? isExpiryUrgent(nextBatchForDetail.expireAt, now)
+      : detail.creditsExpireAt != null && isExpiryUrgent(detail.creditsExpireAt * 1000, now);
     const credBad = detail.jwtStatus === "expired";
 
-    /* 今日 Token（issue #47）：只统计**经本网关**的调用，客户端那一档 Trae 拿不到
-       （对话历史在 IDE 私有存储里）⇒ subText 必须说明「仅网关」，否则读者会把
-       这条当成「全部用量」。`gatewayTruncated` ⇒ 加 `≥` 前缀（下界）。 */
-    const detailTokens = todayTokens[detail.userId];
-    const detailTokensTotal = detailTokens
-      ? detailTokens.gatewayIn + detailTokens.gatewayOut
-      : null;
-    const tokensBlock: DetailStat = {
-      key: "tokens",
-      label: t("shared.stat.tokens"),
-      // 缺席 = 今日无记录 / 未刷新 ⇒「—」（**绝不当 0**）。
-      valueText:
-        detailTokensTotal === null
-          ? "—"
-          : todayTokensTruncated
-            ? t("wbAccounts.card.metric.atLeast", {
-                value: compactTokens(detailTokensTotal),
-              })
-            : compactTokens(detailTokensTotal),
-      subText: t("shared.stat.tokensGatewayOnly"),
-      refreshKind: "tokens",
-    };
-
-    /* 签到：被刷新过的账号用上游读数（`ok` 为假 ⇒ 显示「读不到」，与「未签到」分开）；
-       没刷新过的退回账号视图自带的本地台账口径，并如实标明来源。 */
-    const detailCheckin = checkinMap[detail.userId];
+    /* 签到：文案与概览行共用 `detailCheckinText`；这里只决定副行与 ⟳ ——
+       被刷新过的账号用上游读数，没刷新过的如实标明来源是本地台账。 */
+    const checkinEntry = checkinMap[detail.userId];
     const checkinBlock: DetailStat =
-      detailCheckin === undefined
+      checkinEntry === undefined
         ? {
             key: "checkin",
             label: t("shared.stat.checkin"),
-            valueText: detail.checkedToday
-              ? t("shared.stat.checkedIn")
-              : t("shared.stat.notCheckedIn"),
+            valueText: detailCheckinText,
             subText: t("shared.stat.checkinFromLedger"),
           }
         : {
             key: "checkin",
             label: t("shared.stat.checkin"),
-            valueText: !detailCheckin.ok
-              ? t("shared.stat.checkinUnreadable")
-              : detailCheckin.todayCheckedIn
-                ? t("shared.stat.checkedIn")
-                : detailCheckin.active === false
-                  ? t("shared.stat.checkinUnavailable")
-                  : t("shared.stat.notCheckedIn"),
+            valueText: detailCheckinText,
             subText:
-              detailCheckin.ok && detailCheckin.source === "ledger"
+              checkinEntry.ok && checkinEntry.source === "ledger"
                 ? t("shared.stat.checkinFromLedger")
                 : undefined,
             refreshKind: "checkin",
@@ -1626,28 +2329,50 @@ export default function TraeAccountsPage() {
       {
         key: "credits",
         label: t("shared.stat.credits"),
-        valueText: detail.credits != null ? formatCredits(detail.credits) : "—",
-        subText:
-          detail.creditsExpireAt != null
-            ? t("shared.stat.expiresAt", { when: shortTime(detail.creditsExpireAt) })
-            : t("shared.stat.noExpiry"),
+        /* ★ 2026-10-27（用户报障「积分请参考 WB，实现不一样」）：WB 的积分块是
+           **`剩余/总量` 两段式** + 副行「320 积分 10-29 00:00 到期」；
+           Trae 此前只有总量一个数字、副行写「有效至 …」。同一个位置的同一个指标，
+           两边读起来是两个概念 —— 现在按 WB 的口径重写：
+           - 主值：`剩余/总量`（总量走 `traeCreditTotal`，与卡片同一函数）；
+           - 副行：最急一批的「金额 + 到期」（`nextExpiryLabel`，与卡片同一函数），
+             没有包明细时回落 `creditsExpireAt` 的「MM-DD HH:mm 到期」；
+           - 语气：与卡片同一阈值（3 天内才警示）。 */
+        valueText:
+          detail.remainingCredits != null && traeCreditTotal({ creditPackages: detailPackages }) != null
+            ? `${formatCredits(detail.remainingCredits)}/${formatCredits(totalForDetail ?? 0)}`
+            : detail.remainingCredits != null
+              ? formatCredits(detail.remainingCredits)
+              : "—",
+        subText: expiryForDetail
+          ? nextExpiryLabel(expiryForDetail, t, now)
+          : detail.creditsExpireAt != null
+            ? t("trae.comp.card.expiryOn", { date: shortTime(detail.creditsExpireAt) })
+            : t("shared.stat.noExpiring"),
         tone: soon ? "warn" : undefined,
         refreshKind: "credits",
       },
-      tokensBlock,
       checkinBlock,
       {
         key: "credential",
         label: t("shared.stat.credential"),
         valueText: badge.text,
+        /* ★ 2026-10-26（与 WorkBuddy 同口径）：状态词不带信息，副行给**具体到期时刻**。
+           三分支与 WB 一致，第三支不同：Trae 的 JWT **不存在「长期有效」** ——
+           `jwtExpTimestamp` 缺值意味着读不到（`unparsable`），此时不写副行，而不是编一个
+           「长期有效」。 */
+        subText: credBad
+          ? t("shared.stat.credentialBadSub")
+          : detail.jwtExpTimestamp
+            ? t("shared.stat.credentialValidUntil", { date: shortTime(detail.jwtExpTimestamp) })
+            : undefined,
         tone: credBad ? "bad" : undefined,
         refreshKind: "credential",
       },
     ];
-  }, [detail, t, todayTokens, todayTokensTruncated, checkinMap]);
+  }, [detail, detailPackages, t, detailCheckinText, checkinMap]);
 
   const detailPacks: DetailPack[] = detail
-    ? (detail.creditPackages ?? [])
+    ? (detailPackages ?? [])
         .filter((item) => item.remaining > 0)
         .map((item, index) => ({ item, index }))
         .sort((left, right) => {
@@ -1746,6 +2471,18 @@ export default function TraeAccountsPage() {
     : false;
 
   /**
+   * 「该账号今日是否已签到」的**唯一判据**：上游读数（`checkinMap`）优先，没有时回落列表快照。
+   *
+   * ★ 2026-10-26：抽屉的「签到积分」块、「签到」按钮的显隐都读它。此前一处读快照
+   * （`detail.checkedToday`）、一处读 `checkinMap`，刷新完上游后两个地方给出相反的答案。
+   */
+  const detailCheckinToday = detail
+    ? checkinMap[detail.userId]?.ok
+      ? checkinMap[detail.userId].todayCheckedIn
+      : detail.checkedToday
+    : false;
+
+  /**
    * ★ 抽屉「操作」区：回调全部复用页面**既有**处理函数（刷新 JWT / 签到 / 删除）。
    * 「手动签到」按与卡片菜单**同一门控**：今日未签到且凭据可用时才给入口。
    * ★ 2026-10-23：`导出` 已从抽屉移除（共享壳不再渲染该按钮，导出仍在卡片「更多」菜单里）。
@@ -1754,7 +2491,9 @@ export default function TraeAccountsPage() {
     ? {
         onRefresh: () => refreshJwt(detail),
         onCheckin: () => void checkinOne(detail),
-        showCheckin: !detail.checkedToday && !detailCredentialUnavailable,
+        /* 与卡片菜单**同一门控**，且用**同一个**已签到判据（`detailCheckinToday`）——
+           否则会出现「抽屉说未签到、按钮却因已签到而消失」这种自相矛盾的组合。 */
+        showCheckin: !detailCheckinToday && !detailCredentialUnavailable,
         onDelete: () => requestDelete(detail),
         credentialUnavailable: detailCredentialUnavailable,
       }
@@ -1764,51 +2503,184 @@ export default function TraeAccountsPage() {
    * ★ 抽屉「签到积分」（原型 B5）：`todayCheckedIn` 必给；「今日获得」来自**最近一轮**签到摘要里
    * 该账号的 `delta`（上游实测字段）。
    *
+   * ★ 2026-10-26（用户报障「今日已签到却显示未签到」）：`todayCheckedIn` **上游读数优先**
+   * （`checkinMap`，用户点过「刷新签到状态」后就有），没有时才回落账号列表快照
+   * `detail.checkedToday`。此前只读快照 ⇒ 刷新完上游、卡片已显示「已签到」，
+   * 抽屉里还是「未签到」—— 同一屏上两个相反的答案。
+   *
    * ⚠️ 摘要不是今天的、或该账号不在摘要里 ⇒ `todayCredit: null` ⇒ 抽屉**不渲染**那一行
    * （§3.4 规则 1：无数据不渲染）。**绝不**用固定奖励凑一个「+N」。
    */
+  const detailCheckinEntry = detail ? checkinMap[detail.userId] : undefined;
+  /** 「今日获得」优先取**本轮签到的实际增量**（`summary.delta`），没有才回落到条目里的 `todayCredit`。 */
+  const detailCheckinDelta =
+    detail && checkin?.summaryIsToday
+      ? checkin.summary.results.find((row) => row.userId === detail.userId && row.ok)?.delta ?? null
+      : null;
+  /**
+   * ★ 2026-10-27（用户问「签到天数 / 累计积分为什么不能统计」）：Trae 上游签到状态
+   * **只有 `dailyCredit`**（`checkin.rs::status_entry`），从来没有 streak / total 概念
+   * ⇒ 这两格以前恒为「—」。现用**本地积分明细**（`credits.records`，保留 90 天）统计：
+   *
+   * - 签到天数 = 有明细的**日期数**（`skip_already` 的 `delta=0` 也算签到日）；
+   * - 累计积分 = `delta` 之和（只计非负；负数不是「获得」）。
+   *
+   * ⚠️ 口径与 WB 的上游 `streakDays`（连续天数）/ `totalCredits`（终身）**不同**：
+   * 这是「本机明细 · 近 90 天」。`statsScope: "local"` 让抽屉在 tooltip 里如实说明，
+   * 绝不冒充上游口径。上游哪天给了真值，`??` 的次序保证本地统计自动让位。
+   */
+  const localCheckinStats = (() => {
+    if (!detail) return null;
+    const rows = (credits?.records ?? []).filter((row) => row.userId === detail.userId);
+    if (rows.length === 0) return null;
+    return {
+      days: new Set(rows.map((row) => row.date)).size,
+      total: rows.reduce((sum, row) => sum + Math.max(0, row.delta), 0),
+    };
+  })();
   const detailCheckin = detail
-    ? {
-        todayCheckedIn: detail.checkedToday,
-        todayCredit:
-          checkin?.summaryIsToday
-            ? checkin.summary.results.find((row) => row.userId === detail.userId && row.ok)?.delta ?? null
-            : null,
-      }
+    ? (() => {
+        /* ★ 2026-10-27：上游读失败（`ok:false`）⇒ 整块如实置「未知」，**不回落快照** ——
+           概览行（`detailCheckinText`）此时显示「读不到」，抽屉若还按快照摆「未签到」，
+           就是同一屏两个答案。`null` 让抽屉显示未知 + ⟳ 出口。 */
+        if (detailCheckinEntry && !detailCheckinEntry.ok) return null;
+        const upstream = detailCheckinEntry?.ok ? api.checkinCreditsOf(detailCheckinEntry) : {};
+        const streakFromLocal = upstream.streakDays == null && localCheckinStats != null;
+        const totalFromLocal =
+          upstream.totalCredits == null &&
+          localCheckinStats != null &&
+          localCheckinStats.total > 0;
+        return {
+          todayCheckedIn: detailCheckinToday,
+          /* ★ 2026-10-26（用户报障「签到请参考 WB，实现不一样」）：三格里只有第一格有数，
+             另外两格（签到天数 / 累计积分）恒为「—」。WB 用的是 `checkinCreditsOf(entry)`
+             整组展开，这里改成同一个函数。⚠️ 没有上游条目时两格回落**本地明细统计** ——
+             宁可注明口径，也不摆永恒的「—」。 */
+          ...upstream,
+          streakDays: upstream.streakDays ?? localCheckinStats?.days ?? null,
+          totalCredits:
+            upstream.totalCredits ??
+            (localCheckinStats && localCheckinStats.total > 0 ? localCheckinStats.total : null),
+          statsScope: streakFromLocal || totalFromLocal ? ("local" as const) : undefined,
+          ...(detailCheckinDelta != null ? { todayCredit: detailCheckinDelta } : {}),
+        };
+      })()
     : null;
 
   /**
-   * ★ 抽屉「签到历史（近 7 天）」：日期 + 结果来自**本机签到日志**
-   * （`get_trae_logs({ kind: "checkin" })`，`TraeLogEntry.date`）。
+   * ★ 抽屉「签到历史（近 7 天）」：**只读结构化数据**，不再解析日志正文。
    *
-   * 「获得积分」按**账号 + 日期**取 `checkin.summary.results` 里那一条的 `delta`；
-   * 该摘要只覆盖**最近一轮**，取不到时为 `null` ⇒ 渲染「—」（**绝不**臆造固定奖励）。
+   * ## 为什么要推翻旧实现（2026-10-27 用户报障「显示未签到、今日结果却是成功」）
+   *
+   * 旧实现按「行内含 `userId` + 不含失败关键字」把 `checkin.log` 二分，而那份日志是
+   * 四类事件共用的：签到结果、OAuth 登录、JWT 续期、设备凭证回落。于是两个方向同时错：
+   *
+   * - 真签到那天的汇总行 `签到完成: 成功 1/…` **不含 uid** ⇒ 显示「未签到」；
+   * - 只刷新过 JWT 的那天有 `JWT 自动刷新成功: user=<uid>` ⇒ 显示「成功」。
+   *
+   * 现按两路**结构化**来源取值，判定与取数分离：
+   *
+   * 1. **本机签到流水**（`TraeLogEntry.checkin`，后端解析写侧的 `签到记录 …` 行）：
+   *    能区分 `claim_ok` / `skip_already` / `fail` 三态 —— 失败只有这里有。
+   * 2. **积分明细**（`credits.records`，`date + userId + delta`）：跨版本可用，
+   *    本功能上线前的成功记录也在，因此历史不会因为日志格式变更而整片变空。
+   *
+   * 「获得积分」优先取积分明细的 `delta`（唯一真值），取不到才用流水里的 `delta`；
+   * 两者都没有 ⇒ `null` ⇒ 渲染「—」（**绝不**臆造固定奖励）。
+   *
+   * 同一账号同一天有多条流水时取**最新**一条（`get_trae_logs` 已按时间倒序）。
    */
   const detailCheckinHistory: DetailCheckinHistoryRow[] | null =
     detail && detailCheckinLogs
       ? lastSevenDays().map((day) => {
-          const entry = detailCheckinLogs
-            .filter((log) => log.kind === "checkin" && log.date === day)
-            .find((log) => log.message.includes(detail.userId));
-          const outcome = checkin?.summaryIsToday
-            ? checkin.summary.results.find((row) => row.userId === detail.userId && row.ok)
-            : undefined;
-          const amount = outcome ? outcome.delta : null;
-          if (!entry) {
-            return { date: day, resultLabel: t("shared.drawer.checkin.result.none"), tone: "none" as const, amount };
+          const record = detailCheckinLogs.find(
+            (log) =>
+              log.kind === "checkin" && log.date === day && log.checkin?.userId === detail.userId,
+          )?.checkin;
+          const credit = credits?.records.find(
+            (row) => row.date === day && row.userId === detail.userId,
+          );
+          const creditDelta = credit ? credit.delta : null;
+          /* 「获得积分」列只放**获得**：正数是真收益，`0` 是「签过了但这轮没新增」，
+             负数（理论上只有夹具会出现）不是获得 ⇒ 不显示，免得渲染成「+-8.5」。 */
+          const earned = (delta: number | null): number | null =>
+            delta == null ? null : delta >= 0 ? delta : null;
+
+          if (record?.action === "fail") {
+            return {
+              date: day,
+              resultLabel: t("shared.drawer.checkin.result.fail"),
+              tone: "fail" as const,
+              amount: null,
+            };
           }
-          /* 日志行是**纯文本**，不做自然语言解析：只按「是否含失败关键字」二分。
-             宁可把失败显示成「成功」以外的一档，也不猜更细的状态。 */
-          const failed = /失败|error|fail/i.test(entry.message);
-          return failed
-            ? { date: day, resultLabel: t("shared.drawer.checkin.result.fail"), tone: "fail" as const, amount }
-            : { date: day, resultLabel: t("shared.drawer.checkin.result.success"), tone: "ok" as const, amount };
+          if (record?.action === "claim_ok") {
+            return {
+              date: day,
+              resultLabel: t("shared.drawer.checkin.result.success"),
+              tone: "ok" as const,
+              amount: earned(creditDelta) ?? (record.delta > 0 ? record.delta : null),
+            };
+          }
+          if (record?.action === "skip_already") {
+            return {
+              date: day,
+              resultLabel: t("shared.drawer.checkin.result.already"),
+              tone: "warn" as const,
+              /* `skip_already` 的 delta 恒为 0：有明细就显示 0（「签过了，这轮没新增」），
+                 没有明细才显示「—」。 */
+              amount: earned(creditDelta),
+            };
+          }
+          if (credit) {
+            /* 没有流水但有明细：`delta > 0` 说明那次签到**真拿到了积分**，
+               `delta === 0` 是「上游已签、本轮跳过」。这是升级前的历史记录能给出的最强结论。 */
+            return creditDelta != null && creditDelta > 0
+              ? {
+                  date: day,
+                  resultLabel: t("shared.drawer.checkin.result.success"),
+                  tone: "ok" as const,
+                  amount: creditDelta,
+                }
+              : {
+                  date: day,
+                  resultLabel: t("shared.drawer.checkin.result.already"),
+                  tone: "warn" as const,
+                  amount: earned(creditDelta),
+                };
+          }
+          return {
+            date: day,
+            resultLabel: t("shared.drawer.checkin.result.none"),
+            tone: "none" as const,
+            amount: null,
+          };
         })
       : null;
 
   /* 页头作用域（原型 `viewAccounts`）复用上方的 `scope`；「需处理」= JWT 已过期，
      与 WorkBuddy 侧的 `needsRelogin` 同一层语义。 */
   const expiredCount = accounts.filter((account) => account.jwtStatus === "expired").length;
+
+  /**
+   * 页头一键动作的可用性 —— **做不了就禁用**，别让按钮点下去只弹一句「没活可干」。
+   *
+   * - 无账号 ⇒ 两枚全禁用（动作函数里的 early-return 用户看不见）。
+   * - 一键签到：所有账号的今日签到都**已知为已签**才禁用；任一账号状态未知
+   *   （`checkinMap` 还没回来）就保持可点 —— 不把「不知道」当成「已签」。
+   */
+  const noAccounts = accounts.length === 0;
+  /**
+   * 今日是否已签到：上游读数（`checkinMap`）优先，没有时回落列表快照 —— 与卡片同源。
+   *
+   * 用函数声明（而非 `const` 箭头）是为了**提升**：表格的 `renderStatusBadges` 也要读它，
+   * 而那段位于本组件靠上的位置，`const` 会在 TDZ 里。
+   */
+  function checkinTodayOf(account: TraeAccount): boolean {
+    return checkinMap[account.userId]?.ok ? checkinMap[account.userId].todayCheckedIn : account.checkedToday;
+  }
+  const checkinHasPending = accounts.some((account) => !checkinTodayOf(account));
+  const quickBlocked = batchBusy || quickActionBusy !== null;
 
   /**
    * 收敛迁移的**一次性升级引导**（issue #28）。
@@ -1885,6 +2757,32 @@ export default function TraeAccountsPage() {
           </p>
         </div>
         <div className="grow" />
+        {/* ★ 2026-10-26（用户要求）：页头补「一键刷新 / 一键签到」，与 WorkBuddy 页头同位置、
+            同控件、同冷却（30 秒）。一键作用于**全部账号**且只做只读刷新 / 自动跳过已签，
+            写操作与破坏性操作仍只在勾选后的批量条与单账号菜单里（PLAN §3.4 三作用域）。 */}
+        <div className="flex shrink-0 items-center gap-2">
+          <QuickRefreshAction
+            scope={scope}
+            busy={quickActionBusy === "refresh"}
+            disabled={quickBlocked || noAccounts}
+            disabledReason={noAccounts ? t("shared.toolbar.quickNoAccounts") : undefined}
+            onRefresh={quickRefreshAll}
+          />
+          <QuickActionButton
+            icon={<CheckinIcon />}
+            label={t("shared.toolbar.quickCheckin")}
+            busy={quickActionBusy === "checkin"}
+            disabled={quickBlocked || noAccounts || !checkinHasPending}
+            disabledReason={
+              noAccounts
+                ? t("shared.toolbar.quickNoAccounts")
+                : !checkinHasPending
+                  ? t("shared.toolbar.quickCheckinNone")
+                  : undefined
+            }
+            onClick={() => void quickCheckinAll()}
+          />
+        </div>
       </header>
 
       {/* ★ 账号工作台（**两平台共用容器**）—— 与 `AccountsPage` 是**同一个组件**，
@@ -1996,9 +2894,11 @@ export default function TraeAccountsPage() {
                   .filter((account) => checkinResult.failedIds.includes(account.userId))
                   .map((account) => displayText(account.name) || account.userId),
                 onRetry:
-                  checkinResult.failedIds.length > 0
-                    ? () => batchCheckin(checkinResult.failedIds)
+                  checkinResult.failedIds.length + checkinResult.unprocessedIds.length > 0
+                    ? () => batchCheckin([...checkinResult.failedIds, ...checkinResult.unprocessedIds])
                     : undefined,
+                /* 取消后没发出的账号单独成档：既不是成功也不是失败（R12）。 */
+                unprocessedCount: checkinResult.unprocessedIds.length,
               }
             : null
         }
@@ -2006,8 +2906,12 @@ export default function TraeAccountsPage() {
         batch={{
           selectedCount: selectedKeys.size,
           busy: batchBusy,
+          /* ★ R08：普通「刷新」只走读接口（下拉）；续期凭据是下拉外的写操作。 */
+          onRefreshPart: batchRefreshPart,
+          refreshKinds: TRAE_REFRESH_KINDS,
+          onRefreshToken: () => void batchRenewTokens(),
+          refreshingToken: renewBusy,
           onCheckin: () => void batchCheckin(),
-          onRefresh: () => void batchRefresh(),
           /* ★ 导出所选账号：原型 `batchBarHtml` 的固定动作之一（`:2453`）。
              Trae 侧此前缺这一项 ⇒ 同一个批量条在两个分区动作集不同。 */
           onExport:
@@ -2019,6 +2923,8 @@ export default function TraeAccountsPage() {
               : undefined,
           onDelete: () => setBatchDeleteOpen(true),
           onClear: clearSelection,
+          progress: batchProgress,
+          onCancel: batchProgress ? cancelBatch : undefined,
         }}
         listAriaLabel={t("trae.page.accounts.sectionAria", { count: accounts.length })}
         totalCount={accounts.length}
@@ -2046,6 +2952,8 @@ export default function TraeAccountsPage() {
         bucketAllSelected={bucketAllSelected}
         bucketSomeSelected={bucketSomeSelected}
         onOpenRow={openDetail}
+        /* ★ R07：表格行尾的「更多」与卡片页脚**同一个装配函数**。 */
+        renderActions={(account) => renderAccountMenu(account, true)}
         isRowCurrent={isCurrentAccount}
         rowSelectLabel={(account) => t("shared.table.selectRowAria", { name: traeAccountName(account) })}
         rowOpenLabel={(account) => t("shared.table.openRowAria", { name: traeAccountName(account) })}
@@ -2055,8 +2963,9 @@ export default function TraeAccountsPage() {
                               account={{
                                 ...account,
                                 // 逐包明细来自 `get_trae_credits` 的 `packages[uid]`：账号视图（`list_account_views_for`）
-                                // 只带聚合积分，包粒度明细在积分总览里，按 uid 合并后交给卡片渲染「近期到期」进度条。
-                                creditPackages: credits?.packages?.[account.userId] ?? account.creditPackages ?? null,
+                                // 只带聚合积分，包粒度明细在积分总览里 —— 合并口径与表格积分列共用
+                                // `traeCreditPackages`，两处不再各写一份。
+                                creditPackages: traeCreditPackages(account, credits?.packages),
                               }}
                               current={isCurrentAccount(account)}
                               programs={programsFor(account)}
@@ -2067,7 +2976,10 @@ export default function TraeAccountsPage() {
                               selected={selectedKeys.has(selectionKey(account.userId))}
                               onToggleSelect={toggleSelect}
                               onOpenDetail={openDetail}
-                              onEditRemark={openRemark}
+                              /* ★ R10：标签直达详情页签。 */
+                              onOpenTab={(target, tab) => openDetail(target, tab)}
+                              /* ★ R07/R09：卡片页脚与表格行尾**同一个菜单装配函数**。 */
+                              menu={renderAccountMenu(account)}
                               /* 「把这个账号挂到哪条 Trae 线上」——对应 WorkBuddy 卡片上的
                                  WorkBuddy / CodeBuddy IDE / CodeBuddy CLI 三枚按钮。
                                  `variant` 取按钮自己那条线（不是当前页面那条）：用户就是要
@@ -2086,8 +2998,8 @@ export default function TraeAccountsPage() {
                               doneKinds={refreshBusy.doneKindsOf(account.userId)}
                               refreshingKinds={refreshBusy.kindsOf(account.userId)}
                               refreshKinds={TRAE_REFRESH_KINDS}
-                              todayTokens={todayTokens[account.userId] ?? null}
-                              todayTokensTruncated={todayTokensTruncated}
+                              /* ★ 2026-10-26：卡片不再收 `todayTokens` —— 今日 Token 只在
+                                 抽屉概览的信息行展示（与 WorkBuddy 同口径）。 */
                               checkedTodayOverride={
                                 checkinMap[account.userId]?.ok
                                   ? checkinMap[account.userId].todayCheckedIn
@@ -2315,10 +3227,14 @@ export default function TraeAccountsPage() {
       <AccountDetailDrawer
         open={detail !== null}
         onOpenChange={(open) => {
-          if (!open) setDetailAccount(null);
+          if (!open) {
+            setDetailAccount(null);
+            setDetailTab(null);
+          }
         }}
         // 页签记忆的身份键：`scope:userId`（国内版 / 国际版的同一个 userId 是两个账号）。
         accountKey={detail ? `${scope}:${displayText(detail.userId) ?? ""}` : ""}
+        initialTab={detailTab}
         name={detailName}
         subtitle={
           detail
@@ -2342,16 +3258,25 @@ export default function TraeAccountsPage() {
         actions={detailActions}
         checkinHistory={detailCheckinHistory}
         checkin={detailCheckin}
+        credential={detailCredential}
         packs={detailPacks}
         stats={detailStats}
         snapshots={detailSnapshots}
         refreshingKinds={detail ? refreshBusy.kindsOf(detail.userId) : []}
         onRefreshPart={detail ? (kind) => void onRefreshPart(detail, kind) : undefined}
+        /* ★ 2026-10-26：把「本平台能刷哪些项」交给抽屉 —— 积分页签据此**常驻**
+           （没有包明细时给空态 + ⟳，而不是整个页签消失）。 */
+        refreshKinds={TRAE_REFRESH_KINDS}
         sections={detailSections}
         programs={detailPrograms}
         remark={detailRemark}
         onSaveRemark={detail ? (remark) => saveRemark(detail, remark) : undefined}
-        autoEditRemark={detailAutoEditRemark}
+        /* ★ 2026-10-26（用户报障「没有分组功能」）：分组是**实体**（id + 名称），
+           抽屉收「组名」、页面负责落到 id 上（见 `saveGroupFor`）。
+           候选列表给的是全部组名 —— 用户要能看见「已经有哪些组」，避免打成三种写法。 */
+        group={detail ? groupNameOf(detail) ?? "" : ""}
+        groups={groups.map((group) => group.name)}
+        onSaveGroup={detail ? (name) => saveGroupFor(detail, name) : undefined}
         /* ★ 与 WorkBuddy 抽屉**同一取值**：WB 侧不传（默认 `false`），这里显式写 `false`。
            ⚠️ 此前 Trae 传 `api.isDemoMode()` ⇒ 演示构建里 Trae 抽屉的备注**不可编辑**、WB 可编辑。 */
         featuresDisabled={false}

@@ -90,14 +90,22 @@ export const zh = {
   "wbAccounts.card.forever": "长期有效",
   "wbAccounts.card.expirySuffix": "到期",
   "wbAccounts.card.arrivingSoon": "即将到达",
-  "wbAccounts.card.remainingHM": "剩余 {hours} 小时 {minutes} 分钟",
-  "wbAccounts.card.remainingH": "剩余 {hours} 小时",
-  "wbAccounts.card.remainingM": "剩余 {minutes} 分钟",
   "wbAccounts.card.traveling": "旅行中",
   "wbAccounts.card.finished": "已结束",
   "wbAccounts.card.noBuddy": "无 Buddy",
   "wbAccounts.card.notTraveled": "未旅行",
-  "wbAccounts.card.travelEst": "预计 {points}",
+  // ★ 2026-10-26（用户反馈）：旅行 tooltip 重写 —— 旧文案是「地点 · +120 · 剩余 2 小时」，
+  //   「+120」没有单位，「剩余」也没说剩余到什么时候。新文案逐项带主语：去往哪 / 何时到达 /
+  //   奖励多少；到达时刻用「今天 / 明天 HH:mm」，与积分到期同一套本地日历日读法。
+  "wbAccounts.card.travelHeadingTo": "前往「{place}」",
+  "wbAccounts.card.travelArriveToday": "预计今天 {time} 到达",
+  "wbAccounts.card.travelArriveTomorrow": "预计明天 {time} 到达",
+  "wbAccounts.card.travelArriveDate": "预计 {date} {time} 到达",
+  "wbAccounts.card.travelReward": "完成奖励 +{points} 积分",
+  "wbAccounts.card.travelFinishedAt": "「{place}」旅行已结束",
+  "wbAccounts.card.travelFinishedToday": "今日旅行已结束",
+  "wbAccounts.card.travelRewardEarned": "获得 +{points} 积分",
+  "wbAccounts.card.travelNoBuddyTip": "该账号今日暂无可用 Buddy，无法派出旅行",
   "wbAccounts.card.currentWorkbuddy": "WorkBuddy 当前账号",
   "wbAccounts.card.currentIde": "CodeBuddy IDE 当前账号",
   "wbAccounts.card.currentCli": "CodeBuddy CLI 当前账号",
@@ -123,6 +131,10 @@ export const zh = {
   // 原型 `accountStatus()`（`buddy-switch-prototype.html:2390-2395`）是**互斥的一枚**状态：
   // 凭据已过期 → 需重新登录 → 今日未签到 → （否则）已签到。
   "wbAccounts.card.notCheckedIn": "今日未签到",
+  // ★ 2026-10-26（用户反馈）：签到两态补 tooltip，只讲状态；凭据两态不加 ——
+  //   标签本身（需重新登录 / 凭据已过期）已说明下一步，再解释一遍是冗余。
+  "wbAccounts.card.checkedInTip": "今日已签到",
+  "wbAccounts.card.notCheckedInTip": "今日尚未签到",
   "wbAccounts.card.needRelogin": "需重新登录",
   "wbAccounts.card.tokenExpired": "凭据已过期",
   // 成长任务提示（每号基本只有一次机会，所以值得在卡片上占一枚 chip）。
@@ -133,9 +145,11 @@ export const zh = {
   "wbAccounts.card.growthAutoable": "可自动 {n}",
   "wbAccounts.card.growthProgress": "已领 {claimed}/{total}",
   "wbAccounts.card.growthDone": "任务已完成",
-  "wbAccounts.card.growthTip": "成长任务：可领取 {claimable} 项 · 可自动完成 {autoable} 项（点击打开任务页签）",
-  "wbAccounts.card.growthTipProgress": "成长任务：已领 {claimed}/{total}，暂无可领或可自动完成的任务（点击打开任务页签）",
-  "wbAccounts.card.growthTipDone": "成长任务：{total} 项已全部领取（点击打开任务页签）",
+  // ★ 2026-10-26（用户反馈）：tip 只讲任务状态，去掉「（点击打开任务页签）」——
+  //   徽章的可点性已由 hover 光标与 aria-label 承载，浮层里再写一遍是噪声。
+  "wbAccounts.card.growthTip": "成长任务：可领取 {claimable} 项 · 可自动完成 {autoable} 项",
+  "wbAccounts.card.growthTipProgress": "成长任务：已领 {claimed}/{total}，暂无可领或可自动完成的任务",
+  "wbAccounts.card.growthTipDone": "成长任务：{total} 项已全部领取",
   // 「优先」——原型 `.acct-chips` 里是**带文字**的 `badge info`（`:2508`），
   // 此前我们只摆一枚星形图标，与原型不同。
   "wbAccounts.card.priority": "优先",
@@ -149,13 +163,22 @@ export const zh = {
   "wbAccounts.card.expiringTipTitle": "按到期时间分批（共 {n} 批）",
   "wbAccounts.card.expiringTipLine": "{time} · {amount} 积分",
   "wbAccounts.card.expiringTipMore": "… 其余 {n} 批",
-  "wbAccounts.card.toolsInUse": "使用中 {n} 个工具",
+  // 指标行下面的凭据行（2026-10-26）：凭证 / 刷新令牌各自的到期时刻。
+  "wbAccounts.card.credentialExpiry": "凭证到期",
+  "wbAccounts.card.refreshTokenExpiry": "刷新令牌到期",
+  // ★ 2026-10-26（用户反馈）：两项各补 tooltip —— 两个「到期」的后果不同：
+  //   凭证到期只是续期，刷新令牌到期才必须重新登录；并列在卡片上时更需要分清。
+  "wbAccounts.card.credentialExpiryTip": "登录凭证的到期时间；到期后可凭刷新令牌续期",
+  "wbAccounts.card.refreshTokenExpiryTip": "刷新令牌用于续期登录凭证；到期后需要重新登录该账号",
   // 头部「当前登录」徽章（原型 `accountCard` :2502）：绑定任一程序位即为当前登录。
   "wbAccounts.card.currentLogin": "当前登录",
   // 卡片指标行（原型 `.acct-metrics` :2510）：`积分 1,240/2,000` · `今日 42.1K` · `2 分钟前`。
   // ⚠️ 三项都有真实来源：积分（credit.resources）、今日 Token（get_account_token_today）、
   //    最后使用（AccountMeta.lastUsedAt）。缺值仍按诚实边界渲染：缺席 ⇒ 「—」（非 0）。
   "wbAccounts.card.metric.credits": "积分",
+  // ★ 2026-10-26（用户反馈）：总积分补 tooltip —— 斜杠两侧（剩余 / 总额）不自明，
+  //   顺带给出已用（= 总额 − 剩余），三个数都随卡面数据变化。
+  "wbAccounts.card.creditsTip": "剩余 {remaining} · 总额 {total} · 已用 {used}",
   // 原型该格只有「今日」两字（`<span>今日 <b>…</b></span>`），不是「今日 Token」。
   "wbAccounts.card.metric.todayTokens": "今日",
   // 第三格原型是**无标签的相对时间**；标签与绝对时刻改挂 `title`。
@@ -231,10 +254,6 @@ export const zh = {
   "wbAccounts.detail.tokenExpiry": "凭据到期",
   "wbAccounts.detail.expired": "已过期",
   "wbAccounts.detail.checkedIn": "今日签到",
-  /* ★ 2026-10-22：卡片指标行不再显示「最近使用」（让位给临期积分 / 优先标签），
-     该信息下沉到抽屉，避免「切号前想知道这个号多久没动过」变成无处可查。 */
-  "wbAccounts.detail.lastUsed": "最近使用",
-  "wbAccounts.detail.neverUsed": "从未使用",
   /* ★ 2026-10-23：「凭据」页签改为展示凭据信息（状态 + 到期）⇒ 需要这两条。
      它们与上面的 `tokenExpiry` 同属于**凭据**，只是不在「概览」的账号信息里。 */
   "wbAccounts.detail.refreshTokenExpiry": "刷新令牌到期",
@@ -432,9 +451,18 @@ export const zh = {
   "wbAccounts.toast.batchCancelled": "已取消，{n} 个未处理",
   "wbAccounts.toast.batchCancelledToast": "已取消批量操作",
   "wbAccounts.toast.quickRefreshDone": "一键刷新完成",
-  "wbAccounts.toast.quickRefreshScope": "已刷新 {n} 个账号：账号信息 · 积分 · 旅行 · 今日 Token · 签到状态 · 任务完成情况",
-  "wbAccounts.toast.quickRefreshScopeNoTasks": "已刷新 {n} 个账号：账号信息 · 积分 · 旅行 · 今日 Token · 签到状态",
+  // ★ 2026-10-26（用户拍板）：范围 = **卡片上所有可见读数**（含凭据状态）。
+  //   账号信息的刷新与顶栏 ⟳ 共用同一条命令，这是刻意的：卡片的「凭据到期」只有它能更新。
+  //   今日 Token 不在范围内（卡片已不展示它）。
+  "wbAccounts.toast.quickRefreshScope": "已刷新 {n} 个账号：积分 · 旅行 · 签到状态 · 凭据状态 · 任务完成情况",
+  "wbAccounts.toast.quickRefreshScopeNoTasks": "已刷新 {n} 个账号：积分 · 旅行 · 签到状态 · 凭据状态",
   "wbAccounts.toast.quickRefreshTasksFailed": "已刷新 {n} 个账号，但任务完成情况刷新失败",
+  // ★ 2026-10-27：旅行层不再「读不到也报成功」。全部读不到时仍走这条（failed = n），
+  //   已成功的项照常更新，提示语气降为 warning。
+  "wbAccounts.toast.quickRefreshTravelPartial": "已刷新 {n} 个账号，但 {failed} 个旅行状态读取失败",
+  // 单账号 / 批量「刷新旅行状态」的失败口径：缺条目 = 这个账号没读到结果（保留旧值）。
+  "wbAccounts.toast.travelFailed": "旅行状态读取失败",
+  "wbAccounts.toast.travelPartial": "旅行状态：{ok} 个已更新，{failed} 个读取失败",
   "wbAccounts.toast.batchRefreshDesc": "已对 {n} 个所选账号执行",
   // ★「今日 Token」是**按整版本聚合**的接口（`get_account_token_today`），没有「只算这几个
   //   账号」的入参 ⇒ 勾了 3 个也会重算全部。此前它复用 `batchRefreshDesc`，等于把这件
@@ -449,11 +477,12 @@ export const zh = {
   "wbAccounts.toast.batchTokenRenewed": "已续期 {n} 个",
   "wbAccounts.toast.batchTokenRelogin": "需重新登录 {n} 个",
   "wbAccounts.toast.batchTokenFailed": "续期失败 {n} 个",
-  "wbAccounts.toast.completeNone": "所有账号都没有可完成的任务",
   "wbAccounts.toast.completeSelectedNone": "所选账号都没有可完成的任务",
   "wbAccounts.toast.completeDone": "任务完成",
   "wbAccounts.toast.completeDoneFail": "任务完成失败",
   "wbAccounts.toast.completeSummary": "{n} 个账号完成，领取 {credit} 积分",
+  // ★ 2026-10-26：「已上报进度但未达标」必须单列 —— 并进「跳过」或「完成」都会说谎。
+  "wbAccounts.toast.completeProgressed": "{n} 个账号已上报进度（奖励尚未达标）",
   "wbAccounts.toast.completeSkipped": "跳过 {n} 个无可完成任务",
   "wbAccounts.toast.completeFailed": "{n} 个失败",
   "wbAccounts.toast.switchCliLoading": "正在切换 CodeBuddy CLI…",
@@ -514,6 +543,10 @@ export const zh = {
   // ★ 2026-10-23：`wbAccounts.table.todayTokens` / `.expiry` / `.current` 已删除 ——
   //   列表随卡片瘦身（今日用量在统计页 / 详情抽屉；到期不再成列；「当前登录」直接复用
   //   `wbAccounts.card.currentLogin`）。见 P4-TOOLBAR-ARCH §1.8。
+  // ★ 2026-10-26：新增 `.credential` —— 卡片补了「凭证到期 · 刷新令牌到期」后，
+  //   2026-10-23 删列的前提（卡片不显示凭证到期）不再成立，表格同批补回一列。
+  //   列内两项文案复用卡片的 `card.credentialExpiry` / `card.refreshTokenExpiry`。
+  "wbAccounts.table.credential": "凭据",
   "wbAccounts.table.programs": "程序位",
 
   // =====================================================================

@@ -1,4 +1,5 @@
-import { Ban, Check, CircleCheck, Coins, Loader2, PlaneTakeoff, QrCode } from "lucide-react";
+import { Ban, Check, Coins, Loader2, PlaneTakeoff, QrCode } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 // P0 · 程序位表（含「计划新增 / 尚未支持」态）—— 展示侧镜像，与后端 `programs.rs` 逐字对齐。
@@ -16,6 +17,7 @@ import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
 import { EXPIRY_TIP_LIMIT, expiryDay, isExpiryUrgent, summarizeExpiry, type ExpirySummary } from "@/lib/credit-expiry";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
+import { formatDate } from "@/lib/format";
 import { useT, type Translate } from "@/lib/i18n";
 import { CheckinIcon, GrowthTaskIcon } from "@/lib/semantic-icons";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
@@ -251,6 +253,21 @@ export function creditMetricValues(credit?: CreditExpiry): AccountCreditMetric {
   };
 }
 
+/**
+ * 「积分 x/y」tooltip 的**唯一文案来源** —— 卡片浮层与表格 `title` 共用。
+ *
+ * 斜杠两侧（剩余 / 总额）不自明，「已用」是二者之差。缺任一端时不渲染：
+ * 只剩一个「剩余」并不比卡面多说明什么。
+ */
+export function creditMetricTip(metric: AccountCreditMetric, t: Translate): string | null {
+  if (metric.current === null || metric.total === null) return null;
+  return t("wbAccounts.card.creditsTip", {
+    remaining: formatCredits(metric.current),
+    total: formatCredits(metric.total),
+    used: formatCredits(Math.max(0, metric.total - metric.current)),
+  });
+}
+
 /** 到期明细的**唯一文案来源**：卡片 tooltip 与表格 `title` 共用（最急的一批排第一）。 */
 export function expiryTooltipLines(
   expiry: ExpirySummary,
@@ -365,7 +382,7 @@ const chipClass = ACCOUNT_CHIP_CLASS;
  * ⚠️ 2026-10-12：此前这里渲染的是**一枚只有图标、没有文字的徽章** ——
  * 原型 `.acct-chips` 里**没有任何无文字的 chip**（每条都是「图标 + 文字」或纯文字），
  * 只有图标的徽章在卡片上看起来像一个坏掉的空标签。
- * ⇒ 短文字（旅行中 / 已旅行）进徽章，**细节**（地点 · 奖励 · 剩余时间）留在 tooltip。
+ * ⇒ 短文字（旅行中 / 已结束）进徽章，**细节**（去往哪 · 何时到达 · 奖励多少）留在 tooltip。
  */
 function travelIconChip({
   text,
@@ -374,7 +391,7 @@ function travelIconChip({
 }: {
   /** 徽章上的短文字。 */
   text: string;
-  /** tooltip 里的细节（地点 · 奖励 · 剩余时间）。 */
+  /** tooltip 里的细节（去往哪 · 何时到达 · 奖励多少）。 */
   tooltip: string;
   variant: "secondary" | "success";
 }) {
@@ -390,35 +407,52 @@ function travelIconChip({
   );
 }
 
-function formatTravelRemaining(arriveAt: number | null | undefined, t: Translate): string | null {
+/**
+ * 到达时刻的 tooltip 文案：今天 / 明天 / 具体日期 + 时分。
+ *
+ * ★ 2026-10-26（用户反馈）：旧文案是「剩余 2 小时」——倒数说不出「几点到」，
+ * 且 `arriveAt` 是上游时刻、本地只是倒推。现按**本地日历日**归类（与积分到期
+ * 共用 `expiryDay`），回答用户真正要的计划信息：今天 18:30 到 / 明天 09:00 到。
+ * 到达时刻已过但上游还没翻状态时退回「即将到达」，不写「剩余 0 分钟」。
+ */
+function travelArriveLabel(arriveAt: number | null | undefined, t: Translate, now: number): string | null {
   if (!arriveAt || arriveAt <= 0) return null;
   const arriveMs = arriveAt > 1e12 ? arriveAt : arriveAt * 1000;
-  const remainingMs = arriveMs - Date.now();
-  if (remainingMs <= 0) return t("wbAccounts.card.arrivingSoon");
-  const totalMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0 && minutes > 0) return t("wbAccounts.card.remainingHM", { hours, minutes });
-  if (hours > 0) return t("wbAccounts.card.remainingH", { hours });
-  return t("wbAccounts.card.remainingM", { minutes });
+  if (arriveMs <= now) return t("wbAccounts.card.arrivingSoon");
+  const day = expiryDay(arriveMs, now);
+  if (day.kind === "today") return t("wbAccounts.card.travelArriveToday", { time: day.time });
+  if (day.kind === "tomorrow") return t("wbAccounts.card.travelArriveTomorrow", { time: day.time });
+  return t("wbAccounts.card.travelArriveDate", { date: day.text, time: day.time });
 }
 
+/**
+ * 旅行徽章的 tooltip：**逐项带主语**，用「 · 」分段。
+ *
+ * 旧文案 `地点 · +120 · 剩余 2 小时` 的三个碎片都没有说明自己是什么（+120 没单位、
+ * 「剩余」没说剩余到哪一步）⇒ 现在写成「前往「东京」 · 预计今天 18:30 到达 ·
+ * 完成奖励 +120 积分」。`finished` 是**当日**已领取（`travel.rs`: `same_day && claimed`），
+ * 所以缺地点时写「今日旅行已结束」而不是泛泛的「已结束」；`no-buddy` 给出原因，
+ * 而不是复述徽章上的「无 Buddy」。
+ */
 function travelTooltip(status: TravelStatus, t: Translate): string {
   const place = status.locationName?.trim();
-  const credit = status.rewardCredit;
-  const points = credit != null ? `+${credit}` : null;
-  const remaining = formatTravelRemaining(status.arriveAt, t);
+  const points = status.rewardCredit != null ? String(status.rewardCredit) : null;
   if (status.label === "traveling") {
-    const parts = [place, points ? t("wbAccounts.card.travelEst", { points }) : t("wbAccounts.card.traveling"), remaining].filter(Boolean);
-    return parts.length > 0 ? parts.join(" · ") : t("wbAccounts.card.traveling");
+    const parts = [
+      place ? t("wbAccounts.card.travelHeadingTo", { place }) : t("wbAccounts.card.traveling"),
+      travelArriveLabel(status.arriveAt, t, Date.now()),
+      points ? t("wbAccounts.card.travelReward", { points }) : null,
+    ].filter(Boolean);
+    return parts.join(" · ");
   }
   if (status.label === "finished") {
-    if (place && points) return `${place} · ${points}`;
-    if (place) return `${place} · ${t("wbAccounts.card.finished")}`;
-    if (points) return `${t("wbAccounts.card.finished")} · ${points}`;
-    return t("wbAccounts.card.finished");
+    const parts = [
+      place ? t("wbAccounts.card.travelFinishedAt", { place }) : t("wbAccounts.card.travelFinishedToday"),
+      points ? t("wbAccounts.card.travelRewardEarned", { points }) : null,
+    ].filter(Boolean);
+    return parts.join(" · ");
   }
-  if (status.label === "no-buddy") return t("wbAccounts.card.noBuddy");
+  if (status.label === "no-buddy") return t("wbAccounts.card.travelNoBuddyTip");
   return t("wbAccounts.card.notTraveled");
 }
 
@@ -494,7 +528,7 @@ export function AccountStatusBadge({
     { name: accountDisplayName(account) },
   );
 
-  return (
+  const badge = (
     <Badge
       asChild={Boolean(onOpen)}
       variant={variant}
@@ -509,6 +543,117 @@ export function AccountStatusBadge({
         content
       )}
     </Badge>
+  );
+
+  /* ★ 2026-10-26（用户反馈）：签到两态补 tooltip（只讲状态）。凭据两态不加 ——
+     标签本身（需重新登录 / 凭据已过期）已说明下一步，再解释一遍是冗余。 */
+  const tip =
+    kind === "checkedIn"
+      ? t("wbAccounts.card.checkedInTip")
+      : kind === "notCheckedIn"
+        ? t("wbAccounts.card.notCheckedInTip")
+        : null;
+  if (!tip) return badge;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipContent side="top">{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * 「凭据到期 · 刷新令牌到期」——**三平台卡片与表格共用的唯一实现**（2026-10-26）。
+ *
+ * 卡片放在指标行下方单起一行；表格的「凭据」列用 `layout="column"` 渲染同一份内容。
+ * 抽出来的理由与状态徽章一致：两处各写一遍必然漂移 —— 日期格式（`formatDate` 的
+ * `MM-DD HH:mm`）、「刷新令牌到期」缺值时的三分支（有值 / 需重登 / 未知）都是易分叉处。
+ *
+ * ## 入参为什么是**结构类型**而不是 `Pick<AccountMeta, …>`
+ *
+ * 三个平台的账号类型不同（`AccountMeta` / `TraeAccount` / `QoderAccountView`），
+ * 字段名与可得性也不同：
+ *
+ * | 平台 | 凭据到期 | 刷新令牌到期 |
+ * |:--|:--|:--|
+ * | WorkBuddy | `expiresAt` | `refreshExpiresAt` |
+ * | Trae | `jwtExpTimestamp`（页面适配成 `expiresAt`） | **无此字段**（只有 `hasRefreshToken`） |
+ * | Qoder | `expiresAt` | **无此字段**（只有 `hasRefreshToken`） |
+ *
+ * 收成 `Pick<AccountMeta, …>` 会逼 Trae / Qoder 造一个假的 `refreshExpiresAt`（例如用
+ * 「有没有」冒充「到期时间」）。所以这里只要**渲染所需的最小形状**，第二段由
+ * {@link showRefreshToken} 显式关掉 —— **宁可少一段，也不编一个语义不同的值**。
+ *
+ * 两条纪律（与卡片定稿同源）：
+ * 1. 过期状态**不在这里标红** —— 上方状态标签（凭据已过期 / 需重新登录）已经说明，
+ *    日期再着一次色是重复强调；缺值显示「—」，不编时间。
+ * 2. tooltip **只解释字段**、不重复卡面已有的日期：两个「到期」的后果不同
+ *    （前者可凭刷新令牌续期，后者必须重新登录），并列时只靠字面分不清。
+ */
+export function CredentialExpiryMeta({
+  account,
+  layout = "row",
+  showRefreshToken = true,
+  className,
+}: {
+  /** **渲染所需的最小形状**：不要求各平台的账号类型彼此兼容（见上方表格）。 */
+  account: {
+    expiresAt?: number | null;
+    refreshExpiresAt?: number | null;
+    needsRelogin?: boolean;
+  };
+  /** `row` = 卡片（横排，`·` 分隔）；`column` = 表格（纵排，无分隔符）。 */
+  layout?: "row" | "column";
+  /**
+   * 是否渲染第二段「刷新令牌到期」。**默认 `true`**（WorkBuddy 有该字段）。
+   * Trae / Qoder 传 `false` —— 它们没有刷新令牌的到期时间。
+   */
+  showRefreshToken?: boolean;
+  /** 字号由调用方给：卡片 `11.5px`、表格单元格沿用 `11px`。 */
+  className?: string;
+}) {
+  const t = useT();
+  const column = layout === "column";
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted-foreground",
+        column && "flex-col items-start",
+        className,
+      )}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="whitespace-nowrap">
+            {t("wbAccounts.card.credentialExpiry")} {formatDate(account.expiresAt ?? 0)}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{t("wbAccounts.card.credentialExpiryTip")}</TooltipContent>
+      </Tooltip>
+      {showRefreshToken ? (
+        <>
+          {column ? null : (
+            <span aria-hidden className="select-none text-muted-foreground/50">
+              ·
+            </span>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="whitespace-nowrap">
+                {t("wbAccounts.card.refreshTokenExpiry")}{" "}
+                {account.refreshExpiresAt
+                  ? formatDate(account.refreshExpiresAt)
+                  : account.needsRelogin
+                    ? t("shared.stat.credentialRelogin")
+                    : "—"}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{t("wbAccounts.card.refreshTokenExpiryTip")}</TooltipContent>
+          </Tooltip>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -640,8 +785,21 @@ export function TravelStatusBadge({ status }: { status?: TravelStatus }) {
   const t = useT();
   if (!status) return null;
   switch (status.label) {
-    case "no-buddy":
-      return <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")}>{t("wbAccounts.card.noBuddy")}</Badge>;
+    case "no-buddy": {
+      // ★ 2026-10-26：补 tooltip —— 「无 Buddy」只说了结果，没说为什么不能出发；
+      //   保持原有纯文字徽章（不硬塞飞机图标：它讲的是**没派出去**）。
+      const tip = t("wbAccounts.card.travelNoBuddyTip");
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className={cn(chipClass, "text-muted-foreground")} aria-label={tip}>
+              {t("wbAccounts.card.noBuddy")}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">{tip}</TooltipContent>
+        </Tooltip>
+      );
+    }
     case "traveling":
       return travelIconChip({ text: t("wbAccounts.card.traveling"), tooltip: travelTooltip(status, t), variant: "secondary" });
     case "finished":
@@ -662,7 +820,7 @@ export type GuideTarget = "ide" | "cli";
 
 interface Props {
   account: AccountMeta;
-  onDelete: (a: AccountMeta) => void;
+  onDelete?: (a: AccountMeta) => void;
   onCheckin?: (a: AccountMeta) => void;
   onRefresh?: (a: AccountMeta) => void;
   /**
@@ -709,6 +867,13 @@ interface Props {
    * 不传 ⇒ 菜单不出现该项（成长任务只有 WB 国内版有）。
    */
   onCompleteTasks?: (a: AccountMeta) => void | Promise<void>;
+  /**
+   * 「更多 → 刷新任务」：只重扫该账号的成长任务摘要（更新「可领 / 可自动」标签）。
+   * 不传 ⇒ 菜单不出现该项（成长任务只有 WB 国内版有）。
+   */
+  onRefreshTasks?: (a: AccountMeta) => void | Promise<boolean | void>;
+  /** 该账号任务摘要重扫进行中（菜单项转圈）。 */
+  refreshingTasks?: boolean;
   /** 本账号正在续期凭据（菜单里的「续期凭据」转圈并禁止重复点击）。 */
   refreshingToken?: boolean;
   credit?: CreditExpiry;
@@ -778,6 +943,13 @@ interface Props {
   /** 「更多 → 编辑备注」：打开抽屉并进入编辑态。 */
   /** 「更多 → 设置分组」：打开抽屉并进入分组编辑态（与备注同一交互）。 */
   featuresDisabled?: boolean;
+  /**
+   * 「更多」菜单节点（由**页面装配**，卡片只负责摆到页脚）。
+   *
+   * ★ 2026-10-27：卡片与表格必须消费同一份菜单 —— 装配函数留在页面，
+   * 卡片只管位置，避免「卡片有某项、表格没有」的漂移。不传 ⇒ 退回卡片内的旧装配。
+   */
+  menu?: ReactNode;
 }
 
 function ProductCurrentState({
@@ -815,7 +987,7 @@ function ProductCurrentState({
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshingToken, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, onOpenTab, onCompleteTasks, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshingToken, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, onOpenTab, onCompleteTasks, onRefreshTasks, refreshingTasks, credit, creditLoading, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true, menu }: Props) {
   const t = useT();
   /**
    * 兜底归一（第三道闸）。
@@ -831,23 +1003,11 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshin
   const avatarClass = avatarTone(name);
 
 /**
- * ★ B1：「使用中 N 个工具」= **程序位全表**里处于激活态的项数。
+ * 程序位全表（展示侧镜像）：同时驱动页脚程序位行与「当前登录」判定。
  *
- * ## 为什么要重写
- *
- * 旧实现 `[workbuddyActive, codebuddyCliActive, codebuddyCnIdeActive]` 写死 3 个，
- * **漏了**下方 `programRow` 已经接入的 `vscodePluginActive` / `jetbrainsPluginActive`
- * ⇒ 一个「只绑了 VSCode 插件」的账号会显示「使用中 0 个工具」，
- * 可它明明**正在被使用**（徽章、竖条、底色全都亮着）。
- *
- * 这不只是漏数，而是**违反本文件自己写的纪律**：紧随其后的 `isCurrentAccount`
- * 数的是**同样 5 个**信号，两个口径对同一个问题给出不同答案 ⇒ 自相矛盾。
- *
- * ## 现在
- *
- * 两个值**从同一组信号派生**（`programSlots`），因此「徽章亮 ⇔ 计数 ≥ 1」
- * 成为**结构上的恒等式**，而不是靠两处手工同步维持。
- * （`programSlots` 同时驱动 `programRow`，见下方。）
+ * ★ 2026-10-26 用户要求移除 chips 行的「使用中 N 个工具」—— 页脚程序位行已经直接
+ * 显示哪些工具在亮，计数是重复信息。`programSlots` 仍保留：它是 `isCurrentAccount`
+ * 的唯一来源，不能因为标签没了就把表拆掉。
  */
 const programSlots = [
   { key: "workbuddy", active: workbuddyActive, available: true },
@@ -857,14 +1017,11 @@ const programSlots = [
   { key: "jetbrains-plugin", active: jetbrainsPluginActive, available: jetbrainsPluginAvailable },
 ] as const;
 
-const activeProductCount = programSlots.filter((slot) => slot.active).length;
-
 /**
  * 「当前登录」= 账号绑定到**任一**程序位（原型 `accountCard` :2493-2495：多对多，不是只看第一个）。
  *
  * ⚠️ 与左侧竖条口径一致：竖条 + 徽章是同一信号的**两重表达**，二者必须在同一条件下出现，
- * 否则会出现「有徽章却无竖条」的矛盾态。判定直接读 `programSlots` ⇒ 与上面的
- * `activeProductCount` **同源**，不可能再分叉。
+ * 否则会出现「有徽章却无竖条」的矛盾态。判定直接读 `programSlots`，与页脚程序位行同源。
  */
 const isCurrentAccount = programSlots.some((slot) => slot.active);
 
@@ -894,11 +1051,13 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    *
    * ★ 2026-10-23：取数收进 `creditMetricValues`，表格「积分」列读同一份（见该函数注释）。
    */
+  const creditMetric = creditMetricValues(credit);
   const {
     current: metricCreditCurrent,
     total: metricCreditTotal,
     expiry,
-  } = creditMetricValues(credit);
+  } = creditMetric;
+  const creditTip = creditMetricTip(creditMetric, t);
 
   /* ★ 「当前登录」徽章**单独拆出来**（原型 `buddy-switch-prototype.html:2502`）：
      它在 `.acct-top` 内、与昵称**同一行**（不是掉进下面的 chips 行）。
@@ -1030,20 +1189,31 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
     </>
   );
 
+  const creditTrigger = onOpenTab ? (
+    <button
+      type="button"
+      data-no-account-open
+      onClick={() => onOpenTab(account, "credits")}
+      className="cursor-pointer text-left tabular-nums transition-opacity hover:opacity-85"
+      aria-label={t("wbAccounts.card.openCredits", { name })}
+    >
+      {creditLine}
+    </button>
+  ) : (
+    <span>{creditLine}</span>
+  );
+
   const metricsRow = (
     <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
-      {onOpenTab ? (
-        <button
-          type="button"
-          data-no-account-open
-          onClick={() => onOpenTab(account, "credits")}
-          className="cursor-pointer text-left tabular-nums transition-opacity hover:opacity-85"
-          aria-label={t("wbAccounts.card.openCredits", { name })}
-        >
-          {creditLine}
-        </button>
+      {creditTip ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{creditTrigger}</TooltipTrigger>
+          <TooltipContent side="top">
+            <div className="whitespace-nowrap tabular-nums">{creditTip}</div>
+          </TooltipContent>
+        </Tooltip>
       ) : (
-        <span>{creditLine}</span>
+        creditTrigger
       )}
       {expiringNote && (
         <>
@@ -1090,13 +1260,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
     <>
       {/* ★ 2026-10-22：本行只留**账号状态**类标签，原型里的
           `X 积分 N 天后过期` 与 `优先` 已移入指标行（紧跟积分，见 `metricsRow`）。
-          顺序仍照原型 `.acct-chips`（`buddy-switch-prototype.html:2505-2508`）：
-          `使用中 N 个工具` → `状态` → `任务` → `旅行`。 */}
-      {activeProductCount >= 2 && (
-        <Badge variant="info" className={chipClass}>
-          <CircleCheck /> {t("wbAccounts.card.toolsInUse", { n: activeProductCount })}
-        </Badge>
-      )}
+          ★ 2026-10-26：`使用中 N 个工具` 已移除 —— 页脚程序位行直接显示激活项，计数重复。 */}
       {statusChip}
       {growthHintChip}
       <TravelStatusBadge status={travelStatus} />
@@ -1383,7 +1547,7 @@ const workbuddyControl = workbuddyActive ? (
    * ⚠️ 这里不再内联菜单结构：同一个账号在卡片和表格里是同一批动作，
    * 两处各写一遍必然漂移（上一版就出现过「卡片有刷新、表格没有」）。
    */
-  const menu = demoModeEnabled ? (
+  const inlineMenu = !onDelete ? null : demoModeEnabled ? (
     <AccountMoreMenuDemo />
   ) : (
     <AccountMoreMenu
@@ -1399,6 +1563,9 @@ const workbuddyControl = workbuddyActive ? (
       needsRelogin={account.needsRelogin}
       onCheckin={onCheckin ? () => onCheckin(account) : undefined}
       onCompleteTasks={onCompleteTasks ? () => onCompleteTasks(account) : undefined}
+      onRefreshTasks={onRefreshTasks ? () => onRefreshTasks(account) : undefined}
+      refreshingTasks={refreshingTasks}
+      onSwitch={onSwitch ? () => onSwitch(account) : undefined}
       growthHint={growthHint}
       onExport={onExport ? () => onExport(account) : undefined}
       onDelete={() => onDelete(account)}
@@ -1445,6 +1612,9 @@ const workbuddyControl = workbuddyActive ? (
            结果块间距在 6~16px 之间乱跳，且头部那条底色带把 `.acct-top` 变成了一条「页眉」。 */
         className={cn(
           "relative flex min-w-0 flex-col gap-2.5 overflow-hidden rounded-lg border border-border bg-card px-3.5 py-[13px] shadow-card transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-card-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          /* ★ 整卡可点（打开详情）⇒ 必须显式给指针光标：默认光标本就在文字上显示 I 形，
+             用户会把「可点」误读成「可编辑文本」（2026-10-26 用户报障）。 */
+          onOpenDetail && "cursor-pointer",
           selected && "border-ring bg-primary/[0.07]",
         )}
       >
@@ -1505,6 +1675,14 @@ const workbuddyControl = workbuddyActive ? (
         {/* ★ 指标行：`积分 x/y` + 临期徽章 + 「优先」徽章（2026-10-22 起，见 `metricsRow`）。
             始终渲染 —— 积分未就绪时显示「—」，不闪不藏。 */}
         {metricsRow}
+        {/* ★ 2026-10-26 用户要求：凭据不在卡片别处展示 ⇒ 指标行下面单起一行给出
+            凭证到期 / 刷新令牌到期。过期状态已由上方状态标签说明，这里不再重复标红；
+            没有值不编时间，显示「—」。
+            ★ 同日晚些：两项各补 tooltip —— 两个「到期」的后果不同（续期 vs 必须重新登录），
+            并列时只靠字面分不清。tooltip 只解释字段，不重复卡面上已有的日期。
+            ★ 再晚些（表格补齐时）：整段抽成 `CredentialExpiryMeta` —— 表格「凭据」列
+            用的是同一个组件，两处的日期格式与三分支缺值口径只可能有一份。 */}
+        <CredentialExpiryMeta account={account} className="text-[11.5px]" />
         {creditLoading ? (
           <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t("wbAccounts.card.loadingCredits")}</div>
         ) : !credit ? (
@@ -1551,7 +1729,7 @@ const workbuddyControl = workbuddyActive ? (
          页脚的 `border-top` 因此与内容同宽（原型也如此）。 */}
       <footer className="flex items-center gap-1.5 border-t border-border pt-2.5">
         {programRow}
-        {menu}
+        {menu ?? inlineMenu}
       </footer>
       </article>
     </TooltipProvider>

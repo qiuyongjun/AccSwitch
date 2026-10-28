@@ -24,6 +24,10 @@ export const en = {
   // P4: labels for the minimal batch bar (composed via actionDone / actionFailed).
   "trae.page.accounts.actionBatchCheckin": "Batch check-in",
   "trae.page.accounts.actionRefreshCredits": "Refresh credits",
+  "trae.page.accounts.quickRefreshDone": "Refreshed {n} account(s): credits · check-in status · credential status",
+  "trae.page.accounts.quickRefreshPartial": "Refreshed {n} account(s); some data did not update",
+  "trae.page.accounts.quickRefreshFail": "Refresh failed",
+  "trae.page.accounts.batchRefreshPartial": "{ok} succeeded, {failed} failed",
   "trae.page.accounts.remarkSaved": "Remark saved",
   "trae.page.accounts.remarkCleared": "Remark cleared",
   "trae.page.accounts.remarkSaveFailed": "Failed to save remark",
@@ -91,6 +95,9 @@ export const en = {
   // 2026-10-10: the toolbar's "filter by group" dropdown was removed so the toolbar matches
   // WorkBuddy's control set; its four strings went with it.
   "trae.page.accounts.fallbackGroup": "Group",
+  "trae.page.accounts.groupSaved": "Moved to group \"{name}\"",
+  "trae.page.accounts.groupNone": "No group",
+  "trae.page.accounts.groupCreateFailed": "Could not create the group",
   // P4 toolbar: sort / group options (driven by `availableSorts` / `availableGroups` data; no fake options)
   "trae.page.accounts.toolbar.sort.priority": "Credit priority",
   "trae.page.accounts.toolbar.sort.name": "Name",
@@ -109,9 +116,12 @@ export const en = {
   "trae.page.accounts.table.account": "Account",
   "trae.page.accounts.table.status": "Status",
   "trae.page.accounts.table.credits": "Credits",
-  "trae.page.accounts.table.expiry": "Expiry",
+  // 2026-10-26: `table.expiry` removed — the expiry now rides under the credits cell
+  // (same shape as WorkBuddy's table).
+  "trae.page.accounts.table.credential": "Credential",
   "trae.page.accounts.table.programs": "Programs",
-  "trae.page.accounts.table.current": "Current",
+  // 2026-10-27: `table.current` removed — the table now uses the card's
+  // `trae.comp.card.currentLogin` badge so both views share wording and background.
   // 2026-10-23: the account drawer's "More actions" section was removed, so the auto check-in
   // and skip-checked-in switch strings now live only in Settings (`trae.page.settings.autoCheckin*`).
   "trae.page.accounts.switchIncomplete": "Switch did not complete",

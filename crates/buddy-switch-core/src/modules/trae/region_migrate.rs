@@ -136,7 +136,10 @@ pub fn merge_legacy_cn_into_region() -> Result<MergeReport, String> {
 
     // 目标库原本是否存在 —— 决定"要不要备份"的一半条件。
     let target_existed = std::fs::read_to_string(&target_accounts_path).is_ok();
-    let mut target: AccountsFile = account::load_accounts_for(TraeVariant::TraeWork);
+    // ★ 写前读必须 fail-closed：迁移是「把旧库并进目标库再整份写回」，
+    //   若目标库损坏而这里回落成空库，等于用旧库把用户现有的账号全换掉。
+    let mut target: AccountsFile = account::load_accounts_checked_for(TraeVariant::TraeWork)
+        .map_err(|e| format!("目标账号库读取失败，已跳过迁移：{e}"))?;
 
     let mut report = MergeReport {
         legacy_accounts: legacy.accounts.len(),

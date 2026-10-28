@@ -489,6 +489,12 @@ pub fn parse_checkin_options(params: &Value) -> Result<CheckinOptions, String> {
         variant: parse_variant_param(params),
         scope,
         user_ids,
+        task_id: params
+            .get("taskId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         skip_checked_in: params
             .get("skipCheckedIn")
             .and_then(Value::as_bool)
@@ -512,6 +518,13 @@ pub fn parse_checkin_options(params: &Value) -> Result<CheckinOptions, String> {
     })
 }
 
+/// 请求取消一个签到任务（协作式：只拦尚未开始的账号）。
+///
+/// 幂等；任务不存在 / 已结束也只是往取消集合里留一条标记，由下一次同 id 任务清理。
+pub fn cancel_checkin(task_id: &str) {
+    checkin::request_cancel(task_id);
+}
+
 /// 刷新剩余积分：给了 `userId` 就刷单个，否则刷全部（默认变体，兼容壳）。
 pub async fn refresh_credits(user_id: Option<&str>) -> Result<Value, String> {
     refresh_credits_for(TraeVariant::default(), user_id).await
@@ -533,10 +546,23 @@ pub async fn refresh_credits_for(
             }))
         }
         None => {
-            let refreshed = credits::refresh_all_remaining_for(variant).await;
-            Ok(json!({ "scope": "all", "refreshed": refreshed }))
+            let summary = credits::refresh_all_remaining_for(variant).await;
+            Ok(refresh_all_report(summary))
         }
     }
+}
+
+/// 批量积分刷新的回报形状。
+///
+/// `refreshed` 是既有字段（前端与后台调用方已在读），`total` / `failed` 是本次新增：
+/// 只有成功数时，「部分失败」与「全部成功」在返回值上完全同形。
+fn refresh_all_report(summary: credits::RefreshAllSummary) -> Value {
+    json!({
+        "scope": "all",
+        "refreshed": summary.succeeded,
+        "total": summary.total,
+        "failed": summary.failed,
+    })
 }
 
 /// 刷新某账号 JWT（默认变体，兼容壳）。
@@ -1036,6 +1062,42 @@ pub async fn run_scheduled_checkin() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 批量积分刷新必须如实回报 `total` / `failed`，同时保留既有的 `refreshed`。
+    ///
+    /// 可证伪性：删掉 `total` / `failed`（回到「只回成功数」）⇒ 断言变红 ——
+    /// 前端因此再也分不清「全部成功」与「部分失败」。
+    #[test]
+    fn refresh_all_report_keeps_refreshed_and_adds_total_failed() {
+        let value = refresh_all_report(credits::RefreshAllSummary {
+            total: 5,
+            succeeded: 3,
+            failed: 2,
+        });
+        assert_eq!(value.get("scope").and_then(Value::as_str), Some("all"));
+        assert_eq!(value.get("refreshed").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("total").and_then(Value::as_u64), Some(5));
+        assert_eq!(value.get("failed").and_then(Value::as_u64), Some(2));
+
+        // 全部失败也必须给得出（不是「没有字段」）。
+        let all_failed = refresh_all_report(credits::RefreshAllSummary {
+            total: 2,
+            succeeded: 0,
+            failed: 2,
+        });
+        assert_eq!(all_failed.get("refreshed").and_then(Value::as_u64), Some(0));
+        assert_eq!(all_failed.get("failed").and_then(Value::as_u64), Some(2));
+    }
+
+    /// 空账号库也要能算出汇总（0/0/0），且不发网络请求。
+    #[tokio::test]
+    async fn refresh_all_summary_on_empty_library_is_zeroed() {
+        let _env = crate::modules::trae::test_support::TempEnv::with_device_fixture();
+        let summary = credits::refresh_all_remaining_for(TraeVariant::default()).await;
+        assert_eq!(summary.total, 0);
+        assert_eq!(summary.succeeded, 0);
+        assert_eq!(summary.failed, 0);
+    }
 
     /// ★★ 回归护栏：**区域标识**必须解析到本区域的**合并版**客户端。
     ///

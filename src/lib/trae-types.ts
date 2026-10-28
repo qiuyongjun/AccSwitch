@@ -697,6 +697,12 @@ export interface TraeCheckinReport {
   failed: number;
   warnings: string[];
   results: TraeCheckinOutcome[];
+  /** 计划内但**未执行**的账号数（协作式取消后尚未开始的项；不含被策略跳过的账号）。 */
+  unprocessed: number;
+  /** 未执行账号的 id（与 `unprocessed` 同长；重试名单用）。 */
+  unprocessedIds: string[];
+  /** 本轮是否被取消（可能部分执行后取消）。 */
+  cancelled: boolean;
 }
 
 /** 切换过程中的一步。 */
@@ -767,7 +773,7 @@ export interface TraeOAuthPollResult {
 }
 
 /** 签到进度事件（Tauri 事件 `trae-checkin-progress`）。 */
-export type TraeCheckinEvent =
+export type TraeCheckinEvent = (
   | { type: "start"; total: number }
   | {
       type: "account";
@@ -782,7 +788,23 @@ export type TraeCheckinEvent =
       errorType?: string | null;
       cooldownUntil?: number | null;
     }
-  | { type: "done"; ok: number; already: number; failed: number; total: number };
+  | { type: "done"; ok: number; already: number; failed: number; total: number; unprocessed: number; cancelled: boolean }
+  /** 协作式取消：只停在尚未开始的账号（在途的已跑完并计入报告）。 */
+  | { type: "cancelled"; done: number; total: number }
+) & {
+  /** 本批任务 id：页面**只消费当前任务**的事件（防切区 / 新旧任务重叠污染进度）。 */
+  taskId?: string;
+  /** 产品线（`TraeVariant::as_str()` 的原值，如 `trae_cn` / `global_trae_merged`）。 */
+  variant?: string;
+  /**
+   * 区域（`TraeVariant::region()` 的结论：`cn` / `global`）。
+   *
+   * ★ 2026-10-28：由后端直传。此前前端按 `variant.startsWith("global")` 反推，
+   * 等于把后端的变体→区域映射复刻一份到前端 —— 新增变体时前端会静默错且无测试会红。
+   * 该字段缺失（老版本后端）时才回落到前缀判断。
+   */
+  region?: string;
+};
 
 // ---------------------------------------------------------------------------
 // API 网关（OpenAI 兼容）——与 WorkBuddy 网关平行的第二套
@@ -1150,6 +1172,29 @@ export interface TraeTokenStatistics {
 /** 日志类型：应用级 / 签到 / 登录态切换。 */
 export type TraeLogKind = "app" | "checkin" | "switch";
 
+/**
+ * 结构化签到流水（后端 `logs::parse_checkin_record` 解析出来的字段）。
+ *
+ * ## 为什么日志里还要带结构化字段
+ *
+ * `checkin.log` 混写着签到、OAuth 登录、JWT 续期三类事件：只有汇总行是签到结果，
+ * 但它**不含 `userId`**；而 `JWT 自动刷新成功: user=<uid>` 含 uid 却与签到无关。
+ * 曾按「行内含 uid + 不含失败字样」反推签到结果，于是**真签到的日子显示「未签到」、
+ * 刷新 JWT 的日子显示「成功」**。
+ *
+ * 现在写侧每条结果都落一行 `签到记录 userId=… action=… delta=… code=…`，
+ * 读侧只认这一种行（其它行没有 `checkin` 字段）——**不要**再回到文本猜测。
+ */
+export interface TraeCheckinLogRecord {
+  userId: string;
+  /** `claim_ok`（签到成功）/ `skip_already`（上游今日已签到）/ `fail`（失败）。 */
+  action: "claim_ok" | "skip_already" | "fail";
+  /** 本轮实际获得的积分；`skip_already` / `fail` 为 0。 */
+  delta: number;
+  /** 上游业务码；写侧未提供时为 `null`。 */
+  code: number | null;
+}
+
 /** 一条运行日志。 */
 export interface TraeLogEntry {
   kind: TraeLogKind;
@@ -1158,6 +1203,12 @@ export interface TraeLogEntry {
   /** `YYYY-MM-DD`；无前缀的行为空串。 */
   date: string;
   message: string;
+  /**
+   * 仅当该行是结构化签到流水时存在（见 {@link TraeCheckinLogRecord}）。
+   *
+   * 缺省即「这行不是签到结果」——OAuth 登录、JWT 续期、预检失败、汇总行都不会带它。
+   */
+  checkin?: TraeCheckinLogRecord;
 }
 
 /** 日志文件状态（用于在页面上标出「文件还不存在」）。 */
@@ -1178,6 +1229,8 @@ export interface TraeLogQuery {
   kind?: string;
   date?: string;
   keyword?: string;
+  /** 只返回该账号的结构化签到流水；与 date + limit=1 配合可取某日最新结果。 */
+  checkinUserId?: string;
   limit?: number;
   variant?: TraeVariantId;
 }

@@ -122,6 +122,8 @@ export interface AccountWorkbenchProps<T> {
     skippedNames?: string[];
     /** 本次真领到的额度合计（活动通道专用；不传 = 不渲染那枚徽标）。 */
     earnedCredits?: number;
+    /** 协作式取消后**未处理**的账号数（不传 / 0 = 不渲染）。 */
+    unprocessedCount?: number;
     onRetry?: () => void;
   } | null;
   /** 结果条「知道了」的回执（只在有结果条时用得到；不传 = 不渲染结果条也就无所谓）。 */
@@ -139,19 +141,17 @@ export interface AccountWorkbenchProps<T> {
     busy: boolean;
     onCheckin?: () => void;
     onRefresh?: () => void;
-    /** 单项批量刷新（四项）；提供时批量「刷新」为下拉菜单。 */
+    /** 单项批量刷新；提供时批量「刷新」为下拉菜单。 */
     onRefreshPart?: (kind: AccountRefreshKind) => void;
     refreshKinds?: readonly AccountRefreshKind[];
     refreshingKinds?: readonly AccountRefreshKind[];
     doneKinds?: readonly AccountRefreshKind[];
-    /** 批量续期凭据（写 refresh_token），与四项只读刷新分开。 */
+    /** 批量续期凭据（写 refresh_token），渲染在刷新下拉**外部**（与签到 / 完成任务同排）。 */
     onRefreshToken?: () => void;
     refreshingToken?: boolean;
     doneToken?: boolean;
-    /** 批量刷新成长任务摘要（仅 WorkBuddy 国内版传入）。 */
-    onRefreshGrowth?: () => void;
-    refreshingGrowth?: boolean;
-    doneGrowth?: boolean;
+    /** 批量重扫任务摘要（仅 WorkBuddy 国内版传入）：下拉里的「刷新任务」，与单账号菜单同一项。 */
+    onRefreshTasks?: () => void;
     /** 批量完成成长任务（仅 WorkBuddy 国内版传入）。 */
     onCompleteTasks?: () => void;
     onExport?: () => void;
@@ -289,6 +289,7 @@ export function AccountWorkbench<T>({
             okCount={checkinResult.okCount}
             failedNames={checkinResult.failedNames}
             skippedNames={checkinResult.skippedNames}
+            unprocessedCount={checkinResult.unprocessedCount}
             onRetry={checkinResult.onRetry}
             onDismiss={onDismissCheckinResult ?? (() => undefined)}
           />
@@ -307,9 +308,7 @@ export function AccountWorkbench<T>({
           onRefreshToken={batch.onRefreshToken}
           refreshingToken={batch.refreshingToken}
           doneToken={batch.doneToken}
-          onRefreshGrowth={batch.onRefreshGrowth}
-          refreshingGrowth={batch.refreshingGrowth}
-          doneGrowth={batch.doneGrowth}
+          onRefreshTasks={batch.onRefreshTasks}
           onCompleteTasks={batch.onCompleteTasks}
           onExport={batch.onExport}
           onDelete={batch.onDelete}

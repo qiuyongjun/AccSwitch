@@ -1717,10 +1717,10 @@ check("★ Qoder 程序位 id 必须与**凭据来源 id 同源**（一事实一
 
 check("★ Qoder 签到结果**三档**：「通道未开放」既不算成功、也不进重试桶（issue #46 的 D 项）", () => {
   const page = stripComments(fs.readFileSync(path.join(ROOT, "src/pages/QoderAccountsPage.tsx"), "utf8"));
-  if (!/else if \(res\.disabled\)/.test(page)) {
+  if (!/else if \(outcome\.disabled\)/.test(page)) {
     throw new Error("`runCheckin` 没有把 `disabled` 单独成档 —— 未开放会被混进成功或失败");
   }
-  if (!/res\.disabled\) disabled\.push\(item\)/.test(page)) {
+  if (!/outcome\.disabled\) disabled\.push\(item\)/.test(page)) {
     throw new Error("`disabled` 必须进第三个桶（`disabled.push`），不能进 `failed`");
   }
   if (!/skippedNames: checkinResult\.disabled\.map/.test(page)) {
@@ -1926,20 +1926,21 @@ check("★ P4 分组选项按平台数据：两页都有 group（WB 有 groupNam
   return `WB ${wb[0].replace(/availableGroups:\s*/, "= ")} · Trae ${trae[0].replace(/availableGroups:\s*/, "= ")}`;
 });
 
-check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最近使用**不进卡**（诚实实现仍共用）", () => {
+check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量不进卡、最近使用已移除（诚实实现仍共用）", () => {
   /* 参见 `AccountTokenTodayResponse` 的三条红线：缺席 ⇒ 「—」（**非 0**）；被裁剪 ⇒ 下界 `≥N`；
      真实 0 照常渲染。卡片与表格**必须**共用同一份实现，否则两处口径会漂移。
      变异：删掉 `formatTodayTokens` / 去掉 `≥` 或「—」分支 ⇒ 本条变红。
 
      ★ 2026-10-22 用户要求卡片瘦身（腾出 chips 行的空间给成长任务标签）：
        - 「今日用量」与「最近使用」**移出卡片**（前者的正式去处是用量统计页与详情抽屉的
-         「今日 Token」指标块，后者下沉到详情抽屉「最近使用」一行）；
+         「今日 Token」指标块）；2026-10-26 用户判断「最近使用」意义不大 ⇒ **抽屉里也一并移除**
+         （该字段只服务排序选项 `recent`，不再单独展示）；
        - 「临期积分」与「优先」两枚标签从 chips 行**移到指标行**，紧跟总积分。
      ⇒ 判据同步改成新契约，且仍能证伪：
        ① 指标行必须只由「积分」+ {@link expiringNote} + {@link priorityNote} 组成（且是文字）；
        ② 这三项的位置若被改回 chips 行（用户明确不要的形态）⇒ 红；
        ③ 今日用量若被塞回卡片（信息重复，且卡上不可比较）⇒ 红；
-       ④ 最近使用若从**所有**界面消失（卡片删了、抽屉也没接）⇒ 红。 */
+       ④ 「最近使用」若再回到卡片或抽屉 ⇒ 红（已按用户要求移除展示）。 */
   const card = stripComments(readCode("src/components/account-card.tsx"));
   if (!card.includes("wbAccounts.card.metric.credits")) {
     throw new Error("账号卡片指标行缺少「积分」项");
@@ -1953,15 +1954,18 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最�
   const row = metricsRow[1];
   /* ★ 2026-10-23：积分那一段被抽成 `creditLine`（为了「可点时整段是 `<button>`、
      不可点时是 `<span>`」两种形态共用同一份内容）。因此这里接受两种写法：
-     直接写 key，或经 `{creditLine}` 间接引用 —— 后者要求 `creditLine` 里确实有该 key，
-     否则「拿掉积分项」仍会变红（不给这条留空子）。 */
-  const viaCreditLine = row.includes("{creditLine}");
-  if (viaCreditLine && !card.includes("wbAccounts.card.metric.credits")) {
+     直接写 key，或经 `{creditLine}` / `{creditTrigger}`（带 tooltip 的包装）间接引用 ——
+     后者要求被引用块里确实有 `creditLine`，否则「拿掉积分项」仍会变红（不给这条留空子）。 */
+  const creditToken = row.includes("{creditLine}")
+    ? "{creditLine}"
+    : row.includes("{creditTrigger}")
+      ? "{creditTrigger}"
+      : null;
+  const viaCreditLine = creditToken !== null;
+  if (!viaCreditLine || !card.includes("wbAccounts.card.metric.credits")) {
     throw new Error("`creditLine` 里没有「积分」项 —— 指标行第一项必须是积分");
   }
-  const parts = viaCreditLine
-    ? ["{creditLine}", "{expiringNote}", "{priorityNote}"]
-    : ["metric.credits", "{expiringNote}", "{priorityNote}"];
+  const parts = [creditToken, "{expiringNote}", "{priorityNote}"];
   for (const part of parts) {
     if (!row.includes(part)) throw new Error(`指标行缺少「${part}」（应为「积分 + 临期 + 优先」）`);
   }
@@ -1997,7 +2001,7 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最�
   /* ③ 今日用量 / 最近使用**不得**回到卡片（各自的正式界面见文件头注释）。 */
   for (const key of ["wbAccounts.card.metric.todayTokens", "wbAccounts.card.metric.lastUsedTip"]) {
     if (card.includes(`"${key}"`)) {
-      throw new Error(`账号卡片又渲染了「${key}」—— 今日用量在用量页/抽屉，最近使用在抽屉`);
+      throw new Error(`账号卡片又渲染了「${key}」—— 今日用量在用量页/抽屉，最近使用已移除`);
     }
   }
   if (!/export function formatTodayTokens\(/.test(card)) {
@@ -2017,16 +2021,15 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量/最�
   if (!/export function todayTokensBreakdown\(/.test(card)) {
     throw new Error("缺少 `todayTokensBreakdown` —— 明细（客户端 / 网关分开）必须与 headline 同源");
   }
-  /* ④ 最近使用必须仍有界面：详情抽屉的「最近使用」一行 + 共享 `formatRelativeTime`。
-     变异：连抽屉一起删（信息彻底消失）/ 另写一份相对时间 ⇒ 红。 */
+  /* ④ 「最近使用」已按用户要求移除展示（2026-10-26）：抽屉也不得再出现该行。
+     字段仍只服务排序选项 `recent`。变异：把行加回去 ⇒ 本条变红。 */
   const page = readCode(WB_PAGE);
-  if (!page.includes("wbAccounts.detail.lastUsed")) {
-    throw new Error("详情抽屉未接「最近使用」—— 卡片删掉后这条信息就彻底没有去处了");
+  for (const key of ["wbAccounts.detail.lastUsed", "wbAccounts.detail.neverUsed"]) {
+    if (page.includes(key)) {
+      throw new Error(`详情抽屉又渲染了「${key}」—— 2026-10-26 已按用户要求移除（字段仅供排序）`);
+    }
   }
-  if (!/formatRelativeTime\(detail\.lastUsedAt, t\)/.test(page)) {
-    throw new Error("抽屉「最近使用」未经共享 `formatRelativeTime` 渲染（另写一份会与网关口径漂移）");
-  }
-  return "指标行=积分+临期+优先 · chips 行只留账号状态 · 今日用量/最近使用不进卡（今日在用量页+抽屉、最近用在抽屉）· —/≥/重叠披露仍由共享实现承担";
+  return "指标行=积分+临期+优先 · chips 行只留账号状态 · 今日用量不进卡 · 最近使用已从卡片与抽屉移除 · —/≥/重叠披露仍由共享实现承担";
 });
 
 check("★ 「今日 Token」命令两端接线：路由 + 调用 + 命令名 + 结果类型", () => {
@@ -2049,7 +2052,7 @@ check("★ 「今日 Token」命令两端接线：路由 + 调用 + 命令名 + 
   return "route + call + 命令名 + 结果类型 四端齐备";
 });
 
-check("★ 列表与卡片同契约：今日用量不进表；积分 / 状态列复用卡片实现", () => {
+check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 状态列复用卡片实现", () => {
   /* ★ 2026-10-23：卡片指标行瘦身（2026-10-22 用户要求）后，表格仍挂着旧内容——
      「今日 Token」单独成列、积分列只给一个剩余数、状态列另写一套并列徽章。
      同一账号在卡片与列表里说法不同 ⇒ 本断言钉住「两边读同一份实现」：
@@ -2058,15 +2061,23 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 状态列
           并带上卡片指标行的两项文字：最近到期（`nextExpiryLabel`）与优先（`priority`）；
        ③ 状态列必须复用卡片的三个徽章组件（状态互斥 / 成长任务 / 旅行），
           表格壳提供 `TooltipProvider`（后两者带 tooltip，Radix Root 必须在 provider 内）；
-       ④ 2026-10-23：列**不含**「到期」（凭证到期只在详情抽屉），账号格的当前徽标
-          文案复用卡片的 `card.currentLogin`（「当前登录」），不再自造 `table.current`。
-     变异：恢复今日 Token / 到期列 / 积分列改回 `totalRemaining` / 状态列另写一份 ⇒ 变红。 */
+       ④ 2026-10-26：列**含**「凭据」（凭证到期 / 刷新令牌到期）—— 卡片当日补了这两项，
+          原「卡片从不显示凭证到期 ⇒ 列表不留到期列」的前提已不成立；单元格必须复用
+          卡片导出的 `CredentialExpiryMeta`（同一份日期格式与缺值三分支），
+          账号格的当前徽标文案复用卡片的 `card.currentLogin`（「当前登录」），不再自造 `table.current`。
+     变异：恢复今日 Token / 单元格手拼日期 / 积分列改回 `totalRemaining` / 状态列另写一份 ⇒ 变红。 */
   const page = readCode(WB_PAGE);
   if (/key:\s*"todayTokens"/.test(page) || page.includes("wbAccounts.table.todayTokens")) {
     throw new Error("WB 账号表又挂上了「今日 Token」列 —— 卡片已移除，用量在统计页与详情抽屉");
   }
   if (/key:\s*"expiry"/.test(page) || page.includes("wbAccounts.table.expiry")) {
-    throw new Error("WB 账号表又挂上了「到期」列 —— 卡片从不显示凭证到期，列表也不该留这一列");
+    throw new Error("WB 账号表又挂上了旧「到期」列 —— 凭证到期统一走「凭据」列（`CredentialExpiryMeta`）");
+  }
+  if (!/key:\s*"credential"/.test(page) || !/<CredentialExpiryMeta/.test(page)) {
+    throw new Error("WB 账号表缺「凭据」列 —— 卡片已显示凭证到期 / 刷新令牌到期，列表必须同源展示");
+  }
+  if (!/export function CredentialExpiryMeta\(/.test(readCode("src/components/account-card.tsx"))) {
+    throw new Error("卡片未导出 `CredentialExpiryMeta` —— 表格无法复用同一份凭证到期实现");
   }
   if (!page.includes('"wbAccounts.card.currentLogin"')) {
     throw new Error("账号格「当前登录」徽标未复用 `card.currentLogin` —— 卡片与列表用词会分叉");
@@ -2096,7 +2107,7 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 状态列
   if (!/export function creditMetricValues\(/.test(readCode("src/components/account-card.tsx"))) {
     throw new Error("卡片未导出 `creditMetricValues` —— 两个视图必须读同一份积分口径");
   }
-  return "今日用量/到期不进表 · 积分列=当前/总额+最近到期+优先 · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
+  return "今日用量不进表 · 积分列=当前/总额+最近到期+优先 · 凭据列复用卡片 `CredentialExpiryMeta` · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
 });
 
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {
@@ -6720,8 +6731,10 @@ check("★ F5 过期 / 需重登账号不给「手动签到」（卡片菜单与
     throw new Error("凭据失效判定丢了 expired / needsRelogin 任一项（F5 违反）");
   }
   const deadBranch = sources.indexOf("credentialDead ? (");
-  const checkedBranch = sources.indexOf("todayCheckedIn === true ? (");
-  const liveBranch = sources.indexOf("todayCheckedIn === false ? (");
+  /* ★ 2026-10-27：签到态改成**显式取值**（`checkinKind`）后，可点入口的分支从
+     `todayCheckedIn === false` 变成 `checkinKind === "unchecked"`；守门跟着实现走。 */
+  const checkedBranch = sources.indexOf('checkinKind === "checked" ? (');
+  const liveBranch = sources.indexOf('checkinKind === "unchecked" ? (');
   if (checkedBranch < 0 || deadBranch < 0 || liveBranch < 0) {
     throw new Error("签到三态的分支不完整（可能已重构，请更新本断言）");
   }
@@ -7274,7 +7287,7 @@ check("★ B5 签到积分：抽屉里能看到「+N」+ 连签 + 日期（数�
   const zh = stripComments(
     fs.readFileSync(path.join(ROOT, "src/locales/domains/shared.zh.ts"), "utf8"),
   );
-  /* ★ 2026-10-23：签到三格改为横排（今日签到 / 已连签 / 累计积分），
+  /* ★ 2026-10-23：签到三格改为横排（今日签到 / 签到天数 / 累计积分），
      旧的整句词条 `checkin.streak` 拆成了 `statStreak` + `days`。 */
   for (const k of [
     "shared.drawer.checkin.title",
@@ -8132,33 +8145,184 @@ check("★ A2 环形与堆叠同源：只取 dailyByModel，不回落 model.tota
   return "扇区只取 dailyByModel，与堆叠同源";
 });
 
-check("★ B1 账号卡「使用中 N 个工具」与 isCurrentAccount 同源（覆盖全部程序位）", () => {
-  /* 旧实现写死 3 个信号（workbuddy / cli / ide），漏了下方 programRow 已接入的
-     vscodePluginActive / jetbrainsPluginActive ⇒ 「只绑插件」的账号显示「使用中 0 个」，
-     可它徽章、竖条、底色全亮着。同一文件两个口径对同一问题给出不同答案。 */
+check("★ B1 账号卡 programSlots 覆盖全部程序位，isCurrentAccount 由它派生", () => {
+  /* 2026-10-26：「使用中 N 个工具」标签已按用户要求移除（页脚程序位行已可见），
+     本门禁只保留**仍然生效**的契约：programSlots 必须覆盖 5 项，且 `isCurrentAccount`
+     直接由它派生（徽章与左侧竖条同一条件）。 */
   const card = stripComments(
     fs.readFileSync(path.join(ROOT, "src/components/account-card.tsx"), "utf8"),
   );
-  // ① 必须有一张统一的程序位表，且两个判定都从它派生。
+  // ① 必须有一张统一的程序位表，且「当前登录」从它派生。
   if (!/const programSlots = \[/.test(card)) {
-    throw new Error("没有统一的 `programSlots` 表 —— 计数与徽标仍靠两处手工同步");
+    throw new Error("没有统一的 `programSlots` 表 —— 程序位行与「当前登录」仍靠手工同步");
   }
   for (const key of ["workbuddy", "codebuddy-cli", "codebuddy-cn-ide", "vscode-plugin", "jetbrains-plugin"]) {
     if (!card.includes(`"${key}"`)) {
-      throw new Error(`programSlots 缺少程序位 \`${key}\` —— 「使用中 N 个」会少数`);
+      throw new Error(`programSlots 缺少程序位 \`${key}\` —— 程序位行会漏项`);
     }
   }
-  if (!/const activeProductCount = programSlots\.filter/.test(card)) {
-    throw new Error("`activeProductCount` 未从 `programSlots` 派生");
-  }
   if (!/const isCurrentAccount = programSlots\.some/.test(card)) {
-    throw new Error("`isCurrentAccount` 未从 `programSlots` 派生 —— 两个口径仍可能分叉");
+    throw new Error("`isCurrentAccount` 未从 `programSlots` 派生 —— 徽章与竖条仍可能分叉");
   }
-  // ★ 反向：不得回退到写死 3 个的数组字面量。
-  if (/\[workbuddyActive,\s*codebuddyCliActive,\s*codebuddyCnIdeActive\]\s*\.filter/.test(card)) {
-    throw new Error("`activeProductCount` 又退回写死 3 个程序位");
+  return "programSlots 5 项统一派生 isCurrentAccount；使用中计数标签已移除";
+});
+
+check("★ B1b 三平台卡片同构：工具计数已去重、凭据到期单点换算、Qoder 凭据到期复用共享组件", () => {
+  /* 2026-10-26：WB 侧的卡片改动同步到 Trae / Qoder 时确立的四条契约。
+     三张卡片仍是三份实现（刻意不重构），所以**结构一致性只能靠门禁钉住** ——
+     否则下一次改 WB 时，Trae / Qoder 又会被落下。 */
+  const trae = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/components/trae-account-card.tsx"), "utf8"),
+  );
+  const qoder = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/components/qoder/qoder-account-card.tsx"), "utf8"),
+  );
+  const card = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/components/account-card.tsx"), "utf8"),
+  );
+  const traePage = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/pages/TraeAccountsPage.tsx"), "utf8"),
+  );
+
+  // ① 「使用中 N 个工具」已按用户要求移除（页脚程序位行直接显示激活项，计数重复）。
+  if (/chip\.toolsInUse/.test(trae) || /activeProgramCount/.test(trae)) {
+    throw new Error("Trae 卡片又渲染了「使用中 N 个工具」—— 页脚程序位行已显示激活项，计数是重复信息");
   }
-  return "programSlots 5 项统一派生，计数与徽标不可能分叉";
+
+  // ② Trae 的凭据到期必须复用共享组件；秒→毫秒的换算只许在 `traeJwtExpiryMs` 里发生。
+  //    直接 `jwtExpTimestamp` 当毫秒会给 1970（后端 `trae/jwt.rs:20`：它是 Unix **秒**）。
+  if (!trae.includes("<CredentialExpiryMeta")) {
+    throw new Error("Trae 卡片未复用 `CredentialExpiryMeta` —— 日期格式与缺值分支会在三处漂移");
+  }
+  if (!/export function traeJwtExpiryMs/.test(trae)) {
+    throw new Error("缺少 `traeJwtExpiryMs` —— `jwtExpTimestamp` 是秒，散着换算迟早有一处漏");
+  }
+  if (/[^s]\s*jwtExpTimestamp\s*\}\}/.test(trae)) {
+    throw new Error("Trae 卡片把 `jwtExpTimestamp` 直接当毫秒传了 —— 必须过 `traeJwtExpiryMs`");
+  }
+
+  // ③ Qoder 的**账号凭据**到期已由 core 的 `normalize_expiry_ms` 归一成 Unix 毫秒
+  //    （`account_view`、保活与切换写回共用一份；2026-10-27 T02）⇒ 卡片与 Trae 同口径，
+  //    必须复用 `CredentialExpiryMeta`（日期格式与缺值分支只有一份实现）。
+  //    `showRefreshToken={false}` 是诚实边界：Qoder 只有 `hasRefreshToken`，没有其到期时间。
+  //    ⚠️ 额度到期是**另一个**字段（`qoder_credits` 的 `expiresAt`，顶层 / 毫秒有出处），
+  //    它走指标行的 `nextExpiryLabel`，不在本约束范围内。
+  if (!/<CredentialExpiryMeta/.test(qoder)) {
+    throw new Error("Qoder 卡片未复用 `CredentialExpiryMeta` —— 凭据到期已可渲染（core 已归一毫秒），日期格式与缺值分支必须与 WB / Trae 同源");
+  }
+  if (!/showRefreshToken=\{false\}/.test(qoder)) {
+    throw new Error("Qoder 卡片没有显式关掉「刷新令牌到期」—— 它只有 hasRefreshToken，不能冒充到期时间");
+  }
+
+  // ④ Trae 的刷新菜单只放只读项（积分 / 签到 / 凭据），「今日 Token」不再进菜单
+  //    —— 与 WB 同口径：卡片上的 Token 指标块自带刷新按钮。
+  if (!/TRAE_REFRESH_KINDS = \["credits", "checkin", "credential"\]/.test(traePage)) {
+    throw new Error("Trae 刷新菜单项变了 —— 与 WB 同口径应只有 积分 / 签到状态 / 凭证状态");
+  }
+
+  /* ⑤ 2026-10-26 第二轮（用户看过界面后要求「尽量复刻」）：**能力可以缺，形态不能歪**。
+     WB 的指标行是 `gap-x-[9px]` + `·` 分隔 + 两格（积分 / 临期）。三张卡片都要有这个容器。
+     变异：改回 `gap-[14px]` 三格平铺 / 用 `items-baseline` ⇒ 红。 */
+  for (const [label, code] of [
+    ["WB", card],
+    ["Trae", trae],
+    ["Qoder", qoder],
+  ]) {
+    if (!code.includes("gap-x-[9px]")) {
+      throw new Error(`${label} 卡片的指标行丢了 \`gap-x-[9px]\` —— 三张卡片的这一行必须是同一个容器规格`);
+    }
+  }
+
+  /* ⑥ WB 已删的两项（「N 天前」与「今日 Token」）不许从 Trae 卡片回来 ——
+     卡片只回答「这个号要不要先用掉」；用量与更新时间各有正式去处（用量页 / 抽屉）。 */
+  if (/lastUpdatedRelative|todayTokens/.test(trae)) {
+    throw new Error("Trae 卡片又渲染了「最近更新时间」或「今日 Token」—— WB 同日已把这两项移出卡片");
+  }
+
+  /* ⑦ 「当前账号」的两重信号（左侧 3px 竖条 + 昵称行徽章）必须同源同条件。
+     Qoder 卡此前只有徽章、没有竖条 ⇒ 三张卡片里唯一一张「亮徽章但左边没绿条」的。 */
+  if (!qoder.includes("data-current-bar")) {
+    throw new Error("Qoder 卡片缺少「当前账号」左侧竖条 —— 与徽章是同一信号的两重表达，缺一即自相矛盾");
+  }
+
+  /* ⑧ 2026-10-26 第二批（用户试用后报的五条）：页头一键动作、抽屉三件套、签到图标。
+
+     ① 页头「一键刷新 / 一键签到」三平台都要有，且控件**只许来自共享文件**
+        （`account-quick-actions.tsx`）—— 冻结理由是冷却与禁用原因的表达只该有一份。 */
+  const qoderPage = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/pages/QoderAccountsPage.tsx"), "utf8"),
+  );
+  for (const [label, page] of [
+    ["Trae", traePage],
+    ["Qoder", qoderPage],
+  ]) {
+    if (!page.includes("<QuickRefreshAction") || !page.includes("<QuickActionButton")) {
+      throw new Error(`${label} 账号页页头缺少「一键刷新 / 一键签到」`);
+    }
+    if (/function (QuickActionButton|QuickRefreshAction)\s*\(/.test(page)) {
+      throw new Error(`${label} 账号页又自己写了一份一键按钮 —— 三平台必须共用 account-quick-actions`);
+    }
+    /* ② 抽屉三件套：凭据页要有内容、积分页要能常驻、分组要能编辑。
+       变异：删掉 `credential={…}` / `refreshKinds={…}` / `onSaveGroup` ⇒ 红。 */
+    if (!/credential=\{detailCredential\}/.test(page)) {
+      throw new Error(`${label} 抽屉没注入 \`credential\` —— 凭据页签会只剩按钮、没有内容`);
+    }
+    if (!/refreshKinds=\{/.test(page)) {
+      throw new Error(`${label} 抽屉没注入 \`refreshKinds\` —— 没刷过积分的账号连积分页签都没有`);
+    }
+  }
+  if (!/onSaveGroup=\{/.test(traePage)) {
+    throw new Error("Trae 抽屉没注入 `onSaveGroup` —— 分组是该平台唯一缺的账号级编辑能力");
+  }
+
+  /* ③ 签到徽章图标：三张卡都必须是 `CheckinIcon`（一个概念一枚）。
+     变异：Trae 改回 `CircleCheck` / Qoder 去掉图标 ⇒ 红。 */
+  if (/<CircleCheck \/>\s*\{t\("trae\.comp\.card\.chip\.checked/.test(trae)) {
+    throw new Error("Trae 的「已签到」又用回了 `CircleCheck` —— 与 WB 的 `CheckinIcon` 不是同一枚");
+  }
+  for (const [label, code] of [
+    ["Trae", trae],
+    ["Qoder", qoder],
+  ]) {
+    if (!code.includes("CheckinIcon")) {
+      throw new Error(`${label} 卡片的签到徽章没有 \`CheckinIcon\` —— 三张卡必须共用同一枚语义图标`);
+    }
+  }
+
+  /* ④ 2026-10-27（用户报障「详情页积分/签到/凭据要和 WB 一致」）：抽屉三页的数据口径。
+
+     - 签到三格（今日获得 / 签到天数 / 累计积分）必须传全：Trae 走 WB 的同一个
+       `checkinCreditsOf`，Qoder 手工映射但必须给 `totalCredits`。
+       变异：只传 `todayCheckedIn` ⇒ 后两格恒为「—」。
+     - 积分块必须是 `剩余/总量` 两段式 + `nextExpiryLabel` 副行（WB 口径）。 */
+  if (!/checkinCreditsOf/.test(traePage)) {
+    throw new Error("Trae 抽屉的签到三格没走 `checkinCreditsOf` —— 「签到天数 / 累计积分」会恒为「—」");
+  }
+  if (!/totalCredits:/.test(qoderPage)) {
+    throw new Error("Qoder 抽屉的签到块没传 `totalCredits` —— 「累计积分」那格会恒为「—」");
+  }
+  if (!/nextExpiryLabel\(expiryForDetail/.test(traePage)) {
+    throw new Error("Trae 抽屉积分块的副行没走 `nextExpiryLabel` —— 与卡片的「X 积分 … 到期」不是同一句话");
+  }
+  if (!/remainingCredits != null && traeCreditTotal/.test(traePage)) {
+    throw new Error("Trae 抽屉积分块不是 `剩余/总量` 两段式 —— 与 WB 的 `4,678/4,788` 不同形");
+  }
+
+  /* ⑤ 2026-10-27（`2,521.07/100` 与「有效至 01-22」两次线上读数错乱）：两条**单位/语义**禁令。
+
+     - `traeCreditTotal` 只能从 `creditPackages` 汇总。`account.credits` 在后端是
+       `credits_history` 里最近一条**每日余额快照**（不是额度容量），拿它当分母会算出
+       「剩余 > 总量」的自相矛盾读数。
+     - `jwtExpTimestamp` 是 **Unix 秒**（`trae/jwt.rs:19`），任何 `… / 1000` 都会把它
+       打进 1970 年（屏幕上表现为「有效至 01-22」这种和「有效 13 天」打架的日期）。 */
+  if (/export function traeCreditTotal[\s\S]{0,400}?account\.credits/.test(trae)) {
+    throw new Error("`traeCreditTotal` 又读了 `account.credits` —— 那是每日余额快照，不是额度容量");
+  }
+  if (/jwtExpTimestamp\s*\/\s*1000/.test(traePage)) {
+    throw new Error("`jwtExpTimestamp` 是 Unix 秒，再除以 1000 会渲染成 1970 年");
+  }
+
+  return "Trae 工具计数已去重 · 凭据到期复用 CredentialExpiryMeta（Trae 秒→毫秒单点换算）· Qoder 凭据到期同源（showRefreshToken=false；额度到期另走 nextExpiryLabel）· Trae 菜单不含 tokens · 三卡指标行同规格 · Qoder 竖条与徽章同源 · 页头一键动作共用控件 · 抽屉凭据/积分页/分组齐备 · 签到图标统一";
 });
 
 check("★ B2 账号页任何位置不得出现完整邮箱（回落链也不许）", () => {
@@ -8226,7 +8390,7 @@ check("★ 原型卡片四块结构：两平台卡片 = [可选竖条] → heade
     }
     // ④ `.acct-actions` = 程序位行 + 更多菜单（菜单在**页脚**，不是头部）。
     if (
-      !/<footer className="flex items-center gap-1\.5 border-t border-border pt-2\.5">[\s\S]{0,120}?\{programRow\}[\s\S]{0,60}?\{menu\}/.test(
+      !/<footer className="flex items-center gap-1\.5 border-t border-border pt-2\.5">[\s\S]{0,120}?\{programRow\}[\s\S]{0,60}?\{menu \?\? inlineMenu\}/.test(
         code,
       )
     ) {
@@ -8286,9 +8450,10 @@ check("★ B4 Trae 批量签到：部分失败要能「只重试失败项」", (
   if (!/results[\s\S]{0,160}?\.filter\(\(row\) => !row\.ok/.test(fn[0])) {
     throw new Error("未从 `results` 里过滤失败项（`failed` 只是计数，定位不到要重试谁）");
   }
-  // ③ 必须把失败名单接回递归调用。
-  if (!/batchCheckin\(failedIds\)/.test(fn[0])) {
-    throw new Error("重试 action 没有回传 `failedIds`");
+  // ③ 必须把失败名单接回递归调用（2026-10-28：取消后的「未处理」也进重试名单，
+  //    调用点因此从 `failedIds` 变成 `retryIds = 失败 + 未处理`）。
+  if (!/batchCheckin\((failedIds|retryIds)\)/.test(fn[0])) {
+    throw new Error("重试 action 没有回传失败名单（`failedIds` / `retryIds`）");
   }
   // ④ 两处 toast 都要带 action（全失败 / 部分失败）。
   const withAction = (fn[0].match(/action: retryAction/g) || []).length;
@@ -8866,6 +9031,148 @@ check("★ 自动检查更新：开关必须接到轮询（摆了开关不等于
     throw new Error("间隔常量不是 30 分钟 —— 与开关说明「每 30 分钟检查一次」不符");
   }
   return "开关 ↔ 轮询同源 · 关掉即短路 · 间隔 30 分钟 · 可见/聚焦补查（不传 force）";
+});
+
+check("★ 2026-10-27 刷新口径：Trae 快照在积分落盘后读取 + 三层结果判定", () => {
+  const page = readCode(TRAE_PAGE);
+  /* 顺序：积分（批量）与签到并行 ⇒ 结束后**再**读账号快照。
+     变异：把 `loadAllWithResult()` 放回 `Promise.allSettled` 里 ⇒ 快照先回来，
+     积分后落盘 ⇒ 刷新结束仍显示旧值（用户报障原文「刷新后积分还是旧值」）。 */
+  if (
+    !/await Promise\.allSettled\(\[[\s\S]{0,400}?traeRefreshCredits\(undefined, variant\)[\s\S]{0,400}?\]\);[\s\S]{0,500}?await loadAllWithResult\(\)/.test(
+      page,
+    )
+  ) {
+    throw new Error("Trae 一键刷新没有「先积分、后读快照」—— 快照可能读到积分落盘前的旧值");
+  }
+  if (!/snapshotResult\.ok/.test(page)) {
+    throw new Error("Trae 一键刷新没有把「快照读取失败」计入结果判定");
+  }
+  if (!/credits\.value\.failed/.test(page) || !/checkinFailed/.test(page)) {
+    throw new Error("Trae 一键刷新没有按积分 / 签到逐层判定 —— 部分失败会被报成全部成功");
+  }
+  /* 单账号积分刷新：落盘后必须同步页面快照。 */
+  if (!/traeRefreshCredits\(account\.userId, variant\)[\s\S]{0,300}?loadAllWithResult\(\)/.test(page)) {
+    throw new Error("Trae 单账号积分刷新后没有同步页面快照（只弹 toast、数字不变）");
+  }
+  /* 失败必须传给刷新状态管理层：错误 toast 在 `refreshBusy.run` **外面**。
+     变异：把 catch 塞回任务内部 ⇒ 任务总是 resolve ⇒ 失败项仍亮「已更新」。 */
+  for (const [name, code] of [
+    ["Trae", page],
+    ["WB", readCode(WB_PAGE)],
+  ]) {
+    if (
+      !/refreshBusy\.run\([\s\S]{0,2500}?toast\.success[\s\S]{0,150}?\}\);\s*\}\s*catch \(e\)/.test(code)
+    ) {
+      throw new Error(`${name} 单账号刷新的错误 toast 又回到了任务内部 —— 失败项会亮「已更新」`);
+    }
+  }
+  /* 缓存 key 与 loader 必须**成对**捕获：loader 按 key 存档，调用时用闭包里的旧 key 反查；
+     `load` 参数里不得再出现惰性的 `loaderRef.current()`。 */
+  const cached = readCode("src/lib/use-cached-resource.ts");
+  if (/load\(key,\s*\(\)\s*=>\s*loaderRef\.current\(\)/.test(cached)) {
+    throw new Error("缓存层仍把 loaderRef.current() 作为 load 的惰性参数 —— 切区后会把新区域数据写进旧 key");
+  }
+  if (/loaderRef\.current/.test(cached)) {
+    throw new Error("缓存层仍保留单一 loaderRef —— 切区后旧 key 会读到新区域的 loader");
+  }
+  if (!/const loadOnce = loaderByKey\.current\.get\(key\) \?\? loader;[\s\S]{0,80}?load\(key, \(\) => loadOnce\(\)/.test(cached)) {
+    throw new Error("缓存层没有按键保存 loader（key 与 loader 必须同一时刻捕获）");
+  }
+  /* 被取代的刷新必须显式回报，不能当成成功。 */
+  const resources = readCode("src/stores/resources.ts");
+  if (!/superseded: boolean/.test(resources) || !/isStale\(\)\) return \{ ok: false, superseded: true/.test(resources)) {
+    throw new Error("资源缓存没有回报 superseded —— 被后发请求取代的刷新仍会被调用方当成成功");
+  }
+  if (!/snapshotResult\.superseded/.test(page)) {
+    throw new Error("Trae 一键刷新没有处理「快照被取代」—— 过期结果会被说成已刷新");
+  }
+  /* 签到成功必须替换旧的失败条目（失败不是可继承的事实）。 */
+  if (/if \(!entry\?\.ok \|\| entry\.todayCheckedIn\) continue;/.test(page)) {
+    throw new Error("签到成功仍跳过 ok:false 的旧条目 —— 抽屉会继续显示「读不到」");
+  }
+  if (!/ok: true, todayCheckedIn: true, source: "ledger"/.test(page)) {
+    throw new Error("签到成功没有用已确认事实替换旧的失败条目");
+  }
+  return "积分+签到并行 · 快照回读在后 · 三层判定 · 单账号落盘后同步快照 · 失败不亮已更新 · key/loader 成对 · superseded · 签到覆盖失败条目";
+});
+
+check("★ 2026-10-27 旅行刷新失败可区分：批量入口返回 failedIds，单账号缺结果即失败", () => {
+  const api = readCode("src/lib/api.ts");
+  if (!/export async function queryTravelStatuses/.test(api) || !/failedIds/.test(api)) {
+    throw new Error("api.ts 没有「成功状态 + 失败账号」的旅行查询入口");
+  }
+  if (!/getTravelStatusMap[\s\S]{0,400}?queryTravelStatuses/.test(api)) {
+    throw new Error("`getTravelStatusMap` 没复用新入口 —— 容错口径与失败口径会分叉");
+  }
+  const wb = readCode(WB_PAGE);
+  if (!/result\.statuses\[a\.id\] === undefined/.test(wb)) {
+    throw new Error("WB 单账号旅行刷新没检查结果 —— 读不到时仍会亮「已更新」");
+  }
+  if (!/result\.failedIds\.length/.test(wb)) {
+    throw new Error("WB 批量旅行刷新没有报失败数量 —— 部分失败会被说成全部成功");
+  }
+  return "批量返回 failedIds · 单账号缺结果即失败 · 后台轮询仍容错";
+});
+
+check("★ 2026-10-27 一键刷新冷却按完整 scope 键控（切区不继承、不丢）", () => {
+  const quick = readCode("src/components/account-quick-actions.tsx");
+  if (!/useEffect\(\(\) => \{[\s\S]{0,300}?setDeadline\(quickRefreshCooldownUntil\[scope\] \?\? 0\)/.test(quick)) {
+    throw new Error("切作用域时没有重新读取该作用域的冷却截止时间");
+  }
+  if (!/const requestScope = scopeRef\.current/.test(quick)) {
+    throw new Error("冷却没有捕获「发起请求时」的作用域 —— 切区后旧请求会覆盖当前按钮");
+  }
+  if (!/scopeRef\.current === requestScope/.test(quick)) {
+    throw new Error("冷却完成时没有校验当前作用域 —— 旧请求会盖掉另一个区域的按钮状态");
+  }
+  const wb = readCode(WB_PAGE);
+  if (/quickRefreshCoolingDown\(region\)|startQuickRefreshCooldown\(region\)/.test(wb)) {
+    throw new Error("WB 一键刷新仍用裸 region 作为冷却键 —— 与 Trae / Qoder 的完整 scope 不同键");
+  }
+  if (!/quickRefreshCoolingDown\(scope\)/.test(wb)) {
+    throw new Error("WB 一键刷新没有使用完整 scope 冷却键");
+  }
+  return "完整 scope 键 · 切区重读截止时间 · 只回写发起时的作用域";
+});
+
+check("★ 2026-10-27 批量积分契约：保留 refreshed 并新增 total / failed", () => {
+  const handlers = readCode("crates/buddy-switch-core/src/modules/trae/handlers.rs");
+  if (!/"refreshed": summary\.succeeded[\s\S]{0,80}?"total": summary\.total[\s\S]{0,80}?"failed": summary\.failed/.test(handlers)) {
+    throw new Error("批量积分回报没有同时给 refreshed / total / failed —— 前端无法区分部分失败");
+  }
+  const credits = readCode("crates/buddy-switch-core/src/modules/trae/credits.rs");
+  if (!/pub struct RefreshAllSummary/.test(credits) || !/failed: total\.saturating_sub\(succeeded\)/.test(credits)) {
+    throw new Error("批量积分刷新的汇总结构缺失 failed 计算");
+  }
+  return "refreshed + total + failed · 汇总结构带失败数";
+});
+
+check("★ 2026-10-28 签到进度事件的区域由后端直传（前端不复刻变体→区域映射）", () => {
+  /* 背景：`TraeVariant::as_str()` 有 6 个取值（`trae_work` / `trae_cn` / `trae_merged` /
+     `global` / `global_trae_code` / `global_trae_merged`），只有 `region()` 知道谁属哪一区。
+     前端曾用 `variant.startsWith("global")` 反推 —— 等于把后端映射复刻一份到前端，
+     新增变体时前面那份会静默错，且没有任何测试会红。
+     变异：删掉后端 `region` 字段 / 前端只按前缀判断 ⇒ 本条变红。 */
+  const checkin = readCode("crates/buddy-switch-core/src/modules/trae/checkin.rs");
+  if (!/let event_region = variant\.region\(\)\.as_str\(\)/.test(checkin)) {
+    throw new Error("签到事件没有从 `variant.region()` 取区域 —— 前端只能靠字符串前缀猜");
+  }
+  if (!/object\.insert\("region"\.to_string\(\), json!\(event_region\)\)/.test(checkin)) {
+    throw new Error("签到事件没有携带 `region` 字段");
+  }
+  const page = readCode(TRAE_PAGE);
+  if (!/const eventRegion = payload\.region/.test(page)) {
+    throw new Error("前端没有优先读 `payload.region` —— 又回到按产品线前缀反推区域");
+  }
+  if (!/payload\.variant\.startsWith\("global"\)/.test(page)) {
+    throw new Error("前缀判断被整体删掉了 —— 老版本后端（无 `region`）的事件会全被丢弃");
+  }
+  const types = readCode("src/lib/trae-types.ts");
+  if (!/region\?: string/.test(types)) {
+    throw new Error("`TraeCheckinEvent` 缺 `region` 字段声明");
+  }
+  return "后端携带 region（`region()` 唯一映射）· 前端优先读它 · 前缀判断仅作老版本兜底";
 });
 
 console.log(`\n${passed} passed / ${failures.length} failed\n`);

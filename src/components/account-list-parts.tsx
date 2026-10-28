@@ -115,7 +115,18 @@ export interface CheckinResultBarProps {
    * 只说「成功 1 个」不足以证明真的到账。
    */
   earnedCredits?: number;
-  /** 有失败项时的「只重试失败项」出口；无失败传 `undefined`（不渲染该按钮）。 */
+  /**
+   * 协作式取消后**未处理**的账号数（没有发出请求，既不是成功也不是失败）。
+   * 不传（或不大于 0）⇒ 不渲染这一枚徽标，三平台原有输出逐字不变。
+   */
+  unprocessedCount?: number;
+  /**
+   * 「只重试未完成项」出口；**无失败且无未处理**时才传 `undefined`（不渲染该按钮）。
+   *
+   * ⚠️ 未处理项也算未完成：用户取消批次后，那些账号**一个请求都没发出**，
+   * 只给「失败」出口会让它们永远停在原地（文案还会说「全部账号已签到」）。
+   * 页面侧传进来的重试名单本就含未处理项（`failedIds ∪ unprocessedIds`）。
+   */
   onRetry?: () => void | Promise<void>;
   /** 「知道了」：关闭结果条。 */
   onDismiss: () => void;
@@ -137,6 +148,7 @@ export function CheckinResultBar({
   failedNames,
   skippedNames,
   earnedCredits = 0,
+  unprocessedCount = 0,
   onRetry,
   onDismiss,
 }: CheckinResultBarProps) {
@@ -146,7 +158,8 @@ export function CheckinResultBar({
   const skipped = skippedNames ?? [];
   const hasFail = failedNames.length > 0;
   const hasSkipped = skipped.length > 0;
-  const degraded = hasFail || hasSkipped;
+  const hasUnprocessed = unprocessedCount > 0;
+  const degraded = hasFail || hasSkipped || hasUnprocessed;
   const { busy, run } = useRefreshAction();
 
   return (
@@ -179,6 +192,11 @@ export function CheckinResultBar({
           {t("shared.checkinResult.earned", { n: String(earnedCredits) })}
         </Badge>
       ) : null}
+      {unprocessedCount > 0 ? (
+        <Badge variant="secondary" className="shrink-0 tabular-nums border-transparent">
+          {t("shared.checkinResult.unprocessed", { n: String(unprocessedCount) })}
+        </Badge>
+      ) : null}
       <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
         {hasFail
           ? t("shared.checkinResult.failedNames", { names: failedNames.join(t("shared.punct.comma")) })
@@ -188,9 +206,13 @@ export function CheckinResultBar({
               t("shared.checkinResult.skippedNames", {
                 names: skipped.join(t("shared.punct.comma")),
               })
-            : t("shared.checkinResult.allOk")}
+            : hasUnprocessed
+              ? /* ★ 取消后**不能**说「全部账号已签到」：这些账号一个请求都没发出，
+                   把「没轮到」说成「已签到」是直接骗用户。 */
+                t("shared.batch.cancelled", { n: String(unprocessedCount) })
+              : t("shared.checkinResult.allOk")}
       </span>
-      {hasFail && onRetry ? (
+      {(hasFail || hasUnprocessed) && onRetry ? (
         <Button
           size="sm"
           variant="outline"
@@ -199,7 +221,8 @@ export function CheckinResultBar({
           onClick={() => void run(() => onRetry?.())}
         >
           {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          {t("shared.checkinResult.retryFailed")}
+          {/* 有失败项时沿用旧词条；只剩未处理项时换一个说法 —— 那些账号没失败过。 */}
+          {hasFail ? t("shared.checkinResult.retryFailed") : t("shared.checkinResult.retryPending")}
         </Button>
       ) : null}
       <Button size="sm" variant="ghost" className="shrink-0" onClick={onDismiss}>

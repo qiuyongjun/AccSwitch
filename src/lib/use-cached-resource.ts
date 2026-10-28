@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { asError } from "@/lib/api";
-import { useResourceStore, type ResourceEntry, type ResourceLoadOptions } from "@/stores/resources";
+import {
+  useResourceStore,
+  type ResourceEntry,
+  type ResourceLoadOptions,
+  type ResourceLoadResult,
+} from "@/stores/resources";
 
 /**
  * 把一个「键 → 异步快照」接进组件。
@@ -35,6 +40,14 @@ export interface CachedResource<T> {
   error: string | null;
   /** 强制取一次新值并等待完成。**变更操作之后必须调用它**，否则界面停在变更前。 */
   refresh: () => Promise<void>;
+  /**
+   * 与 [`refresh`] 同一次强制取数，但**显式返回成功 / 失败**。
+   *
+   * 为什么需要：刷新按钮要在失败时**不亮「已更新」**，一键刷新还要把「快照读取失败」
+   * 计入部分失败提示。`refresh()` 会吞掉错误（保留旧值 + 页面错误条），
+   * 拿不到判定 ⇒ 错误 toast 旁边仍可能亮着绿勾。
+   */
+  refreshWithResult: () => Promise<ResourceLoadResult>;
   /**
    * 「像刚挂载那样**再校验一次**」——**不强发**。
    *
@@ -78,28 +91,41 @@ export function useCachedResource<T>(
   const load = useResourceStore((s) => s.load);
   const patchEntry = useResourceStore((s) => s.patch);
 
-  // loader 每次渲染都是新函数（`useCallback` 依赖里带着变体等），所以只把它放进 ref：
-  // effect 的依赖必须是**键**。否则「同一把键、loader 换了个身份」会白白多发一轮请求，
-  // 而键相同就意味着结果相同 —— 那正是要避免的重复加载。
-  const loaderRef = useRef(loader);
-  loaderRef.current = loader;
+  // loader 每次渲染都是新函数（`useCallback` 依赖里带着变体等），所以不能直接进 effect 依赖：
+  // 否则「同一把键、loader 换了个身份」会白白多发一轮请求。但**也不能只留一个 ref**：
+  //
+  // ⚠️ 2026-10-27（用户复现）：国内版发起刷新，完成前切到国际版 —— 旧回调闭包里是
+  // `trae:accounts:cn` 这把**旧键**，若此时读单一 `loaderRef.current` 会拿到国际版 loader
+  // ⇒ 国际版账号被写进国内版缓存。因此按**键**保存 loader：调用时用闭包里捕获的键
+  // 反查它当时的 loader，键与 loader 永远成对。
+  const loaderByKey = useRef(new Map<string, () => Promise<T>>());
+  if (key !== null) loaderByKey.current.set(key, loader);
   const freshMs = options?.freshMs ?? 0;
 
   useEffect(() => {
     if (key === null) return;
-    void load(key, () => loaderRef.current(), { freshMs });
+    const loadOnce = loaderByKey.current.get(key) ?? loader;
+    void load(key, () => loadOnce(), { freshMs });
   }, [key, load, freshMs]);
 
   const refresh = useCallback(async () => {
     if (key === null) return;
-    await load(key, () => loaderRef.current(), { force: true });
+    const loadOnce = loaderByKey.current.get(key) ?? loader;
+    await load(key, () => loadOnce(), { force: true });
+  }, [key, load]);
+
+  const refreshWithResult = useCallback(async () => {
+    if (key === null) return { ok: true, superseded: false, error: null };
+    const loadOnce = loaderByKey.current.get(key) ?? loader;
+    return load(key, () => loadOnce(), { force: true });
   }, [key, load]);
 
   // 与挂载时那次取数**逐字同一份语义**（同样的 `freshMs`、同样不强发）——
   // 这正是「revalidate = 再挂载一次」的定义，也是它与 `refresh` 的唯一差别。
   const revalidate = useCallback(async () => {
     if (key === null) return;
-    await load(key, () => loaderRef.current(), { freshMs });
+    const loadOnce = loaderByKey.current.get(key) ?? loader;
+    await load(key, () => loadOnce(), { freshMs });
   }, [key, load, freshMs]);
 
   const patch = useCallback(
@@ -119,6 +145,7 @@ export function useCachedResource<T>(
     pending: entry?.pending === true,
     error: entry?.error == null ? null : asError(entry.error),
     refresh,
+    refreshWithResult,
     revalidate,
     patch,
   };

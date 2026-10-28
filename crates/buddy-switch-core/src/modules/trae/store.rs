@@ -10,6 +10,37 @@ use std::path::Path;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+/// 读原始文本（`Ok(None)` = 文件不存在 / 空文件）。
+///
+/// 给**写事务**用：写前比对要的是「读到的那份原文」，而不是解析后的结构体
+/// —— 解析会丢掉键顺序与未知字段，拿它比对会把每次写都误判成冲突。
+pub fn read_text_checked(path: &Path) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text))
+}
+
+/// 读 JSON 并把「读不到 / 解析失败」如实报出来（`Ok(None)` = 文件不存在）。
+///
+/// ★ 与 [`read_json`] 的分工是**读路径 vs 写路径**，不是「新旧版本」：
+/// 只读展示必须容错（库坏了也要能打开界面），而**写路径必须 fail-closed** ——
+/// 一次「解析失败 ⇒ 空库」的读取，紧接着一次整份 `save`，就是把用户的账号库
+/// 干净地替换成「只剩刚改的那一条」。2026-10-28 起所有读改写的入口改走本函数。
+pub fn read_json_checked<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let Some(text) = read_text_checked(path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&text).map(Some).map_err(|error| {
+        format!("解析 {} 失败：{error}", path.display())
+    })
+}
+
 /// 读取 JSON；文件缺失、为空、或解析失败一律回落 `T::default()`。
 ///
 /// 刻意「不报错」：签到/积分这类后台循环必须能在数据文件损坏时继续运行，

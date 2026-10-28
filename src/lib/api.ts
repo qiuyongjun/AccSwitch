@@ -227,6 +227,7 @@ const DEMO_READ_COMMANDS = new Set([
   // 网关五条只读：config / status / models / keys / logs —— 同样不进写操作
   //（保存配置 / 建 Key / 吊销 / 恢复 / 删除 / 清日志）。
   "get_qoder_accounts", "get_qoder_local_sources", "qoder_program_status", "qoder_usage",
+  "qoder_credits", "qoder_checkin_status",
   // issue #47：逐账号「今日签到状态」（**只读**）。
   "qoder_checkin_status_map",
   "get_qoder_gateway_config", "qoder_gateway_status", "get_qoder_gateway_models",
@@ -509,6 +510,7 @@ const ROUTES: Record<string, Route> = {
   trae_import_accounts: { method: "POST", path: "/api/trae/accounts/import" },
   trae_group_op: { method: "POST", path: "/api/trae/groups" },
   trae_checkin: { method: "POST", path: "/api/trae/checkin" },
+  trae_checkin_cancel: { method: "POST", path: "/api/trae/checkin/cancel" },
   trae_refresh_credits: { method: "POST", path: "/api/trae/credits/refresh" },
   trae_refresh_jwt: { method: "POST", path: "/api/trae/refresh-jwt" },
   trae_clear_cooldown: { method: "POST", path: "/api/trae/cooldown/clear" },
@@ -1730,62 +1732,105 @@ export async function getTravelStatus(accountId: string, region?: Region): Promi
 }
 
 /**
- * **批量**查询多个账号的今日旅行状态（`accountId → 状态`；失败/未命中的不出现在结果里）。
+ * 批量查询旅行状态的结果：**成功读到的状态** + **没拿到结果的账号**。
+ *
+ * 为什么不能只回 `Record<id, status>`：缺键既可能是「上游回了但是无 Buddy」之外
+ * 的正常业务态，也可能是「这个账号根本没读成功」。前者有 `label`、后者完全没有条目 ——
+ * 刷新按钮只有拿到 `failedIds` 才能区分「已更新」与「读取失败」。
+ */
+export interface TravelStatusQuery {
+  statuses: Record<string, TravelStatus>;
+  failedIds: string[];
+}
+
+/**
+ * **批量**查询多个账号的今日旅行状态，并**显式**回报读不到结果的账号。
  *
  * 与 [`getCheckinStatusMap`] 同因同治：webui 的 `get_travel_status` 是**整端点**，
  * 逐个调用会变成 N 次全量拉取；桌面端命令是单账号的。通道差异收口在这里。
+ *
+ * 单账号失败**不拖垮整批**（后台轮询 `loadTravelMap` 依赖这条容错）；调用方若需要
+ * 「失败就报错」，自行检查 `failedIds`。
+ */
+export async function queryTravelStatuses(
+  accountIds: string[],
+  region?: Region,
+): Promise<TravelStatusQuery> {
+  const statuses: Record<string, TravelStatus> = {};
+  const failedIds: string[] = [];
+  const ids = [...new Set(accountIds)];
+  if (ids.length === 0) return { statuses, failedIds };
+
+  if (demoModeEnabled) {
+    for (const accountId of ids) {
+      try {
+        statuses[accountId] = await getTravelStatus(accountId, region);
+      } catch {
+        failedIds.push(accountId);
+      }
+    }
+    return { statuses, failedIds };
+  }
+
+  if (isWebui()) {
+    try {
+      const all = await httpCall<{
+        accounts: {
+          accountId: string;
+          email: string;
+          label: TravelStatus["label"];
+          rewardCredit: number | null;
+          locationName?: string | null;
+          arriveAt?: number | null;
+        }[];
+      }>("get_travel_status", region ? { region } : undefined);
+      const wanted = new Set(ids);
+      for (const item of all.accounts) {
+        if (!wanted.has(item.accountId)) continue;
+        statuses[item.accountId] = {
+          label: item.label,
+          rewardCredit: item.rewardCredit,
+          locationName: item.locationName ?? null,
+          arriveAt: item.arriveAt ?? null,
+        };
+      }
+      // 整端点成功但某个账号不在响应里 ⇒ 这个账号没有结果（保留旧值）。
+      for (const accountId of ids) {
+        if (statuses[accountId] === undefined) failedIds.push(accountId);
+      }
+    } catch {
+      // 整端点失败：本批全部没有结果。
+      failedIds.push(...ids);
+    }
+    return { statuses, failedIds };
+  }
+
+  await Promise.all(
+    ids.map(async (accountId) => {
+      try {
+        statuses[accountId] = await call<TravelStatus>("get_travel_status", {
+          accountId,
+          ...regionArg(region),
+        });
+      } catch {
+        failedIds.push(accountId);
+      }
+    }),
+  );
+  return { statuses, failedIds };
+}
+
+/**
+ * **批量**查询多个账号的今日旅行状态（`accountId → 状态`；失败/未命中的不出现在结果里）。
+ *
+ * 保留给后台轮询这类「容错优先」的调用方；需要区分失败账号时用
+ * [`queryTravelStatuses`]。
  */
 export async function getTravelStatusMap(
   accountIds: string[],
   region?: Region,
 ): Promise<Record<string, TravelStatus>> {
-  const map: Record<string, TravelStatus> = {};
-  if (accountIds.length === 0) return map;
-
-  if (demoModeEnabled) {
-    for (const accountId of accountIds) {
-      map[accountId] = await getTravelStatus(accountId, region);
-    }
-    return map;
-  }
-
-  if (isWebui()) {
-    const all = await httpCall<{
-      accounts: {
-        accountId: string;
-        email: string;
-        label: TravelStatus["label"];
-        rewardCredit: number | null;
-        locationName?: string | null;
-        arriveAt?: number | null;
-      }[];
-    }>("get_travel_status", region ? { region } : undefined);
-    const wanted = new Set(accountIds);
-    for (const item of all.accounts) {
-      if (!wanted.has(item.accountId)) continue;
-      map[item.accountId] = {
-        label: item.label,
-        rewardCredit: item.rewardCredit,
-        locationName: item.locationName ?? null,
-        arriveAt: item.arriveAt ?? null,
-      };
-    }
-    return map;
-  }
-
-  await Promise.all(
-    accountIds.map(async (accountId) => {
-      try {
-        map[accountId] = await call<TravelStatus>("get_travel_status", {
-          accountId,
-          ...regionArg(region),
-        });
-      } catch {
-        // 单个失败不拖垮整批。
-      }
-    }),
-  );
-  return map;
+  return (await queryTravelStatuses(accountIds, region)).statuses;
 }
 
 export function getAutoTravelConfig(): Promise<TravelConfig> {
@@ -2627,6 +2672,7 @@ export function getTraeLogs(query?: TraeLogQuery): Promise<TraeLogsResponse> {
   if (query?.kind && query.kind !== "all") args.kind = query.kind;
   if (query?.date) args.date = query.date;
   if (query?.keyword) args.keyword = query.keyword;
+  if (query?.checkinUserId) args.checkinUserId = query.checkinUserId;
   if (query?.limit) args.limit = query.limit;
   if (query?.variant) args.variant = query.variant;
   return call("get_trae_logs", Object.keys(args).length > 0 ? args : undefined);
@@ -2858,15 +2904,41 @@ export function traeCheckin(options?: {
   skipExpired?: boolean;
   retry?: number;
   variant?: TraeVariantId | null;
+  /** 本批任务 id：与 [`traeCheckinCancel`] 配对，用于协作式取消。 */
+  taskId?: string;
 }): Promise<TraeCheckinReport> {
   return call("trae_checkin", { options: options ?? {} });
 }
 
-/** 刷新剩余积分（不传 userId 即刷新该产品线全部）。 */
+/**
+ * 取消一次批量签到（协作式：只拦**尚未开始**的账号，在途请求会跑完）。
+ *
+ * 与 `traeCheckin({ taskId })` 配对。取消后报告只含已执行账号 ⇒
+ * 前端必须按 `total - results.length` 报「N 个未处理」，不能报全部成功。
+ */
+export function traeCheckinCancel(taskId: string): Promise<{ ok: boolean }> {
+  return call("trae_checkin_cancel", { taskId });
+}
+
+/** 刷新剩余积分（不传 userId 即刷新该产品线全部）。
+ *
+ * ★ 2026-10-27：批量作用域额外回 `total` / `failed`，与既有的 `refreshed` 并存 ——
+ * 只回成功数时，「部分失败」与「全部成功」在返回值上完全同形，页面无法如实提示。
+ * 单账号作用域（`scope: "single"`）没有这两个字段（单账号失败会直接抛错）。
+ */
 export function traeRefreshCredits(
   userId?: string,
   variant?: TraeVariantId | null,
-): Promise<{ scope: "single" | "all"; userId?: string; credits?: number; refreshed: number }> {
+): Promise<{
+  scope: "single" | "all";
+  userId?: string;
+  credits?: number;
+  refreshed: number;
+  /** 批量作用域：本轮尝试刷新的账号数。 */
+  total?: number;
+  /** 批量作用域：失败（跳过）的账号数。 */
+  failed?: number;
+}> {
   return call("trae_refresh_credits", { userId: userId ?? null, variant: variant ?? null });
 }
 
@@ -3250,6 +3322,8 @@ export interface QoderCreditsRow {
   used?: number;
   total?: number;
   isExceeded?: boolean;
+  /** 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）；缺值 ⇒ null。 */
+  expiresAt?: number | null;
   plan?: string | null;
   raw?: unknown;
 }
@@ -3261,8 +3335,18 @@ export interface QoderCreditsView {
   accounts: QoderCreditsRow[];
 }
 
-export function qoderCredits(scope: Scope): Promise<QoderCreditsView> {
-  return call<QoderCreditsView>("qoder_credits", { scope });
+/**
+ * 区域额度 / 套餐视图。
+ *
+ * ★ 2026-10-27：`accountIds` 是**可选账号筛选**。省略 ⇒ 全区域（旧行为）；
+ * 显式传空数组 ⇒ 没有目标账号（不发出上游请求，**不退化为全量**）。
+ * 单账号刷新只传那一个 uid —— 上游请求在 core 里按筛选结果发出，前端不做过滤。
+ */
+export function qoderCredits(scope: Scope, accountIds?: string[]): Promise<QoderCreditsView> {
+  return call<QoderCreditsView>("qoder_credits", {
+    scope,
+    ...(accountIds !== undefined ? { accountIds } : {}),
+  });
 }
 
 /**

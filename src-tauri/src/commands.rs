@@ -803,7 +803,9 @@ pub async fn growth_tasks_scan(
     let region = match scope.product() {
         Product::Workbuddy => require_wb_region(scope)?,
         Product::Trae => return Err("Trae 没有成长任务体系".to_string()),
-        Product::Qoder => return Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string()),
+        Product::Qoder => {
+            return Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string())
+        }
     };
     if region != Region::Cn {
         return Err("国际版暂无成长任务体系".to_string());
@@ -3164,7 +3166,7 @@ pub async fn get_trae_token_statistics(days: Option<i64>, scope: Option<String>)
 ///
 /// `kind` 取 `app` / `checkin` / `switch`（缺省或 `all` 表示不限）；
 /// `date` 为 `YYYY-MM-DD`；`keyword` 大小写不敏感；`limit` 缺省 500、上限 2000；
-/// `variant` 决定读哪条产品线的 `checkin` / `switcher` 日志（`app.log` 共用）。
+/// `checkinUserId` 只保留该账号的结构化签到流水；`variant` 决定读哪条产品线的日志。
 ///
 /// 入参在这里组装成 JSON 再交给 [`trae::handlers::logs`]：过滤逻辑只实现一份，
 /// 两条通道共用（历史上两边各写一遍导致过响应形状漂移）。
@@ -3176,6 +3178,7 @@ pub async fn get_trae_logs(
     kind: Option<String>,
     date: Option<String>,
     keyword: Option<String>,
+    checkin_user_id: Option<String>,
     limit: Option<u64>,
     variant: Option<String>,
 ) -> Result<Value, String> {
@@ -3183,6 +3186,7 @@ pub async fn get_trae_logs(
         "kind": kind,
         "date": date,
         "keyword": keyword,
+        "checkinUserId": checkin_user_id,
         "limit": limit,
         "variant": variant,
     });
@@ -3399,6 +3403,17 @@ pub async fn trae_checkin(app: tauri::AppHandle, options: Option<Value>) -> Resu
     })
     .await;
     Ok(trae::checkin::report_json(&report))
+}
+
+/// POST /api/trae/checkin/cancel —— 取消一次批量签到（协作式：只拦尚未开始的账号）。
+///
+/// 与 `trae_checkin` 的 `options.taskId` 配对：取消后已发出的请求会跑完，
+/// 报告里只含已执行账号 ⇒ 前端据此报「N 个未处理」。
+#[tauri::command]
+pub async fn trae_checkin_cancel(task_id: String) -> Result<Value, String> {
+    require_capability(Product::Trae, capability::Capability::Checkin)?;
+    trae::handlers::cancel_checkin(&task_id);
+    Ok(json!({ "ok": true }))
 }
 
 /// POST /api/trae/credits/refresh —— 刷新剩余积分（单个或全部）。
@@ -4611,11 +4626,17 @@ pub async fn qoder_checkin_status_map(
 }
 
 /// GET /api/qoder/credits —— 区域额度 / 套餐视图（逐账号 + 汇总；部分失败如实报）。
+///
+/// `account_ids` 缺省 = 全区域（旧行为）；传空数组 = 明确「没有目标账号」，
+/// **不退化为全量**（见 `qoder::credits::region_view`）。
 #[tauri::command]
-pub async fn qoder_credits(scope: String) -> Result<Value, String> {
+pub async fn qoder_credits(
+    scope: String,
+    account_ids: Option<Vec<String>>,
+) -> Result<Value, String> {
     let scope = resolve_scope_param(Some(&scope))?;
     let region = require_qoder_region(scope)?;
-    Ok(qoder::credits::region_view(region).await)
+    Ok(qoder::credits::region_view(region, account_ids.as_deref()).await)
 }
 
 /// POST /api/qoder/oauth/start —— 发起设备授权，返回 `{ loginId, verificationUri, expiresIn }`。

@@ -1257,6 +1257,9 @@ pub struct QuotaView {
     pub used: i64,
     pub total: i64,
     pub is_exceeded: bool,
+    /// 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）。
+    /// 缺失或不可信 ⇒ `None` —— 不编到期日。
+    pub expires_at: Option<i64>,
     /// 原始响应透传（页面上「资源包明细」等展示字段的来源）。
     pub raw: Value,
 }
@@ -1290,11 +1293,21 @@ pub fn parse_quota(payload: &Value) -> Result<QuotaView, String> {
     if is_exceeded && remaining == 0 && total == 0 {
         return Err("额度响应为退化形态（exceeded 且全 0）—— 拒绝写入".to_string());
     }
+    /* 到期时刻是**顶层**字段（Qoder SDK References：`expiresAt` = 当前套餐/额度到期时间，
+    Unix **毫秒**时间戳）；`userQuota` / `addOnQuota` 自身没有到期时间 ⇒ 聚合后的
+    `remaining` 与这同一个时刻到期。
+    ⚠️ 只收**像毫秒**的值：小于 1e12 的不可能是当代毫秒时刻（若是秒，按毫秒渲染会变成
+    1970）。宁可把到期写成「未知」，也不谎报。 */
+    let expires_at = payload
+        .get("expiresAt")
+        .and_then(as_num)
+        .filter(|value| *value >= 1_000_000_000_000);
     Ok(QuotaView {
         remaining,
         used,
         total,
         is_exceeded,
+        expires_at,
         raw: payload.clone(),
     })
 }
@@ -2089,6 +2102,8 @@ mod tests {
         assert_eq!(view.remaining, 750);
         assert_eq!(view.used, 310);
         assert_eq!(view.total, 1060);
+        // 没给 expiresAt ⇒ 到期未知（不编）。
+        assert_eq!(view.expires_at, None);
 
         // 两键都缺失 ⇒ 拒绝（不写 0）。
         assert!(parse_quota(&serde_json::json!({"something": 1})).is_err());
@@ -2107,6 +2122,35 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(exhausted.remaining, 0);
+    }
+
+    /// 额度到期时刻：**顶层 `expiresAt`，Unix 毫秒**（Qoder SDK References 的字段口径）。
+    ///
+    /// 可证伪：把 `parse_quota` 里的 `.filter(...)` 删掉，秒级值会被读成毫秒并在界面上
+    /// 渲染成 1970（谎报）；把 `get("expiresAt")` 换成 `userQuota` 内层查找，第一段变红。
+    #[test]
+    fn quota_carries_the_top_level_expiry_only_when_it_looks_like_milliseconds() {
+        let view = parse_quota(&serde_json::json!({
+            "expiresAt": 1_790_000_000_000i64,
+            "userQuota": {"remaining": 700, "used": 300, "total": 1000},
+        }))
+        .unwrap();
+        assert_eq!(view.expires_at, Some(1_790_000_000_000));
+
+        // 秒级值会被当成毫秒渲染成 1970 ⇒ 一律按「到期未知」处理，宁可少一条也不谎报。
+        let seconds = parse_quota(&serde_json::json!({
+            "expiresAt": 1_790_000_000i64,
+            "userQuota": {"remaining": 700, "used": 300, "total": 1000},
+        }))
+        .unwrap();
+        assert_eq!(seconds.expires_at, None);
+
+        // 内层的同名键**不是**契约字段（userQuota / addOnQuota 没有各自到期时间）。
+        let nested = parse_quota(&serde_json::json!({
+            "userQuota": {"remaining": 700, "used": 300, "total": 1000, "expiresAt": 1_790_000_000_000i64},
+        }))
+        .unwrap();
+        assert_eq!(nested.expires_at, None);
     }
 
     /// ★★ 上游把额度写成**浮点** ⇒ 必须解析成真实数值，不能变成 0。
@@ -2293,7 +2337,15 @@ mod tests {
     async fn live_quota_and_checkin() {
         let (uid, token) = live_account();
         let quota = quota_usage(QoderRegion::Cn, &uid, &token).await.unwrap();
-        println!("remaining={} total={}", quota.remaining, quota.total);
+        /* `rawExpiresAt` 与解析结果一起打印：真机跑一次就能核对「顶层 / 毫秒」两条口径
+        （若上游给的是秒，解析结果会是 None —— 守卫拒绝谎报，而不是渲染 1970）。 */
+        println!(
+            "remaining={} total={} rawExpiresAt={:?} expiresAt(ms)={:?}",
+            quota.remaining,
+            quota.total,
+            quota.raw.get("expiresAt"),
+            quota.expires_at
+        );
         let _ = checkin_status(QoderRegion::Cn, &uid, &token).await;
     }
 }

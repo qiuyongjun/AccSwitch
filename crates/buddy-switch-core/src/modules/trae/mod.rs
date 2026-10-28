@@ -209,6 +209,22 @@ pub const TRAE_APP_VERSION: &str = "0.1.45";
 /// 历史记录保留天数（签到明细 / 每日快照）。
 pub const TRAE_HISTORY_KEEP_DAYS: i64 = 90;
 
+/// **结构化签到流水**行首（写侧 [`crate::modules::trae::checkin`]，读侧
+/// [`crate::modules::trae::logs::parse_checkin_record`]）。
+///
+/// ## 为什么 `checkin.log` 还需要一种「机器可读」行
+///
+/// `checkin.log` 混写着**四类事件**：签到结果、OAuth 登录、JWT 续期、设备凭证回落。
+/// 只有汇总行 `签到完成: 成功 N/已签到 M/失败 K/总计 T` 是签到结果，而它**不含
+/// `userId`**，无法归属到具体账号；反过来，`OAuth 登录成功: user=<uid>` 与
+/// `JWT 自动刷新成功: user=<uid>` 含 uid 却与签到无关。
+///
+/// 曾经前端按「行内含 uid + 不含失败关键字」反推签到结果，于是两个方向同时错：
+/// 真签到的日子显示「未签到」（汇总行没有 uid），刷新 JWT 的日子显示「成功」。
+/// 这里把「一个账号这一轮到底发生了什么」显式写成 `key=value` 流水行，
+/// 判定改为**精确匹配行首 + 解析字段**，不再猜自然语言。
+pub const TRAE_CHECKIN_RECORD_PREFIX: &str = "签到记录";
+
 /// JWT 剩余有效期低于该值时告警（小时）。
 pub const TRAE_JWT_WARN_HOURS: f64 = 24.0;
 

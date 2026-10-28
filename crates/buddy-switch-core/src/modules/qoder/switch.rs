@@ -369,7 +369,7 @@ fn apply_desktop_overrides(json: &mut Value, account: &RawAccount) -> Result<(),
             Value::String(refresh.to_string()),
         );
     }
-    if let Some(millis) = account.expires_at {
+    if let Some(millis) = super::account::normalize_expiry_ms(account.expires_at) {
         if let Some(when) = chrono::DateTime::from_timestamp_millis(millis) {
             object.insert("expiresAt".to_string(), Value::String(when.to_rfc3339()));
         }

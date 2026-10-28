@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AlertTriangle, Download, Loader2, KeyRound, QrCode, RefreshCw, Terminal } from "lucide-react";
@@ -8,11 +8,13 @@ import {
   AccountCard,
   AccountStatusBadge,
   ACCOUNT_CHIP_CLASS,
+  CredentialExpiryMeta,
   GrowthHintBadge,
   TravelStatusBadge,
   accountIdentity,
   accountDisplayName,
   creditMetricValues,
+  creditMetricTip,
   expiryTooltipLines,
   formatCredits,
   formatCreditExpiry,
@@ -21,8 +23,15 @@ import {
   type GuideTarget,
 } from "@/components/account-card";
 import { REFRESH_DONE_LABEL, REFRESH_DONE_MS, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
+
 import { AccountsTableAvatar } from "@/components/account-list-parts";
 import { AccountWorkbench } from "@/components/account-workbench";
+import {
+  QuickActionButton,
+  QuickRefreshAction,
+  quickRefreshCoolingDown,
+  startQuickRefreshCooldown,
+} from "@/components/account-quick-actions";
 import { type AccountColumn } from "@/components/account-table";
 import { type ToolbarOption } from "@/components/account-toolbar";
 import { AddAccountDrawer, type AddAccountWay } from "@/components/add-account-drawer";
@@ -34,7 +43,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -61,9 +69,6 @@ import { accountSearchText } from "@/lib/account-search";
 /** 批量动作的并发口径（与积分刷新同一档削峰）：串行会让 20 个账号的批处理变成 20 次 RTT。 */
 import { mapWithConcurrency } from "@/lib/concurrency";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
-/* 详情抽屉「最近使用」一行：相对时间给读感、绝对时刻挂 `title` —— 与先前卡片同一套口径
-   （`formatRelativeTime` 是共享实现，见 `lib/catalog-source.ts`）。 */
-import { formatAbsoluteTime, formatRelativeTime } from "@/lib/catalog-source";
 import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
 import {
   filterAccounts,
@@ -100,16 +105,29 @@ import type {
   TravelStatus,
   VscodeCodebuddyPluginStatus,
 } from "@/lib/types";
+
 import { useDocumentVisible } from "@/lib/use-document-visible";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useScope } from "@/lib/use-scope";
 import { useAccountsStore } from "@/stores/accounts";
-import { useT } from "@/lib/i18n";
-import { CheckinIcon, GrowthTaskIcon } from "@/lib/semantic-icons";
+import { useT, type Translate } from "@/lib/i18n";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { showUndoToast } from "@/lib/undo-toast";
 
 /* 日期口径（`localDateKey` / `lastSevenDays`）已上提到 `@/lib/checkin-history` ——
    Trae 侧也要装配「近 7 天」抽屉区块，两处必须同口径（差一天就会把「昨天签的」显示成「未签到」）。 */
+
+/**
+ * WorkBuddy 卡片 / 表格菜单的刷新项。
+ *
+ * 2026-10-26 用户要求：刷新菜单 = 积分 / 旅行 / 签到状态 / 凭证状态（+ 任务项，
+ * 由 `onRefreshTasks` 注入）。「刷新今日 Token」已从所有刷新菜单移除 ——
+ * 卡片与表格都不再展示今日 Token，菜单里留入口会让人以为有东西会变；
+ * Token 的重读仍留在指标块（用量页 / 抽屉）与续期后的自动补齐里。
+ *
+ * ★ 2026-10-26 补 `travel`：旅行 chip 在卡片上可见，但此前只有「一键刷新」能更新它。
+ */
+const WB_MENU_REFRESH_KINDS = ["credits", "travel", "checkin", "credential"] as const satisfies readonly AccountRefreshKind[];
 
 /**
  * 需要走「统一重启确认」的客户端（PLAN §3.15.3）。
@@ -126,6 +144,29 @@ function isWorkbuddyCurrent(account: AccountMeta, current: AppStatus["current"] 
     (current.uid && (account.uid === current.uid || account.id === current.uid)) ||
       (current.email && account.email === current.email),
   );
+}
+
+/**
+ * 「凭据」的状态补充文案：有效 ⇒ **具体到期时刻**（`MM-DD HH:mm`）；
+ * 没有到期时间 ⇒ 长期有效；过期 / 需重登 ⇒ 先重新登录。
+ *
+ * 指标块与「凭据」页签共用这一处，口径不漂移（2026-10-26 用户要求：
+ * 「可正常使用」不携带信息，换成到期时间）。
+ *
+ * ⚠️ `expiresAt` 只认**正数毫秒**：`0` 过 `formatDate` 会变成「—」，
+ * 拼出来是「有效至 —」，比不写更糟。
+ */
+function credentialHintOf(
+  account: Pick<AccountMeta, "expiresAt" | "needsRelogin">,
+  t: Translate,
+  now: number,
+): string {
+  if (account.needsRelogin || (typeof account.expiresAt === "number" && account.expiresAt < now)) {
+    return t("shared.stat.credentialBadSub");
+  }
+  return typeof account.expiresAt === "number" && account.expiresAt > 0
+    ? t("shared.stat.credentialValidUntil", { date: formatDate(account.expiresAt) })
+    : t("wbAccounts.card.forever");
 }
 
 /**
@@ -151,18 +192,18 @@ async function fetchTodayCheckinMap(
 }
 
 /**
- * 并行查询各账号今日旅行状态；失败的账号不写入，由调用方保留原值。
+ * 并行查询各账号今日旅行状态；失败账号进 `failedIds`，由调用方保留原值。
  *
- * ★ 同上：必须走批量的 `api.getTravelStatusMap`。
+ * ★ 同上：必须走批量的 `api.queryTravelStatuses`。
  */
 async function fetchTravelMap(
   accountIds: string[],
   region: Region,
   isStale?: () => boolean,
-): Promise<Record<string, TravelStatus>> {
-  const entries = await api.getTravelStatusMap(accountIds, region);
-  if (isStale?.()) return {};
-  return entries;
+): Promise<api.TravelStatusQuery> {
+  const result = await api.queryTravelStatuses(accountIds, region);
+  if (isStale?.()) return { statuses: {}, failedIds: [] };
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,14 +253,18 @@ export default function AccountsPage() {
 }
 
 /** 页头一键动作的进行中标识（同一时刻只跑一个）。 */
-type QuickActionKind = "refresh" | "checkin" | "complete";
+type QuickActionKind = "refresh" | "checkin";
 
 /**
- * 批量刷新下拉的项：四项只读刷新 + 单独的「续期凭据」+「刷新成长任务状态」。
+ * 批量条上「刷新」相关动作的进行中标识。
  *
- * ⚠️ 后两者**不是** `AccountRefreshKind`：`AccountRefreshKind` 描述的是「重读某一层现成数据」
- * 的通用语义，而它们是「写凭据」与「重扫上游任务摘要」，所以只出现在批量条自己的下拉里，
- * 不进单账号菜单的刷新组。
+ * - `AccountRefreshKind`：下拉里的只读刷新项（积分 / 签到 / 凭据）；
+ * - `"token"`：**下拉外**的「续期凭据」按钮（写 `refresh_token`）；
+ * - `"growth"`：下拉里的「刷新任务」（`growth_tasks_scan`，仅 WB·CN）。
+ *
+ * ⚠️ 后两者**不是** `AccountRefreshKind`：那个类型描述的是「重读某一层现成数据」的
+ * 通用语义，而它们是「写凭据」与「重扫上游任务摘要」。区别只在类型层面 ——
+ * 2026-10-26 起它们在**展示上**都归「刷新」这一族（续期凭据除外，它挪到了下拉外部）。
  */
 type BatchRefreshTarget = AccountRefreshKind | "token" | "growth";
 
@@ -234,18 +279,18 @@ type CheckinOutcome = "success" | "already" | "failed";
 /**
  * 单个账号「一键完成任务」的结局。
  *
- * `skipped` 与 `failed` 必须分开：前者是「后端回读后确实无可领任务」（正常收尾），
- * 后者是「请求失败」。把跳过算进失败会让一次全跳过的批量看起来像崩了。
+ * 四态必须分开，且三条入口（卡片菜单 / 批量 / 抽屉）对同一结果只能有一种说法：
+ * - `done`：真的领到了奖励（`claimed` = 领取项数，`credit` = 到账积分）；
+ * - `progressed`：行为事件已上报、奖励尚未达标 —— 不是「无事可做」，
+ *   更不是「已完成」（此前菜单只看 `claimed`，把它误报成「没有可完成的任务」）；
+ * - `skipped`：后端回读后确实无可领任务（正常收尾）；
+ * - `failed`：请求失败 / 上游拒绝，带可展示的原因。
  */
 type CompleteTasksOutcome =
-  | { kind: "done"; credit: number }
+  | { kind: "done"; claimed: number; credit: number }
+  | { kind: "progressed" }
   | { kind: "skipped" }
-  | { kind: "failed" };
-
-/** 一键刷新冷却是从**上一轮结束**开始算的，避免连续点击重复打积分/任务扫描接口。 */
-const QUICK_REFRESH_COOLDOWN_MS = 30_000;
-/** 冷却截止时间按区域存模块级：页面组件会随路由卸载，放组件里切页就会绕过冷却。 */
-const quickRefreshCooldownUntil: Record<Region, number> = { cn: 0, global: 0 };
+  | { kind: "failed"; message?: string };
 
 /**
  * 批量**写操作**（签到 / 续期 / 成长任务 / 完成任务）的并发档位。
@@ -259,116 +304,9 @@ const BATCH_WRITE_CONCURRENCY = 3;
 const BATCH_WRITE_GAP_MS = 150;
 
 /**
- * 页头一键操作按钮：图标 + 文案，进行中换成转圈；禁用条件由调用方统一给。
- * 因状态不可用（而非进行中）而禁用时传 `disabledReason`，悬停给出原因。
+ * 页头一键动作控件（`QuickActionButton` / `QuickRefreshAction`）已上提到
+ * `@/components/account-quick-actions` —— 三个账号页共用一份（含 30 秒冷却与禁用原因的表达）。
  */
-function QuickActionButton({
-  icon,
-  label,
-  busy,
-  disabled,
-  disabledReason,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  busy: boolean;
-  disabled: boolean;
-  disabledReason?: string;
-  onClick: () => void;
-}) {
-  const button = (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {busy ? <Loader2 className="animate-spin" /> : icon}
-      {label}
-    </Button>
-  );
-  /* 禁用按钮自身 `pointer-events-none`，悬停收不到 ⇒ 原因由外层 span 承接
-     （与 `account-toolbar` 的表格视图禁用提示同一做法）。 */
-  if (!disabled || !disabledReason) return button;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex">{button}</span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{disabledReason}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
- * 一键刷新按钮：冷却倒计时由按钮自己持有，避免每秒一次的全页重渲染。
- * `onRefresh` 返回是否真的发起了请求；未发起（无账号/被其他动作占用）不进入冷却。
- */
-function QuickRefreshAction({
-  region,
-  disabled,
-  disabledReason,
-  busy,
-  onRefresh,
-}: {
-  region: Region;
-  disabled: boolean;
-  disabledReason?: string;
-  busy: boolean;
-  onRefresh: () => Promise<boolean>;
-}) {
-  const t = useT();
-  /* 重新挂载时从模块级截止时间恢复剩余秒数，切页回来不会“满血复活”。 */
-  const [cooldownLeft, setCooldownLeft] = useState(() =>
-    Math.max(0, Math.ceil((quickRefreshCooldownUntil[region] - Date.now()) / 1000)),
-  );
-
-  const startCooldown = () => {
-    quickRefreshCooldownUntil[region] = Date.now() + QUICK_REFRESH_COOLDOWN_MS;
-    setCooldownLeft(Math.ceil(QUICK_REFRESH_COOLDOWN_MS / 1000));
-  };
-
-  useEffect(() => {
-    if (cooldownLeft <= 0) return;
-    const timer = window.setTimeout(
-      () => setCooldownLeft((n) => Math.max(0, n - 1)),
-      1000,
-    );
-    return () => window.clearTimeout(timer);
-  }, [cooldownLeft]);
-
-  const coolingDown = cooldownLeft > 0;
-  return (
-    <QuickActionButton
-      icon={<RefreshCw />}
-      label={
-        coolingDown
-          ? t("shared.toolbar.quickRefreshCountdown", { n: cooldownLeft })
-          : t("shared.toolbar.quickRefresh")
-      }
-      busy={busy}
-      disabled={disabled || coolingDown}
-      disabledReason={
-        coolingDown
-          ? t("shared.toolbar.quickRefreshCooldown", { n: cooldownLeft })
-          : disabledReason
-      }
-      onClick={() => {
-        if (coolingDown) return;
-        void onRefresh()
-          .then((ran) => {
-            if (ran) startCooldown();
-          })
-          .catch(() => {
-            /* 失败也可能已经打过上游请求，同样进入冷却。 */
-            startCooldown();
-          });
-      }}
-    />
-  );
-}
 
 /** 单个版本的完整账号管理区块（账号卡片、签到开关、积分、刷新等）。 */
 function RegionPanel({ region }: { region: Region }) {
@@ -464,12 +402,19 @@ function RegionPanel({ region }: { region: Region }) {
    */
   const [growthHints, setGrowthHints] = useState<Record<string, GrowthTaskSummary>>({});
   /**
-   * 抽屉「任务」指标卡的 ⟳ 正在刷的账号 id（`null` = 没有）。
+   * 卡片菜单「刷新任务」中正在重扫的账号 id。
    *
-   * `refreshGrowthHint` 本身无忙态（辅助信息不打扰），但指标卡上的 ⟳ 需要「点了看得见」：
-   * 摘要扫描走**强制重扫**（`force: true`），可能要几秒，不转圈会被当成没反应再点一次。
+   * 与抽屉的 `growthRefreshBusyId` 分开：卡片可能同时刷多张，抽屉只需要单实例。
    */
-  const [growthHintBusyId, setGrowthHintBusyId] = useState<string | null>(null);
+  const [growthHintRefreshingIds, setGrowthHintRefreshingIds] = useState<Set<string>>(() => new Set());
+  /**
+   * 抽屉里正在刷成长任务的账号 id（`null` = 没有）。
+   *
+   * 指标卡 ⟳ 与任务页签 ⟳ 是**同一个动作**（见 `refreshGrowthAccount`）：
+   * 强制重扫摘要（`growth_tasks_scan`，可能要几秒）+ 重拉任务列表。
+   * 「点了看得见」由这唯一的忙态承担，两个入口同时转圈 / 同时禁点。
+   */
+  const [growthRefreshBusyId, setGrowthRefreshBusyId] = useState<string | null>(null);
   /**
    * 「今日 Token」按账号聚合（`get_account_token_today`）：`uid -> 明细`。
    *
@@ -796,21 +741,25 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /* =====================================================================
-   * ★ 三个作用域的职责边界（2026-10-23 定稿，加任何新动作前先读这段）
+   * ★ 三个作用域的职责边界（2026-10-26 修订，加任何新动作前先读这段）
    * =====================================================================
    *
    * | 作用域 | 入口 | 允许做什么 |
    * |:--|:--|:--|
-   * | **一键**（页头，全部账号） | `quickRefreshAll` / `quickCheckinAll` / `quickCompleteAll` | 只做**安全、幂等、可重复执行**的批处理：只读刷新，或自动跳过已完成项。**不做**删除 / 导出 / 凭据续期 —— 这些动作在「全部账号」范围上误触发代价太大。 |
+   * | **一键**（页头，全部账号） | `quickRefreshAll` / `quickCheckinAll` | 只做**安全、幂等、可重复执行**的批处理：只读刷新，或自动跳过已完成项。**不做**删除 / 导出 / 凭据续期 / 完成任务 —— 在「全部账号」范围上误触发代价太大，且「完成任务」本身低频（2026-10-26 用户要求删除「一键完成」）。 |
    * | **批量**（勾选条，所选账号） | `batchRefreshPart` / `batchRefreshGrowth` / `batchRefreshToken` / `batchCheckin` / `batchCompleteTasks` / 导出 / 删除 | 用户**显式勾选**后才执行 ⇒ 允许写操作与破坏性操作（续期、删除）。只读刷新**不替用户跳过**账号，失败 / 跳过都写进结果文案。 |
    * | **单账号**（卡片 / 表格菜单、详情抽屉） | `onRefresh` / `onRefreshPart` / `onCheckin` / `onCompleteTasks` / 导出 / 删除 | 单实例、需要上下文才能判断的动作。菜单负责「一步做完」，抽屉负责「看清楚再决定」。 |
    *
    * ⚠️ 同一个动作**允许**在三个作用域各有一个入口（作用域不同、误触代价不同），
    * 但**同一作用域内不重复** —— 2026-10-23 删掉的「签到并刷新全部账号积分」
    * （`onRefreshCredits`）就是反例：它在页头之外又造了第三套刷新语义。
+   * 2026-10-26 把「今日 Token」从一键刷新移出（卡片已不展示它）；
+   * 「凭据状态」**保留**在一键里（用户拍板）：卡片上的凭据到期只有 `getAccounts` 能更新。
    *
-   * ⚠️ 刷新语义现在只有三条，别再拼第四条：
-   * ① 单账号四项只读 / 续期；② 批量四项只读 / 成长摘要 / 续期；③ 一键复合只读。
+   * ⚠️ 刷新语义只有三条，别再拼第四条：
+   * ① 单账号：刷新组四项只读（积分 / 旅行 / 签到 / 凭据）+ 任务摘要 + 组外续期；
+   * ② 批量：同一组四项只读 + 成长摘要 + 下拉外续期（2026-10-26 两边统一）；
+   * ③ 一键复合只读（积分 / 旅行 / 签到状态 / 凭据状态 / 任务摘要；**不含**今日 Token）。
    * 成长摘要统一走 `refreshGrowthHint`（单账号 `force` 扫描），一键走全量扫描
    * （它本来就覆盖全部账号）。
    */
@@ -900,11 +849,14 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
-   * 批量条「刷新」的单项入口（四项各自独立）。
+   * 批量条「刷新」下拉的单项入口（积分 / 签到状态 / 凭证状态各自独立）。
    *
    * 与单账号菜单 `onRefreshPart` 同一口径：**只重读**某一层，不续期凭据（写 refresh_token）、
-   * 不提交签到。拆成四项而不是合成一个「刷新」：四类数据来源不同（上游 / 本机日志 /
-   * 本机签到 / 本机凭据），合成后失败原因分不清，慢的还会拖住快的。
+   * 不提交签到。拆成多项而不是合成一个「刷新」：各类数据来源不同（上游 / 本机签到 /
+   * 本机凭据），合成后失败原因分不清，慢的还会拖住快的。
+   *
+   * ⚠️ `tokens` 分支**已无入口**（2026-10-26 起「刷新今日 Token」不在任何菜单里），
+   * 保留它只为让 `AccountRefreshKind` 的四值语义完整（Trae 抽屉 / 用量页仍在用它）。
    */
   async function batchRefreshPart(kind: AccountRefreshKind) {
     if (batchBusy || quickActionBusy) return;
@@ -931,6 +883,24 @@ function RegionPanel({ region }: { region: Region }) {
       } else if (kind === "checkin") {
         const next = await fetchTodayCheckinMap(ids, region);
         if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
+      } else if (kind === "travel") {
+        /* 与单账号同一路径（`queryTravelStatuses` 批量版）。失败项保留旧值，
+           并且**不能**在没读到任何账号时亮「已更新」。 */
+        const result = await loadTravelMap(ids);
+        const okCount = ids.filter((id) => result.statuses[id] !== undefined).length;
+        if (okCount === 0) {
+          toast.error(t("wbAccounts.toast.travelFailed"));
+          return;
+        }
+        if (result.failedIds.length > 0) {
+          toast.warning(t("wbAccounts.toast.travelPartial", { ok: okCount, failed: result.failedIds.length }));
+        } else {
+          toast.success(t(REFRESH_DONE_LABEL[kind]), {
+            description: t("wbAccounts.toast.batchRefreshDesc", { n: ids.length }),
+          });
+        }
+        setBatchRefreshDoneKind(kind);
+        return;
       } else {
         await reconcileAccounts(region);
       }
@@ -1022,7 +992,7 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
-   * 批量条「刷新成长任务状态」：对**所选账号逐个**强制重扫任务摘要（仅 WB·CN 注入）。
+   * 刷新下拉的「刷新任务」：对**所选账号逐个**强制重扫任务摘要（仅 WB·CN 注入）。
    *
    * ## 为什么逐个扫，而不是一次全量 `growthTasksScan(scope, { force: true })`
    *
@@ -1037,12 +1007,15 @@ function RegionPanel({ region }: { region: Region }) {
    *
    * 失败口径：某个账号拿不到摘要就计入 `failed`；**全部失败**才报 error，
    * 部分成功仍算成功但把失败数写进描述 —— 不把「一半没刷到」报成「已完成」。
+   *
+   * ★ 返回值 `boolean` = 是否至少有一个账号刷到了摘要。刷新下拉里的「刷新任务」
+   * 用它决定要不要亮「已更新」（`RefreshTasksItem` 把 `false` 当失败，不亮对勾）。
    */
-  async function batchRefreshGrowth() {
-    if (region !== "cn") return;
-    if (batchBusy || quickActionBusy) return;
+  async function batchRefreshGrowth(): Promise<boolean> {
+    if (region !== "cn") return false;
+    if (batchBusy || quickActionBusy) return false;
     const targets = accounts.filter((a) => selectedKeys.has(selectionKey(a.id)));
-    if (targets.length === 0) return;
+    if (targets.length === 0) return false;
     setBatchBusy(true);
     setBatchRefreshKind("growth");
     const controller = beginBulkProgress(targets.length);
@@ -1074,7 +1047,8 @@ function RegionPanel({ region }: { region: Region }) {
           description: t("wbAccounts.toast.batchGrowthDesc", { n, failed: failed + notAttempted }),
         });
       }
-      setBatchRefreshDoneKind("growth");
+      /* 「已更新」由 `RefreshTasksItem` 自己亮（它拿这个返回值判定），不再走批量的 done 状态。 */
+      return n > 0;
     } finally {
       setBatchRefreshKind(null);
       setBatchBusy(false);
@@ -1082,25 +1056,50 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
-   * 工具栏「一键刷新」：刷新**全部账号**的账号信息（昵称 / 到期 / 需重登）、积分 / 旅行 /
-   * 今日 Token / 签到状态 / 任务完成情况。
+   * 页头「一键刷新」：把**卡片上能看到的读数**全部刷新到最新 ——
+   * 积分 / 旅行 / 签到状态 / 凭据状态 / 任务摘要。
    *
-   * 与「一键签到」明确分开：这里只重读数据，**不再顺带提交签到** ——
+   * ## 范围（2026-10-26 修订）
+   *
+   * | 项 | 刷新 | 说明 |
+   * |:--|:--|:--|
+   * | 积分 `credits` | ✅ | 上游，N 账号 × 3 路（3 并发 + 120ms） |
+   * | 旅行 `travel` | ✅ | 上游，webui 下 1 次批量 |
+   * | 签到状态 `checkin` | ✅ | 本机签到记录，1 次批量 |
+   * | 凭据状态 `credential` | ✅ | `reconcileAccounts`（重取账号库：昵称 / 到期 / 需重登） |
+   * | 任务摘要 `growth` | ✅ 仅国区 | 全量强制重扫（本来就覆盖全部账号） |
+   * | 今日 Token | ❌ **不在范围内** | 归批量条 / 抽屉的单项刷新；卡片已不展示它 |
+   *
+   * ## ★ 「凭据状态」为什么留在这里（2026-10-26 用户拍板）
+   *
+   * 卡片上的「凭据到期 / 刷新令牌到期」来自 `account.expiresAt` / `refreshExpiresAt`，
+   * **只能**由 `getAccounts`（即 `reconcileAccounts`）更新。把它移出会留下
+   * 「积分 / 旅行 / 签到都新了、凭据还是旧日期」的半新半旧卡片 —— 用户报过这类障。
+   * 因此一键刷新覆盖
+   * **卡片上所有可见读数**，不做取舍。
+   *
+   * ⚠️ 顶栏 ⟳ 与这里共用同一条命令（`reconcileAccounts`），这是**刻意**的：
+   * - 顶栏 ⟳ = 「重新发现账号库」：账号增减、安装 / 运行状态；
+   * - 页头一键刷新 = 「刷新这张卡上的数字」，含凭据到期。
+   * 两者数据层重叠，但用户心智不同；不要再试图把某一个拆成"只做一半"。
+   *
+   * 与「一键签到」明确分开：这里只重读数据，**不提交签到** ——
    * 否则点一次刷新就会把所有账号各打一次签到接口，正是用户要求避免的重复请求。
    *
-   * 任务摘要按用户选择走 `force`（绕过后端 10 分钟缓存），保证「一键刷新」之后
+   * 任务摘要走 `force`（绕过后端 10 分钟缓存），保证「一键刷新」之后
    * 卡片上的任务标签一定是最新值；扫描失败只影响这一项辅助信息，不阻断其余刷新。
    */
   async function quickRefreshAll(): Promise<boolean> {
     if (batchBusy || quickActionBusy || accounts.length === 0) return false;
     /* 兜底：即使按钮因切页恢复而暂时可点，模块级冷却仍能挡住重复请求。 */
-    if (Date.now() < quickRefreshCooldownUntil[region]) return false;
+    if (quickRefreshCoolingDown(scope)) return false;
     /* 先落一个截止时间：请求进行中切页再回来，按钮也不会立刻可点。 */
-    quickRefreshCooldownUntil[region] = Date.now() + QUICK_REFRESH_COOLDOWN_MS;
+    startQuickRefreshCooldown(scope);
     setQuickActionBusy("refresh");
     try {
       const ids = accounts.map((account) => account.id);
       let growthFailed = false;
+      let travelFailed = 0;
       const growthScan =
         region === "cn"
           ? api
@@ -1114,27 +1113,35 @@ function RegionPanel({ region }: { region: Region }) {
                 growthFailed = true;
               })
           : Promise.resolve();
+      /* 旅行层单独留一份失败计数：全部读不到时**不能**报「一键刷新完成」。 */
+      const travelScan = loadTravelMap(ids).then((result) => {
+        travelFailed = result.failedIds.length;
+      });
       await Promise.all([
         refreshCredits(ids, { region }),
-        loadTravelMap(ids),
+        travelScan,
         growthScan,
-        /* ★ 账号信息（昵称 / 到期 / 需重登）也归「刷新」管：漏掉它会留下
-           「账号已失效、指标刷新了但角标还是旧的」。与顶栏 ⟳ 同一条本地命令；
-           失败不阻断其余数据 —— 下次进入页面或顶栏刷新会再校准。 */
+        /* ★ 凭据状态（昵称 / 到期 / 需重登）与顶栏 ⟳ 同一条命令。留在这是**必须**的：
+           卡片的「凭据到期 / 刷新令牌到期」只有 `getAccounts` 能更新，移出会留下
+           「其他数字都新了、凭据还是旧日期」的半新半旧卡片。失败不阻断其余数据。 */
         reconcileAccounts(region).catch(() => undefined),
       ]);
-      /* 显式刷新 ⇒ 强制重算「今日 Token」（绕过后端 TTL 闸门）。 */
-      await loadTokenToday(true);
       const next = await fetchTodayCheckinMap(ids, region);
       if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
-      /* 不再复用批量刷新的「积分到期」文案：一键刷新实际覆盖五项数据，
-         toast 必须把范围说全，否则用户会以为只刷了积分。 */
+      /* toast 必须把范围说全，否则用户会以为「账号信息 / Token 也刷了」。 */
       const description = growthFailed
         ? t("wbAccounts.toast.quickRefreshTasksFailed", { n: ids.length })
         : region === "cn"
           ? t("wbAccounts.toast.quickRefreshScope", { n: ids.length })
           : t("wbAccounts.toast.quickRefreshScopeNoTasks", { n: ids.length });
-      toast.success(t("wbAccounts.toast.quickRefreshDone"), { description });
+      if (travelFailed > 0) {
+        /* 有账号没读到旅行状态 ⇒ **不报全成功**；已成功的项仍在界面上更新了。 */
+        toast.warning(t("wbAccounts.toast.quickRefreshTravelPartial", { n: ids.length, failed: travelFailed }), {
+          description,
+        });
+      } else {
+        toast.success(t("wbAccounts.toast.quickRefreshDone"), { description });
+      }
       return true;
     } finally {
       setQuickActionBusy(null);
@@ -1167,6 +1174,36 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
+   * 单账号「一键完成」的唯一实现 —— 卡片菜单与批处理都调它。
+   *
+   * 结局按 {@link CompleteTasksOutcome} 归一化，调用方只负责措辞；**不要**再在调用方
+   * 按 `claimed` 自己判一次，那正是「上报了进度却被说成没有可完成任务」的来源。
+   *
+   * 无论成败都强制重扫该账号摘要（失败也可能已被后端部分推进）；串在函数内部，
+   * 保证批处理并发时也不漏。
+   */
+  async function completeTasksOnce(account: AccountMeta): Promise<CompleteTasksOutcome> {
+    let outcome: CompleteTasksOutcome;
+    try {
+      const report = await api.growthTasksAuto(scope, account.id);
+      const claimed = report.claimed ?? 0;
+      if (!report.ok) {
+        outcome = { kind: "failed", message: report.message };
+      } else if (claimed > 0) {
+        outcome = { kind: "done", claimed, credit: report.credit ?? 0 };
+      } else if ((report.results ?? []).some((item) => item.status === "progressed")) {
+        outcome = { kind: "progressed" };
+      } else {
+        outcome = { kind: "skipped" };
+      }
+    } catch (error) {
+      outcome = { kind: "failed", message: String((error as Error)?.message ?? error) };
+    }
+    await refreshGrowthHint(account.id);
+    return outcome;
+  }
+
+  /**
    * 跑一组账号的成长任务（「一键完成」与批量条「完成任务」共用）。
    *
    * 调用方负责先扫描摘要、筛出可行动账号并算出跳过数；这里只负责逐账号执行、
@@ -1182,25 +1219,7 @@ function RegionPanel({ region }: { region: Region }) {
     try {
       outcomes = await mapWithConcurrency(
         targets,
-        async (account): Promise<CompleteTasksOutcome> => {
-          let outcome: CompleteTasksOutcome;
-          try {
-            const report = await api.growthTasksAuto(scope, account.id);
-            if (!report.ok) {
-              outcome = { kind: "failed" };
-            } else if ((report.results ?? []).some((r) => r.status === "claimed" || r.status === "progressed")) {
-              outcome = { kind: "done", credit: report.claimed ?? 0 };
-            } else {
-              outcome = { kind: "skipped" };
-            }
-          } catch {
-            outcome = { kind: "failed" };
-          }
-          /* ★ 无论成败都刷一次摘要（与改造前一致）：失败也可能已被后端部分推进，
-             不重扫会让卡片标签停在旧值。这一步串在 worker 内部，保证并发下也不漏。 */
-          await refreshGrowthHint(account.id);
-          return outcome;
-        },
+        completeTasksOnce,
         {
           concurrency: BATCH_WRITE_CONCURRENCY,
           gapMs: BATCH_WRITE_GAP_MS,
@@ -1213,6 +1232,7 @@ function RegionPanel({ region }: { region: Region }) {
     }
 
     let skippedCount = skipped;
+    let progressedCount = 0;
     let claimedCredit = 0;
     let done = 0;
     const failedIds: string[] = [];
@@ -1225,6 +1245,7 @@ function RegionPanel({ region }: { region: Region }) {
       }
       if (outcome.kind === "failed") failedIds.push(targets[index].id);
       else if (outcome.kind === "skipped") skippedCount += 1;
+      else if (outcome.kind === "progressed") progressedCount += 1;
       else {
         done += 1;
         claimedCredit += outcome.credit;
@@ -1237,6 +1258,9 @@ function RegionPanel({ region }: { region: Region }) {
     if (done > 0) {
       parts.push(t("wbAccounts.toast.completeSummary", { n: done, credit: claimedCredit }));
     }
+    if (progressedCount > 0) {
+      parts.push(t("wbAccounts.toast.completeProgressed", { n: progressedCount }));
+    }
     if (skippedCount > 0) parts.push(t("wbAccounts.toast.completeSkipped", { n: skippedCount }));
     if (failedIds.length > 0) {
       parts.push(t("wbAccounts.toast.completeFailed", { n: failedIds.length }));
@@ -1246,8 +1270,12 @@ function RegionPanel({ region }: { region: Region }) {
     if (failedIds.length === targets.length) {
       toast.error(t("wbAccounts.toast.completeDoneFail"), { description: summary });
     } else if (done === 0 && failedIds.length === 0) {
-      /* 全部跳过（已无任务可做）⇒ 不摆「任务完成」的成功语气。 */
-      toast.info(noneMessage, { description: summary });
+      /* 没有领到任何奖励 ⇒ 不摆「任务完成」的成功语气。但「已上报进度」仍然是一次
+         真实的动作（抽屉也是这么说的），不能并进「无事可做」。 */
+      toast.info(
+        progressedCount > 0 ? t("shared.growthTasks.progressedOnly") : noneMessage,
+        { description: summary },
+      );
     } else {
       toast.success(t("wbAccounts.toast.completeDone"), { description: summary });
     }
@@ -1269,39 +1297,13 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
-   * 工具栏「一键完成」：只对**有可领 / 可自动任务**的账号跑成长任务。
-   *
-   * 跳过依据是批量扫描得到的 `growthHints`（零额外上游请求）；
-   * 开工前先补一次非强制扫描，避免提示数据缺失时把账号全部跳过。
-   * 每个跑过的账号再刷一次摘要（后端 `force` 只支持单账号），保证卡片标签不失真。
-   */
-  async function quickCompleteAll() {
-    if (region !== "cn") return;
-    if (batchBusy || quickActionBusy || accounts.length === 0) return;
-    const hints = await scanGrowthHintsNow();
-    const targets = accounts.filter((account) => {
-      const hint = hints[account.id];
-      return Boolean(hint?.ok && (hint.autoable > 0 || hint.claimable > 0));
-    });
-    const skipped = accounts.length - targets.length;
-    if (targets.length === 0) {
-      toast.info(t("wbAccounts.toast.completeNone"));
-      return;
-    }
-
-    setQuickActionBusy("complete");
-    try {
-      await completeTasksFor(targets, skipped, t("wbAccounts.toast.completeNone"));
-    } finally {
-      setQuickActionBusy(null);
-    }
-  }
-
-  /**
    * 批量条「完成任务」：只对**勾选账号**跑成长任务（仅国内版）。
    *
    * 与「一键完成」共用扫描 / 筛选 / 执行 / 文案，差别只在作用域：
    * 没有可做任务的勾选账号计入「跳过」，而不是照样打上游换回一串失败。
+   *
+   * ⚠️ 2026-10-26（用户要求）：页头「一键完成」已删除 —— 成长任务是低频动作，
+   * 不值得占一枚页头按钮。批量条与单账号菜单仍保留该动作（用户显式勾选 / 指定账号时）。
    */
   async function batchCompleteTasks() {
     if (region !== "cn") return;
@@ -1612,45 +1614,108 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
+   * 卡片菜单「刷新任务」：重扫**单个**账号的任务摘要并给回执。
+   *
+   * 只更新卡片上的「可领 / 可自动」，不执行任务（执行是「完成任务」）。
+   * 返回 `false` 时调用方菜单不亮「已更新」。
+   */
+  async function onRefreshGrowthHintForCard(a: AccountMeta): Promise<boolean> {
+    if (growthHintRefreshingIds.has(a.id)) return false;
+    setGrowthHintRefreshingIds((prev) => new Set(prev).add(a.id));
+    try {
+      const ok = await refreshGrowthHint(a.id);
+      const label = accountDisplayName(a);
+      if (ok) {
+        toast.success(`${label}${t("shared.punct.colon")}${t("shared.growthTasks.refreshDone")}`);
+      } else {
+        toast.error(t("shared.refreshPart.fail"), { description: label });
+      }
+      return ok;
+    } finally {
+      setGrowthHintRefreshingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(a.id);
+        return next;
+      });
+    }
+  }
+
+  /**
+   * 抽屉「任务」的**统一刷新**：指标卡 ⟳ 与任务页签 ⟳ 走同一条。
+   *
+   * ★ 2026-10-26 用户报障：两个 ⟳ 此前各刷一半 —— 指标卡只强制重扫摘要
+   * （`growth_tasks_scan`，页签里的列表不动），页签只重拉列表
+   * （`growth_tasks_list`，指标块与卡片标签的「可领 N」不动）。同一个「刷新」在两个
+   * 入口给出两种结果，等于没有一致的语义。页签入口把列表 `reload` 传进来，
+   * 页面先等摘要重扫、再等列表重拉，避免列表先完成而读回旧摘要；两路都成功才报成功。
+   * 指标卡入口没有已挂载列表，只重扫摘要。
+   */
+  async function refreshGrowthAccount(a: AccountMeta, reloadTasks?: () => Promise<boolean>) {
+    if (growthRefreshBusyId !== null) return;
+    setGrowthRefreshBusyId(a.id);
+    try {
+      const summaryOk = await refreshGrowthHint(a.id);
+      const listOk = reloadTasks ? await reloadTasks() : true;
+      const label = accountDisplayName(a);
+      if (summaryOk && listOk) {
+        toast.success(
+          `${label}${t("shared.punct.colon")}${t("shared.growthTasks.refreshDone")}`,
+        );
+      } else {
+        toast.error(t("shared.refreshPart.fail"), { description: label });
+      }
+    } finally {
+      setGrowthRefreshBusyId(null);
+    }
+  }
+
+  /**
    * 卡片菜单的「完成任务」（单账号一键完成）。
    *
    * 与抽屉里的「一键完成」走**同一个后端命令**（`growth_tasks_auto`），toast 也复用同一批词条 ——
-   * 两个入口对同一个动作给两套说法会让人怀疑哪个是真的。
+   * 两个入口对同一个动作给两套说法会让人怀疑哪个是真的。结局判定与摘要回写都收在
+   * {@link completeTasksOnce}（批处理也走它），这里只按四态选措辞。
    *
    * 完成后刷新**这一张卡**的任务摘要与积分：领到的奖励直接落在积分上，
    * 不重拉积分的话卡片会停在「刚领完却还是旧数」。
    */
   async function onCompleteTasks(a: AccountMeta) {
     const label = accountDisplayName(a);
-    try {
-      const report = await api.growthTasksAuto(scope, a.id);
-      if (!report.ok) {
-        toast.error(report.message ?? t("shared.growthTasks.autoNone"), { description: label });
+    const outcome = await completeTasksOnce(a);
+    switch (outcome.kind) {
+      case "failed":
+        toast.error(outcome.message ?? t("wbAccounts.toast.completeDoneFail"), { description: label });
         return;
-      }
-      const claimed = report.claimed ?? 0;
-      if (claimed > 0) {
-        toast.success(t("shared.growthTasks.autoDone", { n: claimed, credit: report.credit ?? 0 }), {
+      case "progressed":
+        /* 与抽屉「一键完成」同一句话：进度已上报、奖励未达标 ≠ 无事可做。 */
+        toast.info(t("shared.growthTasks.progressedOnly"), { description: label });
+        return;
+      case "skipped":
+        toast.info(t("shared.growthTasks.autoNone"), { description: label });
+        return;
+      default:
+        toast.success(t("shared.growthTasks.autoDone", { n: outcome.claimed, credit: outcome.credit }), {
           description: label,
         });
         void refreshCredits([a.id], { region });
-      } else {
-        toast.info(t("shared.growthTasks.autoNone"), { description: label });
-      }
-    } catch (e) {
-      toast.error(String((e as Error)?.message ?? e), { description: label });
-    } finally {
-      /* ★ **等**摘要回写再结束菜单项的进行中态：先解 busy 的话，新摘要到达之前
-         该项仍是可点状态，用户再点一次就会撞上后端的同账号互斥闸。 */
-      await refreshGrowthHint(a.id);
     }
   }
 
-  async function loadTravelMap(accountIds: string[], isStale?: () => boolean) {
-    const next = await fetchTravelMap(accountIds, region, isStale);
-    if (!isStale?.() && Object.keys(next).length > 0) {
-      setTravelMap((prev) => ({ ...prev, ...next }));
+  /**
+   * 重读旅行状态：**只写成功项**，失败项保留旧值。
+   *
+   * 返回值显式带 `failedIds`，供「单账号刷新」「批量刷新」「一键刷新」如实提示；
+   * 后台轮询忽略返回值即可（它本来就是容错优先）。
+   */
+  async function loadTravelMap(
+    accountIds: string[],
+    isStale?: () => boolean,
+  ): Promise<api.TravelStatusQuery> {
+    const result = await fetchTravelMap(accountIds, region, isStale);
+    if (!isStale?.() && Object.keys(result.statuses).length > 0) {
+      setTravelMap((prev) => ({ ...prev, ...result.statuses }));
     }
+    return result;
   }
 
   // 账号列表变化后并行查询旅行状态；后台领取后每 60 秒再拉一次，避免卡片停在「旅行中」。
@@ -1847,8 +1912,11 @@ function RegionPanel({ region }: { region: Region }) {
   const onRefreshPart = useCallback(
     async (a: AccountMeta, kind: AccountRefreshKind) => {
       const label = accountDisplayName(a);
-      await refreshBusy.run(a.id, kind, async () => {
-        try {
+      /* ⚠️ 错误 toast 放在 `run` **外面**：任务抛错 ⇒ `run` 不亮「已更新」。
+         此前 catch 在任务内部吞掉错误，失败项（尤其是「读不到旅行状态」）
+         仍会亮绿勾 —— 错误提示旁挂着「已更新」。 */
+      try {
+        await refreshBusy.run(a.id, kind, async () => {
           if (kind === "credits") {
             await refreshCredits([a.id], { region });
           } else if (kind === "tokens") {
@@ -1857,6 +1925,15 @@ function RegionPanel({ region }: { region: Region }) {
           } else if (kind === "checkin") {
             const next = await fetchTodayCheckinMap([a.id], region);
             if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
+          } else if (kind === "travel") {
+            /* 只重读这个账号的旅行 / 加速器状态（卡片 chip 与表格列共用 `travelMap`）。
+               ★ 没拿到条目 ⇒ 抛错：任务抛错时 `refreshBusy` 不会亮「已更新」，
+               用户看到的是「刷新失败」而不是绿勾。「无 Buddy」等正常业务态有 `label`，
+               仍然算读取成功。 */
+            const result = await loadTravelMap([a.id]);
+            if (result.statuses[a.id] === undefined) {
+              throw new Error(t("wbAccounts.toast.travelFailed"));
+            }
           } else {
             await reconcileAccounts(region);
           }
@@ -1864,10 +1941,10 @@ function RegionPanel({ region }: { region: Region }) {
              账号名会孤零零占一行，标题+短描述的上下排版反而失衡。
              批量刷新的 description 是完整句子，维持上下两行不动。 */
           toast.success(`${label}${t("shared.punct.colon")}${t(REFRESH_DONE_LABEL[kind])}`);
-        } catch (e) {
-          toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
-        }
-      });
+        });
+      } catch (e) {
+        toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
+      }
     },
     [refreshBusy, refreshCredits, region, loadTokenToday, reconcileAccounts, t],
   );
@@ -2403,6 +2480,42 @@ function RegionPanel({ region }: { region: Region }) {
   }
 
   /**
+   * 单账号「更多」菜单 —— **卡片页脚与表格行尾消费同一份**（T05）。
+   *
+   * 装配只留在这里：卡片与表格各写一份必然漂移（上一版就出现过「卡片有刷新、表格没有」）。
+   * `compact` 只影响触发按钮尺寸。
+   */
+  function renderAccountMenu(a: AccountMeta, compact = false) {
+    return (
+      <AccountMoreMenu
+        accountName={accountDisplayName(a)}
+        compact={compact}
+        onRefreshPart={(kind) => void onRefreshPart(a, kind)}
+        refreshKinds={WB_MENU_REFRESH_KINDS}
+        refreshingKinds={refreshBusy.kindsOf(a.id)}
+        doneKinds={refreshBusy.doneKindsOf(a.id)}
+        onRefresh={() => void onRefresh(a)}
+        refreshingToken={tokenRenewBusyId === a.id}
+        todayCheckedIn={checkinMap[a.id]}
+        expired={typeof a.expiresAt === "number" && a.expiresAt < Date.now()}
+        needsRelogin={a.needsRelogin}
+        onCheckin={() => void onCheckin(a)}
+        /* 成长任务只有国内版有 ⇒ 国际版不传，菜单里也就不出现该项。 */
+        onCompleteTasks={region === "cn" ? () => onCompleteTasks(a) : undefined}
+        onRefreshTasks={region === "cn" ? () => onRefreshGrowthHintForCard(a) : undefined}
+        refreshingTasks={growthHintRefreshingIds.has(a.id)}
+        onSwitch={() => setSwitchAccount(a)}
+        growthHint={growthHints[a.id]}
+        onExport={() => {
+          setExportTargets([a]);
+          setExportOpen(true);
+        }}
+        onDelete={() => onDelete(a)}
+      />
+    );
+  }
+
+  /**
    * 表格「状态」列：**直接复用卡片的徽章组件**（状态 / 成长任务 / 旅行）。
    *
    * ⚠️ 此前这里另写了一套：状态可以并列（「已签到」+「需重新登录」同时出现）、
@@ -2433,16 +2546,11 @@ function RegionPanel({ region }: { region: Region }) {
                 <span className="truncate font-medium" title={wbAccountName(account)}>
                   {wbAccountName(account)}
                 </span>
-                {/* ★「当前登录」与「使用中 N 个工具」读**同一组**程序位信号（见 `accountProgramSlots`）：
-                    文案直接复用卡片头部的 `card.currentLogin`，两处用词不会分叉。 */}
+                {/* ★「当前登录」读程序位信号（见 `accountProgramSlots`）；2026-10-26 起
+                    表格也不再显示「使用中 N 个工具」—— 右侧程序位列已经列出激活项，计数重复。 */}
                 {activeCount > 0 && (
                   <Badge variant="info" className={ACCOUNT_CHIP_CLASS}>
                     {t("wbAccounts.card.currentLogin")}
-                  </Badge>
-                )}
-                {activeCount >= 2 && (
-                  <Badge variant="info" className={ACCOUNT_CHIP_CLASS}>
-                    {t("wbAccounts.card.toolsInUse", { n: activeCount })}
                   </Badge>
                 )}
               </div>
@@ -2481,7 +2589,9 @@ function RegionPanel({ region }: { region: Region }) {
       header: t("wbAccounts.table.credits"),
       align: "right",
       render: (account) => {
-        const { current: currentCredit, total: totalCredit, expiry } = creditMetricValues(creditMap[account.id]);
+        const creditMetric = creditMetricValues(creditMap[account.id]);
+        const { current: currentCredit, total: totalCredit, expiry } = creditMetric;
+        const creditTip = creditMetricTip(creditMetric, t);
         const priority = account.id === priorityAccountId;
         const next = expiry?.batches[0] ?? null;
         const expiryLabel = nextExpiryLabel(expiry, t);
@@ -2497,7 +2607,7 @@ function RegionPanel({ region }: { region: Region }) {
             aria-label={t("wbAccounts.card.openCredits", { name: wbAccountName(account) })}
             className="flex w-full cursor-pointer flex-col items-end gap-0.5 text-right tabular-nums transition-opacity hover:opacity-85"
           >
-            <span className="whitespace-nowrap">
+            <span className="whitespace-nowrap" title={creditTip ?? undefined}>
               {currentCredit === null ? (
                 <span className="text-muted-foreground">—</span>
               ) : (
@@ -2532,8 +2642,16 @@ function RegionPanel({ region }: { region: Region }) {
         );
       },
     },
-    /* ★ 2026-10-23：此处的「到期」列已移除（凭证到期在卡片上从来不显示，列表也不必
-       留一列挤占积分/程序位的宽度）。到期信息仍在详情抽屉里，排序项 `expiry` 不受影响。 */
+    /* ★ 2026-10-26：卡片指标行下方新增「凭证到期 · 刷新令牌到期」，表格同批补「凭据」列。
+       2026-10-23 删掉旧「到期」列的理由是「卡片从不显示凭证到期」—— 该前提已不成立，
+       现在两边必须说法一致。单元格走卡片导出的 `CredentialExpiryMeta`（同一份日期格式与
+       缺值三分支），**不在这里另拼字符串**；纵向两行是因为单元格比卡片整行窄得多。
+       纯文本、无 `onClick`：表格行的可点区预算不变（勾选 + 行本身）。 */
+    {
+      key: "credential",
+      header: t("wbAccounts.table.credential"),
+      render: (account) => <CredentialExpiryMeta account={account} layout="column" />,
+    },
     {
       key: "programs",
       header: t("wbAccounts.table.programs"),
@@ -2575,7 +2693,13 @@ function RegionPanel({ region }: { region: Region }) {
   const expectedAuthFile = status?.authFile || descriptor.authFilename;
 
   // ---- 详情抽屉的数据装配（字段全部过 `displayText` 出口，见 display-text.ts）----
-  const detail = detailAccount;
+  /* 抽屉的**身份**仍是打开时的快照（`detailAccount`），但展示数据必须跟随 store：
+     续期凭据 / 单项刷新只经 `reconcileAccounts` 替换 `accounts`，**不会回写** `detailAccount`。
+     直接用快照会让凭据页签的「刷新令牌到期 / 最近续期」永远停在打开抽屉那一刻 ——
+     用户点完只看到 toast，下方数字不动。 */
+  const detail = detailAccount
+    ? accounts.find((account) => account.id === detailAccount.id) ?? detailAccount
+    : null;
   const detailName = detail
     ? displayText(detail.nickname) || displayText(detail.uid) || t("wbAccounts.card.unnamed")
     : "";
@@ -2618,19 +2742,6 @@ function RegionPanel({ region }: { region: Region }) {
                 tokenTodayTruncated,
                 t,
               ),
-            },
-            /* ★ 2026-10-22：卡片指标行瘦身后不再显示「最近使用」，该信息**下沉到这里** ——
-               它是「这个号多久没动了」的唯一去处（排序选项只给顺序，不给数值）。 */
-            {
-              label: t("wbAccounts.detail.lastUsed"),
-              value:
-                typeof detail.lastUsedAt === "number" && detail.lastUsedAt > 0
-                  ? formatRelativeTime(detail.lastUsedAt, t) ?? "—"
-                  : t("wbAccounts.detail.neverUsed"),
-              title:
-                typeof detail.lastUsedAt === "number" && detail.lastUsedAt > 0
-                  ? formatAbsoluteTime(detail.lastUsedAt)
-                  : undefined,
             },
           ],
         },
@@ -2700,20 +2811,25 @@ function RegionPanel({ region }: { region: Region }) {
               valueText: growthHint?.ok
                 ? t("shared.stat.taskClaimable", { n: growthHint.claimable })
                 : "—",
+              /* ★ 2026-10-26（用户要求）：副行从「已领 {n}」改为「已领 x/共 y」——
+                 只写「已领 13」读不出总数，与卡片徽章「已领 x/y」同一口径。 */
               subText: growthHint?.ok
-                ? t("shared.stat.taskClaimed", { n: growthHint.claimed })
+                ? t("shared.stat.taskClaimedTotal", {
+                    claimed: growthHint.claimed,
+                    total: growthHint.total,
+                  })
                 : undefined,
               /* 有可领 ⇒ 用与积分临期同一档警示色（都是「该动手了」）。 */
               tone: growthHint?.ok && growthHint.claimable > 0 ? ("warn" as const) : undefined,
               /* ★ 2026-10-23（用户要求）：任务卡也带 ⟳ —— 强制重扫这一个账号的任务摘要。
                  它不是 `AccountRefreshKind` 四项之一（那是「重读现成数据」的语义），
-                 走 `onRefresh` 自定义通道。 */
+                 走 `onRefresh` 自定义通道。
+                 ★ 2026-10-26：与任务页签的 ⟳ 合并为同一条刷新（摘要 + 列表），
+                 两边共用一个忙态，见 `refreshGrowthAccount`。 */
               onRefresh: () => {
-                if (growthHintBusyId !== null || !detail) return;
-                setGrowthHintBusyId(detail.id);
-                void refreshGrowthHint(detail.id).finally(() => setGrowthHintBusyId(null));
+                void refreshGrowthAccount(detail);
               },
-              refreshBusy: growthHintBusyId === detail.id,
+              refreshBusy: growthRefreshBusyId === detail.id,
             },
           ]
         : []),
@@ -2725,13 +2841,13 @@ function RegionPanel({ region }: { region: Region }) {
             ? t("shared.stat.credentialRelogin")
             : t("shared.stat.credentialExpired")
           : t("shared.stat.credentialOk"),
-        subText: credBad ? t("shared.stat.credentialBadSub") : t("shared.stat.credentialOkSub"),
+        subText: credentialHintOf(detail, t, now),
         tone: credBad ? "bad" : undefined,
         refreshKind: "credential",
       },
     ];
     return stats;
-  }, [detail, creditMap, checkinMap, growthHints, growthHintBusyId, scope, t, now]);
+  }, [detail, creditMap, checkinMap, growthHints, growthRefreshBusyId, scope, t, now]);
 
   /**
    * 「凭据」页签的凭据信息 —— 状态徽标 + 三行明细（凭据到期 / 刷新令牌到期 / 最近续期）。
@@ -2751,7 +2867,7 @@ function RegionPanel({ region }: { region: Region }) {
               : t("shared.stat.credentialExpired")
             : t("shared.stat.credentialOk"),
           tone: credBad ? ("bad" as const) : ("ok" as const),
-          hint: credBad ? t("shared.stat.credentialBadSub") : t("shared.stat.credentialOkSub"),
+          hint: credentialHintOf(detail, t, now),
           rows: [
             {
               label: t("wbAccounts.detail.tokenExpiry"),
@@ -2968,35 +3084,48 @@ function RegionPanel({ region }: { region: Region }) {
   /**
    * ★ 抽屉「签到历史（近 7 天）」。
    *
-   * 日期 + 结果来自 `getCheckinLogs()`（真实）；「获得积分」按**账号 + 日期**取积分统计的签到事件
-   * `amount`，取不到时为 `null` ⇒ 渲染「—」（**绝不**臆造固定奖励）。
+   * 「签没签到」以上游 `checkin_dates` 为准（本地台账只记本工具发起的签到），
+   * 本地日志只用来区分 `success` / `already` / `fail` 以及补足上游未覆盖的日期；
+   * 「获得积分」按**账号 + 日期**取积分统计的签到事件 `amount`，取不到时为 `null`
+   * ⇒ 渲染「—」（**绝不**臆造固定奖励）。
    */
   const detailCheckinHistory: DetailCheckinHistoryRow[] | null =
     detail && detailCheckinLogs
-      ? lastSevenDays().map((day) => {
-          const log = detailCheckinLogs
-            .filter(
-              (entry) =>
-                localDateKey(entry.ts) === day &&
-                (entry.accountId === detail.id ||
-                  (entry.accountId == null && Boolean(detail.email) && entry.email === detail.email)),
-            )
-            .sort((left, right) => right.ts - left.ts)[0];
-          const event = (detailCreditEvents ?? []).find(
-            (item) => item.kind === "checkin" && item.date === day && item.accountId === detail.id,
+      ? (() => {
+          /* 上游 `checkin_dates` 才是「签没签到」的权威来源：本地台账只记录**本工具发起**
+             的签到，用户在 IDE 里手动签的日子台账里没有 ⇒ 只按台账会把那些天错误地标成
+             「未签到」，与同页签上方展示的日期标签自相矛盾。金额仍只取积分统计（取不到「—」）。 */
+          const upstreamDates = new Set(
+            checkinCreditsOf(checkinDetailMap[detail.id] ?? {}).checkinDates ?? [],
           );
-          const amount = event && event.kind === "checkin" ? event.amount ?? null : null;
-          if (!log) {
-            return { date: day, resultLabel: t("shared.drawer.checkin.result.none"), tone: "none", amount };
-          }
-          if (log.result === "success") {
-            return { date: day, resultLabel: t("shared.drawer.checkin.result.success"), tone: "ok", amount };
-          }
-          if (log.result === "already") {
-            return { date: day, resultLabel: t("shared.drawer.checkin.result.already"), tone: "warn", amount };
-          }
-          return { date: day, resultLabel: t("shared.drawer.checkin.result.fail"), tone: "fail", amount };
-        })
+          return lastSevenDays().map((day) => {
+            const log = detailCheckinLogs
+              .filter(
+                (entry) =>
+                  localDateKey(entry.ts) === day &&
+                  (entry.accountId === detail.id ||
+                    (entry.accountId == null && Boolean(detail.email) && entry.email === detail.email)),
+              )
+              .sort((left, right) => right.ts - left.ts)[0];
+            const event = (detailCreditEvents ?? []).find(
+              (item) => item.kind === "checkin" && item.date === day && item.accountId === detail.id,
+            );
+            const amount = event && event.kind === "checkin" ? event.amount ?? null : null;
+            if (upstreamDates.has(day)) {
+              return { date: day, resultLabel: t("shared.drawer.checkin.result.success"), tone: "ok", amount };
+            }
+            if (!log) {
+              return { date: day, resultLabel: t("shared.drawer.checkin.result.none"), tone: "none", amount };
+            }
+            if (log.result === "success") {
+              return { date: day, resultLabel: t("shared.drawer.checkin.result.success"), tone: "ok", amount };
+            }
+            if (log.result === "already") {
+              return { date: day, resultLabel: t("shared.drawer.checkin.result.already"), tone: "warn", amount };
+            }
+            return { date: day, resultLabel: t("shared.drawer.checkin.result.fail"), tone: "fail", amount };
+          });
+        })()
       : null;
 
   /**
@@ -3021,19 +3150,16 @@ function RegionPanel({ region }: { region: Region }) {
   /**
    * 页头一键动作的可用性：**做不了就禁用**，别让按钮点下去只弹一句“没活可干”。
    *
-   * - 无账号 ⇒ 三枚全禁用（动作函数里的 early-return 用户看不见）。
+   * - 无账号 ⇒ 两枚全禁用（动作函数里的 early-return 用户看不见）。
    * - 「一键签到」：所有账号的今日签到都**已知为已签**才禁用；
    *   任一账号状态未知（`checkinMap` 还没回来）就保持可点 —— 不把「不知道」当成「已签」。
-   * - 「一键完成」：所有账号的任务摘要都**已知**且都无可领 / 可自动才禁用；
-   *   摘要缺失同样保持可点（点击会先补一次扫描拿到真实状态）。
+   *
+   * ⚠️ 2026-10-26（用户要求）：页头「一键完成」已删除 ⇒ 原来的
+   * `growthKnownAll` / `growthActionable` 两个判据一并移除。成长任务仍可用
+   * 「批量条 → 完成任务」或单账号菜单执行。
    */
   const noAccounts = accounts.length === 0;
   const checkinHasPending = accounts.some((account) => checkinMap[account.id] !== true);
-  const growthKnownAll = accounts.every((account) => growthHints[account.id] !== undefined);
-  const growthActionable = accounts.some((account) => {
-    const hint = growthHints[account.id];
-    return Boolean(hint?.ok && (hint.autoable > 0 || hint.claimable > 0));
-  });
   const quickBlocked = batchBusy || quickActionBusy !== null;
 
   return (
@@ -3081,7 +3207,7 @@ function RegionPanel({ region }: { region: Region }) {
             </>
           ) : null}
           <QuickRefreshAction
-            region={region}
+            scope={scope}
             busy={quickActionBusy === "refresh"}
             disabled={quickBlocked || noAccounts}
             disabledReason={noAccounts ? t("shared.toolbar.quickNoAccounts") : undefined}
@@ -3101,22 +3227,6 @@ function RegionPanel({ region }: { region: Region }) {
             }
             onClick={() => void quickCheckinAll()}
           />
-          {region === "cn" && (
-            <QuickActionButton
-              icon={<GrowthTaskIcon />}
-              label={t("shared.toolbar.quickComplete")}
-              busy={quickActionBusy === "complete"}
-              disabled={quickBlocked || noAccounts || (growthKnownAll && !growthActionable)}
-              disabledReason={
-                noAccounts
-                  ? t("shared.toolbar.quickNoAccounts")
-                  : growthKnownAll && !growthActionable
-                    ? t("shared.toolbar.quickCompleteNone")
-                    : undefined
-              }
-              onClick={() => void quickCompleteAll()}
-            />
-          )}
         </div>
       </header>
 
@@ -3148,30 +3258,8 @@ function RegionPanel({ region }: { region: Region }) {
           「一段代码」。 */}
       <AccountWorkbench
         query={query}
-        /* ★ 表格视图的「更多」：与卡片**同一个菜单组件**，避免「卡片有刷新、表格没有」。 */
-        renderActions={(row) => (
-          <AccountMoreMenu
-            accountName={accountDisplayName(row)}
-            compact
-            onRefreshPart={(kind) => void onRefreshPart(row, kind)}
-            refreshingKinds={refreshBusy.kindsOf(row.id)}
-            doneKinds={refreshBusy.doneKindsOf(row.id)}
-            onRefresh={() => void onRefresh(row)}
-            refreshingToken={tokenRenewBusyId === row.id}
-            todayCheckedIn={checkinMap[row.id]}
-            expired={typeof row.expiresAt === "number" && row.expiresAt < Date.now()}
-            needsRelogin={row.needsRelogin}
-            onCheckin={() => void onCheckin(row)}
-            /* 成长任务只有国内版有 ⇒ 国际版不传，菜单里也就不出现该项。 */
-            onCompleteTasks={region === "cn" ? () => onCompleteTasks(row) : undefined}
-            growthHint={growthHints[row.id]}
-            onExport={() => {
-              setExportTargets([row]);
-              setExportOpen(true);
-            }}
-            onDelete={() => onDelete(row)}
-          />
-        )}
+        /* ★ 表格视图的「更多」：与卡片**同一个装配函数**（R07）。 */
+        renderActions={(row) => renderAccountMenu(row, true)}
         onQueryChange={setQuery}
         searchInputRef={searchRef}
         sort={sort}
@@ -3362,10 +3450,10 @@ function RegionPanel({ region }: { region: Region }) {
           onRefreshToken: () => void batchRefreshToken(),
           refreshingToken: batchRefreshKind === "token",
           doneToken: batchRefreshDoneKind === "token",
-          /* 成长任务摘要刷新只有国内版有成长体系 ⇒ 国际版不注入，下拉里也就不出现该项。 */
-          onRefreshGrowth: region === "cn" ? () => void batchRefreshGrowth() : undefined,
-          refreshingGrowth: batchRefreshKind === "growth",
-          doneGrowth: batchRefreshDoneKind === "growth",
+          /* ★ 任务重扫（仅国内版）：下拉里的「刷新任务」，与单账号菜单**同一项**、
+              同一条分隔线位置（都在刷新组内、无分隔线）。国际版没有成长体系 ⇒ 不注入。
+              ⚠️ 直接返回 Promise<boolean>：`RefreshTasksItem` 靠它决定亮不亮「已更新」。 */
+          onRefreshTasks: region === "cn" ? () => batchRefreshGrowth() : undefined,
           onCheckin: () => void batchCheckin(),
           /* 成长任务只有国内版有 ⇒ 国际版不渲染该项（与卡片菜单同一门控）。 */
           onCompleteTasks: region === "cn" ? () => void batchCompleteTasks() : undefined,
@@ -3417,22 +3505,11 @@ function RegionPanel({ region }: { region: Region }) {
                             <AccountCard
                               key={a.id}
                               account={a}
-                              onDelete={onDelete}
-                              onSwitch={setSwitchAccount}
-                              onCheckin={onCheckin}
-                              onRefresh={onRefresh}
-                              refreshingToken={tokenRenewBusyId === a.id}
-                              onRefreshPart={onRefreshPart}
-                              refreshingKinds={refreshBusy.kindsOf(a.id)}
-                              doneKinds={refreshBusy.doneKindsOf(a.id)}
-                              onExport={(target) => {
-                                setExportTargets([target]);
-                                setExportOpen(true);
-                              }}
+                              /* ★ 菜单由页面装配，卡片只负责摆到页脚（与表格 renderActions 同源）。 */
+                              menu={renderAccountMenu(a)}
                               todayCheckedIn={checkinMap[a.id]}
                               travelStatus={travelMap[a.id]}
                               growthHint={growthHints[a.id]}
-                              onCompleteTasks={region === "cn" ? onCompleteTasks : undefined}
                               credit={creditMap[a.id]}
                               creditLoading={creditLoadingMap[a.id]}
                               creditPriority={a.id === priorityAccountId}
@@ -3774,8 +3851,19 @@ function RegionPanel({ region }: { region: Region }) {
         checkinHistory={detailCheckinHistory}
         /* ★ 成长任务中心：**只在 WorkBuddy 国内版**注入 —— 国际版没有这套成长体系
            （后端 `growth_tasks` 对 Global 直接返回「暂无」），Trae / Qoder 更没有。
-           注入的是「账号定位」而非数据：任务列表由面板在切到页签时自取。 */
-        growthTasks={detail && scope === "wb-cn" ? { scope, accountId: detail.id } : null}
+           注入的是「账号定位」而非数据：任务列表由面板在切到页签时自取。
+           ★ 2026-10-26：`onRefresh` / `refreshing` 把页签 ⟳ 与指标卡 ⟳
+           接到同一条统一刷新上（摘要重扫 + 列表重拉，共用一个忙态）。 */
+        growthTasks={
+          detail && scope === "wb-cn"
+            ? {
+                scope,
+                accountId: detail.id,
+                refreshing: growthRefreshBusyId === detail.id,
+                onRefresh: (reload) => void refreshGrowthAccount(detail, reload),
+              }
+            : null
+        }
         /* 跑完任务后刷**这一张卡**的提示标签（不重扫全表）。 */
         onGrowthTasksChanged={detail ? () => void refreshGrowthHint(detail.id) : undefined}
         // ★ B5：签到积分（**有数据才渲染**；查询未回来 / 失败时为 `null`）。

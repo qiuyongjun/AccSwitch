@@ -182,6 +182,18 @@ fn sweep_trash_entries(entries: &mut Vec<TrashEntry>, now: DateTime<Local>) -> u
 ///
 /// 落盘顺序见模块头「新增侧先落」。
 pub fn trash_account_for(region: QoderRegion, uid: &str) -> Result<bool, String> {
+    with_accounts_txn(region, || trash_account_inner(region, uid))
+}
+
+/// 账号库写事务（键 = 账号库文件路径，与 `account::accounts_txn` 同一把锁）。
+fn with_accounts_txn<T>(
+    region: QoderRegion,
+    f: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    crate::modules::accounts_txn::with_txn(&paths::accounts_file_for(region), f)
+}
+
+fn trash_account_inner(region: QoderRegion, uid: &str) -> Result<bool, String> {
     let mut live = account::load_accounts_checked_for(region)?;
     let Some(index) = live.accounts.iter().position(|account| account.uid == uid) else {
         return Ok(false);
@@ -224,6 +236,12 @@ pub fn trash_account_for(region: QoderRegion, uid: &str) -> Result<bool, String>
 /// - 归属校验**必须**走 [`super::account::upsert_account_for`]（它带 `ensure_region_matches`），
 ///   不得绕过 —— 直接 `push` 会把一条错区记录写进本区库。
 pub fn restore_account_for(region: QoderRegion, key: &str) -> Result<bool, String> {
+    // 与外层 `trash_account_for` 共用同一把账号库锁；内部的
+    // `upsert_account_for` 会再次进入事务 ⇒ 走重入分支，不会自锁。
+    with_accounts_txn(region, || restore_account_inner(region, key))
+}
+
+fn restore_account_inner(region: QoderRegion, key: &str) -> Result<bool, String> {
     let mut trash = load_trash_checked_for(region)?;
     let Some(index) = trash.iter().position(|entry| entry.key == key) else {
         return Err("回收站中没有该账号".to_string());

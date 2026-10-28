@@ -48,6 +48,10 @@ pub struct CheckinOptions {
     pub skip_expired: bool,
     /// 网络层失败的重试次数（业务失败不重试）。
     pub retry: u32,
+    /// 本次批处理的**任务 id**（可选）：用于协作式取消与进度关联。
+    ///
+    /// 缺省 `None` = 不可取消（老调用方 / 排程任务）。
+    pub task_id: Option<String>,
 }
 
 impl Default for CheckinOptions {
@@ -60,7 +64,68 @@ impl Default for CheckinOptions {
             skip_checked_in: true,
             skip_expired: true,
             retry: 1,
+            task_id: None,
         }
+    }
+}
+
+/// 已请求取消的签到任务 id。
+///
+/// **协作式**：只拦「尚未开始」的账号，在途请求会跑完 —— 与前端
+/// `mapWithConcurrency` 的 `signal` 同一语义。取消结果必须如实报「N 个未处理」。
+fn cancelled_tasks() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static TASKS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    TASKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 取消标记表的容量上限。
+///
+/// 正常路径由 [`CancelGuard`] 在任务收尾时清掉；这里防的是**异常路径**：
+/// 取消请求迟到（任务已收尾才到达）、任务发起后从未真正启动、以及进程内
+/// 反复「点了取消又放弃」。到达上限时整表清空 —— 代价是极少数仍在排队的
+/// 取消请求失效（用户再点一次即可），换来这张表不可能无界增长。
+const CANCELLED_TASKS_MAX: usize = 64;
+
+/// 请求取消某个签到任务（未开始的不再开始）。幂等。
+pub fn request_cancel(task_id: &str) {
+    if task_id.trim().is_empty() {
+        return;
+    }
+    let mut set = cancelled_tasks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if set.len() >= CANCELLED_TASKS_MAX {
+        set.clear();
+    }
+    set.insert(task_id.to_string());
+}
+
+fn is_cancelled(task_id: &str) -> bool {
+    cancelled_tasks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .contains(task_id)
+}
+
+/// 任务结束后清掉取消标记，避免同一 id 被复用（复用时也不残留「已取消」）。
+fn clear_cancelled(task_id: &str) {
+    let mut set = cancelled_tasks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    set.remove(task_id);
+}
+
+/// 取消标记的 RAII 清理器：任务无论怎么退出都清掉自己那条标记。
+///
+/// 只在函数末尾手写 `clear_cancelled` 是不够的 —— `run` 有多条提前返回路径
+/// （空计划、取消 break、未来新增的 early return），漏一处就让该 id 永久留在表里。
+/// 优先在 `run` 开头建一个守卫，比在每个出口各写一次可靠。
+struct CancelGuard(String);
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        clear_cancelled(&self.0);
     }
 }
 
@@ -104,6 +169,15 @@ pub struct CheckinReport {
     pub warnings: Vec<String>,
     /// 逐账号结果。
     pub results: Vec<AccountOutcome>,
+    /// 计划内但**未执行**的账号数（协作式取消后尚未开始的项）。
+    ///
+    /// ⚠️ 与「被策略跳过」不是一回事：已签到 / 凭据过期 / 冷却中的账号**不在计划里**，
+    /// 它们既不计入 `total` 也不计入这里 —— 否则正常完成的一批会被报成「有未处理」。
+    pub unprocessed: usize,
+    /// 未执行账号的 id（与 `unprocessed` 同长；供前端重试名单使用）。
+    pub unprocessed_ids: Vec<String>,
+    /// 本轮是否被取消（可能是部分执行后取消）。
+    pub cancelled: bool,
 }
 
 /// 签到结束后写入 `checkin_summary.json` 的结果明细（线上形态，camelCase）。
@@ -120,6 +194,35 @@ fn outcome_json(outcome: &AccountOutcome) -> Value {
         "errorType": outcome.error_type,
         "cooldownUntil": outcome.cooldown_until,
     })
+}
+
+/// 落一条**结构化**签到流水（前缀见
+/// [`crate::modules::trae::TRAE_CHECKIN_RECORD_PREFIX`]）。
+///
+/// ## 与结尾那行「签到完成: 成功 N/…」的分工
+///
+/// 汇总行给人看：这一轮总共几个成功。它**不含 `userId`**，因此回答不了
+/// 「某个账号某天签了没有」。流水行正好补这一半：`userId` + `action` + `delta`
+/// 都是结构化字段，读侧（`logs::parse_checkin_record`）按行首契约解析，
+/// 不再从自然语言里猜。
+///
+/// 每一条 `AccountOutcome` 都必须落（成功 / 已签到 / 失败三种都落）：
+/// 少了失败那一支，抽屉里的「失败」就永远没有数据源。
+fn log_record(variant: TraeVariant, outcome: &AccountOutcome) {
+    store::append_log(
+        &paths::checkin_log_file_for(variant),
+        &format!(
+            "{} userId={} action={} delta={} code={}",
+            crate::modules::trae::TRAE_CHECKIN_RECORD_PREFIX,
+            outcome.user_id,
+            outcome.action,
+            outcome.delta,
+            outcome
+                .code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    );
 }
 
 /// 状态预检结果。
@@ -367,6 +470,31 @@ where
     // 整条链路用同一个变体：账号列表、账号视图、冷却、剩余积分四份数据必须来自
     // 同一条产品线，否则会出现「按 Trae CN 的冷却去过滤 Trae Work 的账号」这种串味。
     let variant = options.variant;
+    /* ★ 事件必须携带**任务标识 + 产品线 + 区域**：页面只消费当前任务的事件。
+    没有这两个字段时，切区后旧任务的收尾事件会把新批次的进度画成 4/2。
+
+    `region` 单独给出而不是让前端从 `variant` 前缀反推：`as_str()` 有 6 个取值
+    （`trae_work` / `trae_cn` / `trae_merged` / `global` / `global_trae_code` /
+    `global_trae_merged`），只有 `TraeVariant::region()` 知道谁属哪一区。
+    前端按 `startsWith("global")` 复刻这套映射，等于把同一事实写两遍 ——
+    将来新增变体时，前面那份会静默错而没有任何测试会红。 */
+    let event_task_id = options.task_id.clone();
+    let event_variant = variant.as_str();
+    let event_region = variant.region().as_str();
+    let mut emit = |event: Value| {
+        let mut event = event;
+        if let Some(object) = event.as_object_mut() {
+            object.insert("variant".to_string(), json!(event_variant));
+            object.insert("region".to_string(), json!(event_region));
+            if let Some(task_id) = event_task_id.as_deref() {
+                object.insert("taskId".to_string(), json!(task_id));
+            }
+        }
+        on_event(&event);
+    };
+    /* 取消标记由守卫在**任意**退出路径上清理（含空计划早退与取消 break）——
+    散在各出口手写 `clear_cancelled` 迟早漏一处，那条 id 就永久留在表里。 */
+    let _cancel_guard = options.task_id.clone().map(CancelGuard);
     // 一次性读取全部决策依据，交给纯函数 `plan` 决定签谁、按什么顺序签。
     let planned = plan(
         account::entries_for(variant),
@@ -376,7 +504,7 @@ where
         &options,
     );
 
-    on_event(&json!({ "type": "start", "total": planned.len() }));
+    emit(json!({ "type": "start", "total": planned.len() }));
     report.total = planned.len();
 
     if planned.is_empty() {
@@ -390,11 +518,24 @@ where
             warnings: Vec::new(),
         };
         let _ = credits::save_summary_for(variant, &summary);
-        on_event(&json!({ "type": "done", "ok": 0, "already": 0, "failed": 0, "total": 0 }));
+        emit(json!({ "type": "done", "ok": 0, "already": 0, "failed": 0, "total": 0 }));
+        /* 空队列提前返回也要清取消标记 —— 否则该 task id 会永久留在全局集合里。 */
+        if let Some(task_id) = options.task_id.as_deref() {
+            clear_cancelled(task_id);
+        }
         return report;
     }
 
     for (index, (uid, raw)) in planned.iter().enumerate() {
+        /* 协作式取消：只拦**尚未开始**的账号；在途的会跑完并计入报告。 */
+        if let Some(task_id) = options.task_id.as_deref() {
+            if is_cancelled(task_id) {
+                /* 记住「本轮被取消」：报告的 `total` 仍是计划数，但只有已执行的进了 results。 */
+                report.cancelled = true;
+                emit(json!({ "type": "cancelled", "done": index, "total": planned.len() }));
+                break;
+            }
+        }
         let info = jwt::parse(&raw.jwt);
 
         // JWT 临期/过期告警（不阻断：临期账号仍可尝试签到）。
@@ -426,7 +567,7 @@ where
                     error_type: None,
                     cooldown_until: None,
                 };
-                on_event(&json!({
+                emit(json!({
                     "type": "account",
                     "index": index + 1,
                     "userId": uid,
@@ -435,6 +576,7 @@ where
                     "message": outcome.message,
                 }));
                 report.failed += 1;
+                log_record(variant, &outcome);
                 report.results.push(outcome);
                 continue;
             }
@@ -465,7 +607,7 @@ where
             // 记台账：上游已经签过，也算「今日已签到」——下一轮 `skip_checked_in`
             // 应当跳过它，而不是再探一次。
             let _ = credits::mark_checked_in_for(variant, uid);
-            on_event(&json!({
+            emit(json!({
                 "type": "account",
                 "index": index + 1,
                 "userId": uid,
@@ -473,7 +615,7 @@ where
                 "status": "already",
                 "credits": credits_value,
             }));
-            report.results.push(AccountOutcome {
+            let outcome = AccountOutcome {
                 user_id: uid.clone(),
                 name: raw.name.clone(),
                 ok: true,
@@ -488,7 +630,9 @@ where
                 delta: 0,
                 error_type: None,
                 cooldown_until: None,
-            });
+            };
+            log_record(variant, &outcome);
+            report.results.push(outcome);
             continue;
         }
 
@@ -541,7 +685,7 @@ where
             report.failed += 1;
         }
 
-        on_event(&json!({
+        emit(json!({
             "type": "account",
             "index": index + 1,
             "userId": uid,
@@ -554,6 +698,7 @@ where
             "errorType": outcome.error_type,
             "cooldownUntil": outcome.cooldown_until,
         }));
+        log_record(variant, &outcome);
         report.results.push(outcome);
     }
 
@@ -561,6 +706,20 @@ where
     //
     // ⚠️ 不要再用摘要去判定「今日已签到」：它每轮整体覆盖，只包含本轮处理过的账号。
     // 那个判定由 `credits::checked_in_today_for`（台账 ∪ 当日积分明细）负责。
+    //
+    // ★ 取消后「未处理」= 计划内但没执行的账号（**不含**被策略跳过的账号 —— 它们
+    // 根本不在 `planned` 里，正常完成的一批不该出现未处理项）。
+    let executed: std::collections::HashSet<&str> = report
+        .results
+        .iter()
+        .map(|outcome| outcome.user_id.as_str())
+        .collect();
+    report.unprocessed_ids = planned
+        .iter()
+        .map(|(uid, _)| uid.clone())
+        .filter(|uid| !executed.contains(uid.as_str()))
+        .collect();
+    report.unprocessed = report.unprocessed_ids.len();
     let summary = credits::CheckinSummary {
         time: Some(store::now_iso()),
         results: report.results.iter().map(outcome_json).collect(),
@@ -587,12 +746,15 @@ where
         ),
     );
 
-    on_event(&json!({
+    emit(json!({
         "type": "done",
         "ok": report.total_ok,
         "already": report.already,
         "failed": report.failed,
         "total": report.total,
+        /* 取消后的收尾：前端据 `unprocessed` 明确提示剩余数量（不能报「全部成功」）。 */
+        "unprocessed": report.unprocessed,
+        "cancelled": report.cancelled,
     }));
 
     report
@@ -611,6 +773,10 @@ pub fn report_json(report: &CheckinReport) -> Value {
         "failed": report.failed,
         "warnings": report.warnings,
         "results": report.results.iter().map(outcome_json).collect::<Vec<_>>(),
+        /* 「未处理」只算**计划内未执行**（取消），不含被策略跳过的账号。 */
+        "unprocessed": report.unprocessed,
+        "unprocessedIds": report.unprocessed_ids,
+        "cancelled": report.cancelled,
     })
 }
 

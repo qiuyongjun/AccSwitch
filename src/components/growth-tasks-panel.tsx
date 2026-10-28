@@ -53,14 +53,24 @@ export interface GrowthTasksPanelProps {
    */
   onChanged?: () => void;
   /**
-   * 账号显示名：手动刷新成功的回执带上它（「QYJ：任务列表已刷新」），
-   * 与其它三项 `onRefreshPart` 回执同款排版（2026-10-23 用户要求）。
-   * 缺省时退回不带名字的单行文案。
+   * 页面下发的统一刷新入口（**任务页签 ⟳ 与指标卡 ⟳ 共用**）。
+   *
+   * 它同时做两件事：强制重扫摘要（`growth_tasks_scan`）与重拉列表（本面板的
+   * `reload` 作为参数交给页面等待）。页面负责回执与忙态 —— 两个入口对同一个
+   * 「刷新」必须给出同一种结果（2026-10-26 用户报障）。
    */
-  accountName?: string;
+  onRefresh: (reload: () => Promise<boolean>) => void;
+  /** 统一刷新进行中（页面忙态，与指标卡 ⟳ 同源）⇒ ⟳ 转圈并禁用。 */
+  refreshing: boolean;
 }
 
-export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: GrowthTasksPanelProps) {
+export function GrowthTasksPanel({
+  scope,
+  accountId,
+  onChanged,
+  onRefresh,
+  refreshing,
+}: GrowthTasksPanelProps) {
   const t = useT();
   const [view, setView] = useState<GrowthTasksView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,26 +80,23 @@ export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: G
   /**
    * 拉取任务列表。
    *
-   * @param announce 仅**手动点击刷新按钮**时为 true ⇒ 成功后弹「已刷新」回执。
-   *   挂载时的首次拉取、`runAuto` / `claimOne` 收尾的自动 reload 都走默认 false：
-   *   前者是「打开页签」，弹回执是噪音；后者各自动作已自带 toast，
-   *   再叠一条「已刷新」会把真正要看的「领了什么」挤下去。
-   *   失败回执**不分场景**都弹 —— 失败恰恰最需要被看见。
+   * 保持**静默**：成功回执由页面在统一刷新里统一弹（页签 ⟳ 与指标卡 ⟳ 同一条），
+   * 挂载时的首次拉取、动作收尾的自动 reload 都不该再弹一条。失败回执不分场景
+   * 都弹 —— 失败恰恰最需要被看见。
    */
-  const reload = useCallback(async (announce = false) => {
+  const reload = useCallback(async (): Promise<boolean> => {
     setLoading(true);
     try {
       const next = await growthTasksList(scope, accountId);
       setView(next);
       if (!next.ok) {
         toast.error(t("shared.growthTasks.loadFailed", { message: next.message ?? "" }));
-      } else if (announce) {
-        const done = t("shared.growthTasks.refreshDone");
-        toast.success(accountName ? `${accountName}${t("shared.punct.colon")}${done}` : done);
       }
+      return next.ok;
     } catch (error) {
       setView({ ok: false, tasks: [], message: String((error as Error)?.message ?? error) });
       toast.error(t("shared.growthTasks.loadFailed", { message: String((error as Error)?.message ?? error) }));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -201,11 +208,12 @@ export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: G
           size="sm"
           variant="ghost"
           className="h-7 shrink-0 px-2"
-          disabled={loading}
-          onClick={() => void reload(true)}
+          disabled={loading || refreshing}
+          onClick={() => onRefresh(reload)}
           aria-label={t("shared.growthTasks.refresh")}
+          title={t("shared.growthTasks.refresh")}
         >
-          {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          {loading || refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
         </Button>
       </div>
     );
@@ -219,7 +227,10 @@ export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: G
           现在合成一枚（语义见 `runAuto` 注释）：可领或可自动，任一为真即可点。 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11.5px] text-muted-foreground">
+          {/* ★ 2026-10-26（用户要求）：摘要行补「共 N 项」—— 与指标块「已领 x/y」同口径
+              （`GrowthTasksView.total` = 后端 `tasks.len()`，含未解锁任务）。 */}
           {t("shared.growthTasks.summary", {
+            total: view?.total ?? 0,
             claimable: view?.claimable ?? 0,
             claimed: view?.claimed ?? 0,
             autoable: view?.autoable ?? 0,
@@ -230,11 +241,12 @@ export function GrowthTasksPanel({ scope, accountId, onChanged, accountName }: G
             size="sm"
             variant="ghost"
             className="h-7 px-2"
-            disabled={busy !== null}
-            onClick={() => void reload(true)}
+            disabled={busy !== null || loading || refreshing}
+            onClick={() => onRefresh(reload)}
             aria-label={t("shared.growthTasks.refresh")}
+            title={t("shared.growthTasks.refresh")}
           >
-            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {loading || refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           </Button>
           <DemoAction>
             <Button

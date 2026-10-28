@@ -566,6 +566,7 @@ pub fn run() {
             commands::trae_import_accounts,
             commands::trae_group_op,
             commands::trae_checkin,
+            commands::trae_checkin_cancel,
             commands::trae_refresh_credits,
             commands::trae_refresh_jwt,
             commands::trae_clear_cooldown,

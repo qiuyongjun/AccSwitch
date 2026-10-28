@@ -433,6 +433,7 @@ fn api_routes() -> Router {
             get(api_trae_account_token_today),
         )
         .route("/api/trae/checkin", post(api_trae_checkin))
+        .route("/api/trae/checkin/cancel", post(api_trae_checkin_cancel))
         .route("/api/trae/credits", get(api_trae_credits))
         .route("/api/trae/token-stats", get(api_trae_token_statistics))
         .route("/api/trae/logs", get(api_trae_logs))
@@ -1488,16 +1489,16 @@ async fn api_growth_tasks_scan(Json(body): Json<Value>) -> Response {
         }
     };
     if region != Region::Cn {
-        return json_err("国际版暂无成长任务体系".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            "国际版暂无成长任务体系".to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let account_id = body
         .get("accountId")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty());
-    let force = body
-        .get("force")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let force = body.get("force").and_then(Value::as_bool).unwrap_or(false);
     json_ok(growth_tasks::scan_for(region, account_id, force).await)
 }
 
@@ -3548,7 +3549,14 @@ async fn api_trae_token_statistics(RawQuery(query): RawQuery) -> Response {
     json_ok(trae::handlers::token_statistics(days, scope))
 }
 
-/// GET /api/trae/logs —— 运行日志（`kind` / `date` / `keyword` / `limit` / `variant` 均可选）。
+/// GET /api/trae/logs —— 运行日志（`kind` / `date` / `keyword` / `checkinUserId` /
+/// `limit` / `variant` 均可选）。
+///
+/// ⚠️ 这段 `params` 是**双通道字段名的唯一映射点**：桌面端 `commands::get_trae_logs`
+/// 透传了同名键，而这里漏一个键不会报错 —— core 的 `LogQuery::from_value` 对缺失键
+/// 一律回落「不限」，症状是「WebUI 上筛选静默失效、桌面端正常」。2026-10-28 补
+/// `checkinUserId`：漏它时近 7 天签到历史会取到**全区域**当天最新一条，
+/// 目标账号若恰好不是最新那条，它的记录就整条消失（失败记录尤其容易丢）。
 ///
 /// 读取 `logs/` 下的纯文本日志文件，属于阻塞 IO，因此放进 blocking 线程池。
 async fn api_trae_logs(RawQuery(query): RawQuery) -> Response {
@@ -3558,6 +3566,7 @@ async fn api_trae_logs(RawQuery(query): RawQuery) -> Response {
         "kind": read("kind"),
         "date": read("date"),
         "keyword": read("keyword"),
+        "checkinUserId": read("checkinUserId"),
         "limit": limit,
         "variant": read("variant"),
     });
@@ -3904,6 +3913,25 @@ async fn api_trae_checkin(Json(body): Json<Value>) -> Response {
     let report = trae::handlers::run_checkin_report(parsed).await;
     observe_trae_checkin_summary(task, &report);
     json_ok(report)
+}
+
+/// POST /api/trae/checkin/cancel —— 取消一次批量签到（`{ taskId }`）。
+///
+/// 协作式：只拦尚未开始的账号；与 `trae_checkin` 的 `options.taskId` 配对。
+async fn api_trae_checkin_cancel(Json(body): Json<Value>) -> Response {
+    if let Err(error) = require_capability(Product::Trae, capability::Capability::Checkin) {
+        return json_err(error, StatusCode::FORBIDDEN);
+    }
+    let Some(task_id) = body
+        .get("taskId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return json_err("缺少 taskId".to_string(), StatusCode::BAD_REQUEST);
+    };
+    trae::handlers::cancel_checkin(task_id);
+    json_ok(json!({ "ok": true }))
 }
 
 async fn api_trae_refresh_credits(Json(body): Json<Value>) -> Response {
@@ -7027,9 +7055,16 @@ async fn api_qoder_checkin_claim(Json(body): Json<Value>) -> Response {
 }
 
 /// GET /api/qoder/credits —— 区域额度 / 套餐视图（逐账号 + 汇总；部分失败如实报）。
+///
+/// `accountIds` 是逗号分隔的 uid 列表（同 [`parse_id_list`]）：**缺失 = 全区域**，
+/// 显式空串 = 没有目标账号（一个上游请求都不发，不退化为全量）。
 async fn api_qoder_credits(RawQuery(query): RawQuery) -> Response {
     match qoder_region_from_query(query.as_deref()) {
-        Ok(region) => json_ok(qoder::credits::region_view(region).await),
+        Ok(region) => {
+            let ids =
+                query_value(query.as_deref(), "accountIds").map(|raw| parse_id_list(Some(raw)));
+            json_ok(qoder::credits::region_view(region, ids.as_deref()).await)
+        }
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),
     }
 }

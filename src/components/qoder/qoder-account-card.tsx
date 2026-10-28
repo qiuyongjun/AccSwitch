@@ -15,26 +15,37 @@
  *
  * | 块 | WB / Trae | Qoder（本文件） |
  * |:--|:--|:--|
- * | header | 头像 + 昵称 + 身份 + 「当前登录」徽章 | 同形；**无**「当前登录」（程序位尚未落地） |
- * | chips | 使用中 N 工具 / 状态 / 临期 / 优先 | 状态槽（凭据可用 / 凭据未识别 / 无可用凭据）+ 归属异常 + 来源徽章 |
- * | body | 指标行（积分 / 今日 Token / 最后使用） | 凭据摘要 + 访问令牌掩码（积分与用量**没有数据源**，不摆空指标） |
- * | footer | 程序位行 + 更多菜单 | 仅更多菜单（程序位未落地 ⇒ 不渲染，落地后按原型补 `.progs` 行） |
+ * | header | 头像 + 昵称 + 身份 + 「当前登录」徽章 | 同形（「当前登录」= 任一程序位 `currentUid` 命中本账号） |
+ * | chips | 状态（+ WB 的任务、旅行） | 状态槽（凭据可用 / 凭据未识别 / 无可用凭据）+ 归属异常 + 来源徽章 |
+ * | body | 指标行（积分 · 临期）+ 凭据到期行 + 凭据明细 | 指标行（积分 · 临期 · 套餐）+ 凭据到期 + 凭据摘要 + 访问令牌掩码 |
+ * | footer | 程序位行 + 更多菜单 | 同形（程序位状态**未取到时不渲染整行**，不摆一排灰胶囊） |
+ *
+ * ⚠️ 2026-10-26：上表按**实现**重写。原表写「chips 含使用中 N 工具 / 临期 / 优先」
+ * 「body 没有积分数据源」「footer 仅更多菜单」，三项都与代码不符 —— 注释漂移比没有注释更坏。
  *
  * ## 三个刻意的取舍（都有出处）
  *
  * 1. **状态槽恒有一枚**（`凭据可用` / `凭据未识别` / `无可用凭据`）—— 与另两平台的
  *    状态槽同义（WB 的「已签到」/ Trae 的默认成功徽章都是恒有一枚）；「归属异常」
  *    是**正交**的独立徽章（正常时不渲染 —— 与 `travelChip` 的「默认态不渲染」同源）。
- * 2. **不渲染程序位胶囊**：Qoder 的两处官方凭据存储（桌面版 `auth.v1.dat` / CLI
- *    `~/.qoder/.auth/user`）对应的切换能力**尚未落地**（没有命令、没有写盘实现）——
- *    按「缺的就不渲染」纪律留空，绝不摆点不动的灰胶囊。
- * 3. **不渲染 `expiresAt`**：该字段单位未取证（见 `QoderAccountsView` 的说明），
- *    按毫秒渲染会把秒值显示成 1970 = 谎报。
+ * 2. **程序位行只在拿到状态时渲染**：没数据不摆一排「未检测到」的灰胶囊。
+ * 3. ★ **凭据到期已可渲染**（2026-10-27）：core 的 `account_view` 通过
+ *    `normalize_expiry_ms` 把秒 / 毫秒统一成 Unix 毫秒（无效 ⇒ null），因此卡片、列表与
+ *    详情页签都复用 `CredentialExpiryMeta` 如实展示「凭据到期」；卡片指标行仍只放
+ *    **额度到期**（`qoder_credits.expiresAt`），两者是不同字段，不要混用。
  */
 
-import { Ellipsis, FolderTree, Info, StickyNote, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Check, Ellipsis, FolderTree, Info, StickyNote, Trash2 } from "lucide-react";
 
-import { AVATAR_TEXT_CLASS, accountInitials, avatarTone } from "@/components/account-card";
+import {
+  AVATAR_TEXT_CLASS,
+  CredentialExpiryMeta,
+  accountInitials,
+  avatarTone,
+  formatCredits,
+  nextExpiryLabel,
+} from "@/components/account-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,11 +58,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MenuGroupLabel, MenuHead, MenuNote, RefreshMenuGroup } from "@/components/account-menu-parts";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AccountRefreshKind } from "@/lib/account-refresh";
+import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import type { QoderAccountView, QoderProgramStatus } from "@/lib/api";
+import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
 import { useT, type Translate } from "@/lib/i18n";
+import { CheckinIcon } from "@/lib/semantic-icons";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/zh";
 
@@ -104,38 +119,64 @@ export function qoderAccountName(account: QoderAccountView): string {
 export function QoderStatusChips({
   account,
   checkinToday,
+  onOpenTab,
 }: {
   account: QoderAccountView;
   /** 三态：`true` 已签 / `false` 未签 / `null|undefined` 未知。 */
   checkinToday?: boolean | null;
+  /** 标签直达详情页签（R10）：凭据类 → 凭据；签到类 → 签到。 */
+  onOpenTab?: (tab: DrawerTab) => void;
 }) {
   const t = useT();
+  /** 可点标签统一包一层 `button`：整卡可点开详情，标签必须自己能拦下冒泡。 */
+  const wrap = (badge: ReactNode, tab: DrawerTab | null) =>
+    onOpenTab && tab ? (
+      <button
+        type="button"
+        className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenTab(tab);
+        }}
+      >
+        {badge}
+      </button>
+    ) : (
+      badge
+    );
   if (!account.hasCredential) {
-    return (
+    return wrap(
       <Badge variant="destructive" className={CHIP_CLASS}>
         {t("qoder.page.accounts.chip.noCredential")}
-      </Badge>
+      </Badge>,
+      "credential",
     );
   }
   if (account.credential.unrecognized) {
-    return (
+    return wrap(
       <Badge variant="warning" className={CHIP_CLASS}>
         {t("qoder.page.accounts.chip.unrecognized")}
-      </Badge>
+      </Badge>,
+      "credential",
     );
   }
+  /* ★ 2026-10-26（与 WB / Trae 同批）：签到两态**共用 `CheckinIcon`**，状态由文字与底色
+     （success / warning）区分。此前 Qoder 的这两枚是纯文字 —— 同一件事在三张卡上
+     两种画法，正是「语义图标一个概念一枚」要防的漂移。凭据两态仍不加图标（文案已自明）。 */
   if (checkinToday === true) {
-    return (
+    return wrap(
       <Badge variant="success" className={CHIP_CLASS}>
-        {t("qoder.page.accounts.chip.checkedIn")}
-      </Badge>
+        <CheckinIcon /> {t("qoder.page.accounts.chip.checkedIn")}
+      </Badge>,
+      "checkin",
     );
   }
   if (checkinToday === false) {
-    return (
+    return wrap(
       <Badge variant="warning" className={CHIP_CLASS}>
-        {t("qoder.page.accounts.chip.notCheckedIn")}
-      </Badge>
+        <CheckinIcon /> {t("qoder.page.accounts.chip.notCheckedIn")}
+      </Badge>,
+      "checkin",
     );
   }
   return (
@@ -174,6 +215,8 @@ export function stateLabel(t: Translate, state: string): string {
 export interface QoderCardCredits {
   remaining: number;
   total: number;
+  /** 当前套餐/额度的到期时刻（Unix **毫秒**，`qoder_credits` 的 `expiresAt`）；缺值 ⇒ 不渲染临期。 */
+  expiresAt?: number | null;
   plan?: string | null;
 }
 
@@ -209,6 +252,8 @@ export interface QoderAccountCardProps {
   onSwitch?: (program: QoderProgramStatus) => void;
   /** 「更多 → 设置分组」。 */
   onSetGroup?: (account: QoderAccountView) => void;
+  /** 标签 / 指标直达详情页签（R10）。 */
+  onOpenTab?: (account: QoderAccountView, tab: DrawerTab) => void;
   /**
    * 单项刷新（积分 / 今日 Token / 签到状态 / 凭据状态）。
    * 传了 ⇒ 菜单出现「刷新」分组（四项各自独立）；不传 ⇒ 菜单与原来一致。
@@ -220,6 +265,11 @@ export interface QoderAccountCardProps {
   doneKinds?: readonly AccountRefreshKind[];
   /** 本平台真的能刷的项（缺省四项）；见 `RefreshMenuGroup` 的注释。 */
   refreshKinds?: readonly AccountRefreshKind[];
+  /**
+   * 「更多」菜单节点（由**页面装配**）：卡片与表格消费同一份，卡片只负责摆到页脚。
+   * 不传 ⇒ 退回卡片内的旧装配。
+   */
+  menu?: ReactNode;
 }
 
 export function QoderAccountCard({
@@ -234,10 +284,12 @@ export function QoderAccountCard({
   programs = null,
   onSwitch,
   onSetGroup,
+  onOpenTab,
   onRefreshPart,
   refreshingKinds,
   doneKinds,
   refreshKinds,
+  menu,
 }: QoderAccountCardProps) {
   const t = useT();
   const name = qoderAccountName(account);
@@ -250,7 +302,36 @@ export function QoderAccountCard({
   const currentPrograms = (programs ?? []).filter((program) => program.currentUid === account.uid);
   const isCurrent = currentPrograms.length > 0;
 
-  const menu = demoModeEnabled ? (
+  /**
+   * 临期（最急一批）—— 与 WB / Trae 卡片**同一份**汇总与措辞（`summarizeExpiry` /
+   * `nextExpiryLabel`），只报最急一批的金额与到期日。
+   *
+   * `expiresAt` 是**顶层**额度到期（Unix 毫秒，Qoder SDK 口径）：`userQuota` 与
+   * `addOnQuota` 共用这一个时刻 ⇒「到期积分数」就是聚合后的剩余。缺值 / 已过期 ⇒
+   * `summarizeExpiry` 返回 `null`，整段不渲染（不编到期日）。
+   */
+  const expiryNow = Date.now();
+  const creditExpiry =
+    credits && credits.expiresAt != null
+      ? summarizeExpiry([{ remaining: credits.remaining, expireAt: credits.expiresAt }], { now: expiryNow })
+      : null;
+  const expiringLabel = nextExpiryLabel(creditExpiry, t, expiryNow);
+  const expiryUrgent = creditExpiry ? isExpiryUrgent(creditExpiry.batches[0].expireAt, expiryNow) : false;
+
+  /**
+   * 「当前登录」徽章 —— **与昵称同一行**（WB `account-card.tsx` 与 Trae 卡同位置）。
+   *
+   * ★ 2026-10-26（复刻 WB）：此前它在 chips 行第三位，与「凭据可用」「桌面版导入」连成一片，
+   * 读起来像第三个状态；而 WB / Trae 都把它放在**身份行右侧**（它是「这个号此刻在客户端里」
+   * 的归属信息，不是状态）。三张卡片的头部必须同构。
+   */
+  const currentLoginBadge = isCurrent ? (
+    <Badge variant="info" className={cn(CHIP_CLASS, "shrink-0")}>
+      {t("qoder.page.accounts.program.current")}
+    </Badge>
+  ) : null;
+
+  const inlineMenu = demoModeEnabled ? (
     <DemoAction>
       <Button
         variant="ghost"
@@ -312,6 +393,9 @@ export function QoderAccountCard({
   );
 
   return (
+    /* 自备 `TooltipProvider`（不产生 DOM）：与 Trae 卡同一处理 —— 卡片在 App 内的全局
+       provider 之下渲染，但截图 / 演示等独立挂载场景不该因为缺 provider 就崩。 */
+    <TooltipProvider>
     <article
       /* 键盘可达：整卡可 Tab 聚焦，Enter / Space 打开详情（与 WB / Trae 卡同一交互）。 */
       tabIndex={0}
@@ -336,10 +420,25 @@ export function QoderAccountCard({
       }}
       className={cn(
         "relative flex min-w-0 flex-col gap-2.5 overflow-hidden rounded-lg border border-border bg-card px-3.5 py-[13px] shadow-card transition-[border-color,box-shadow] hover:border-border-strong hover:shadow-card-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        /* 整卡可点 ⇒ 指针光标；否则文字上默认的 I 形光标会被读成「可编辑文本」。 */
+        onOpenDetail && "cursor-pointer",
         selected && "border-ring bg-primary/[0.07]",
       )}
     >
-      {/* header：勾选 + 头像 32 + 昵称/身份 —— 原型 `.acct-top` 的四件套（无「当前登录」）。 */}
+      {/* ★ 「当前账号」的两重信号：**左侧 3px 竖条 + 头部「当前登录」徽章**。
+          与 WB（`account-card.tsx`）和 Trae 卡同一实现 —— 原型 `.acct.is-current::before`。
+          ⚠️ 条件必须与徽章**同为** `isCurrent`，否则会出现「有徽章却无竖条」的矛盾态
+          （2026-10-26 复刻时发现 Qoder 卡此前只有徽章、没有竖条）。 */}
+      {isCurrent ? (
+        <span
+          aria-hidden="true"
+          data-current-bar="true"
+          className="pointer-events-none absolute inset-y-0 left-0 w-[3px] rounded-l-lg bg-primary"
+        />
+      ) : null}
+
+      {/* header：勾选 + 头像 32 + 昵称/身份 + 「当前登录」—— 与 WB / Trae 卡**逐件同构**
+          （原型的 `.acct-top` 四件套；徽章是行尾独立件，不是昵称那一行里的小尾巴）。 */}
       <header className="flex items-center gap-2.5">
         <div className="relative z-10 flex w-full min-w-0 items-center gap-2.5">
           <Checkbox
@@ -366,18 +465,20 @@ export function QoderAccountCard({
               {identity}
             </p>
           </div>
+          {currentLoginBadge}
         </div>
       </header>
 
-      {/* chips：状态槽（恒一枚） + 归属异常（正交） + 来源徽章。 */}
+      {/* chips：状态槽（恒一枚） + 归属异常（正交） + 来源徽章。
+          ★ 2026-10-26：「当前登录」已上移到昵称行右侧 —— chips 行只放**状态**与**归属异常**，
+          与 WB（已签到 / 任务 / 旅行）和 Trae（已签到）同一条纪律。 */}
       <div className="flex min-w-0 flex-wrap items-center gap-[5px]">
-        <QoderStatusChips account={account} checkinToday={checkinToday} />
+        <QoderStatusChips
+          account={account}
+          checkinToday={checkinToday}
+          onOpenTab={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
+        />
         <QoderForeignBadge account={account} />
-        {isCurrent ? (
-          <Badge variant="info" className={CHIP_CLASS}>
-            {t("qoder.page.accounts.program.current")}
-          </Badge>
-        ) : null}
         {sourceLabel ? (
           <Badge variant="secondary" className={cn(CHIP_CLASS, "text-muted-foreground")}>
             {sourceLabel}
@@ -385,35 +486,101 @@ export function QoderAccountCard({
         ) : null}
       </div>
 
-      {/* body：积分指标（有额度快照才渲染）+ 凭据摘要 + 访问令牌掩码（**只给掩码**）。 */}
-      <section className="flex min-w-0 flex-1 flex-col gap-1">
-        {credits ? (
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11.5px]">
-            <span className="text-muted-foreground">
-              {t("qoder.page.accounts.metric.credits")}{" "}
-              <span className="font-medium tabular-nums text-foreground">
-                {t("qoder.page.accounts.metric.creditsValue", {
-                  remaining: String(credits.remaining),
-                  total: String(credits.total),
+      {/* body：指标行（积分 · 临期 · 套餐）+ 凭据块（令牌种类 · 掩码）。
+          ★ 2026-10-26（复刻 WB）：指标行改成 WB 的形态 —— `积分 <b>558</b>/700 · 临期 · 套餐`，
+          间距 9px、`·` 分隔、允许换行、`items-center`。此前是 `558 / 700`（斜杠两侧带空格、
+          无千分位）且用 `items-baseline` + 12px 间距，与 WB 那一行不是同一个东西。
+          ★ 2026-10-27：临期补进本行（用户要求「像 WB 一样显示到期时间与到期积分数」）：
+          WB / Trae 的临期也在这条指标行里，措辞共用 `nextExpiryLabel`；3 天内 `text-warning`。
+          ★ 并且**始终渲染**：无额度快照时显示 `积分 —`（与 WB 的「取不到就显示 —，不闪不藏」
+          同一条纪律）。此前整行 `null`，卡片会突然少一行，高度随之跳动。 */}
+      <section className="flex min-w-0 flex-1 flex-col gap-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
+          {credits ? (
+            /* `剩余/总额` 斜杠两侧不自明，「已用」是二者之差 ⇒ 补 tooltip（与 WB 的
+               `creditMetricTip` 同口径，各自域内一份文案）。 */
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  /* ★ R10：积分指标直达抽屉「积分」页签；`stopPropagation` 防止同时打开概览。 */
+                  className={onOpenTab ? "cursor-pointer" : undefined}
+                  onClick={
+                    onOpenTab
+                      ? (event) => {
+                          event.stopPropagation();
+                          onOpenTab(account, "credits");
+                        }
+                      : undefined
+                  }
+                >
+                  {t("qoder.page.accounts.metric.credits")}{" "}
+                  <b className="font-semibold tabular-nums text-foreground">
+                    {formatCredits(credits.remaining)}
+                  </b>
+                  /{formatCredits(credits.total)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="whitespace-nowrap tabular-nums">
+                {t("qoder.page.accounts.metric.creditsTip", {
+                  remaining: formatCredits(credits.remaining),
+                  total: formatCredits(credits.total),
+                  used: formatCredits(Math.max(0, credits.total - credits.remaining)),
                 })}
-              </span>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span>
+              {t("qoder.page.accounts.metric.credits")}{" "}
+              <b className="font-semibold tabular-nums text-foreground">—</b>
             </span>
-            {credits.plan ? (
-              <span className="text-muted-foreground">
-                {t("qoder.page.accounts.metric.plan")}{" "}
-                <span className="text-foreground">{credits.plan}</span>
+          )}
+          {expiringLabel ? (
+            <>
+              <span aria-hidden className="select-none text-muted-foreground/50">
+                ·
               </span>
+              <span className={cn("tabular-nums", expiryUrgent ? "text-warning" : "text-muted-foreground")}>
+                {expiringLabel}
+              </span>
+            </>
+          ) : null}
+          {credits?.plan ? (
+            <>
+              <span aria-hidden className="select-none text-muted-foreground/50">
+                ·
+              </span>
+              <span>
+                {t("qoder.page.accounts.metric.plan")}{" "}
+                <b className="font-semibold text-foreground">{credits.plan}</b>
+              </span>
+            </>
+          ) : null}
+        </div>
+        {/* ★ 2026-10-27（T02 完成后与 WB / Trae 同批）：指标行下面单起一行给出**凭据到期**
+            —— `expiresAt` 已由 core 的 `normalize_expiry_ms` 归一成 Unix 毫秒（无效 ⇒ null），
+            因此可如实渲染；单元格复用 `CredentialExpiryMeta`（同一份日期格式与缺值分支）。
+            `showRefreshToken={false}` 与 Trae 同理由：Qoder 只有 `hasRefreshToken`，
+            没有刷新令牌的到期时间 —— 用「有」冒充「到期日」会答非所问。
+            额度到期是**另一个**字段（`credits.expiresAt`，已在上方指标行），两者不要混用。 */}
+        <CredentialExpiryMeta
+          account={{ expiresAt: account.expiresAt }}
+          showRefreshToken={false}
+          className="text-[11.5px]"
+        />
+        {/* 凭据块：摘要（令牌**种类**）+ 访问令牌掩码。两行同属「这个号的凭据长什么样」，
+            内部 4px 紧排；与上方各行之间用 section 的 10px（与 WB「指标行 → 凭据行」同一节奏）。 */}
+        {credentialSummary || account.accessTokenMasked ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            {credentialSummary ? (
+              <div className="truncate text-[11.5px] text-muted-foreground" title={credentialSummary}>
+                {credentialSummary}
+              </div>
             ) : null}
-          </div>
-        ) : null}
-        {credentialSummary ? (
-          <div className="truncate text-[11.5px] text-muted-foreground" title={credentialSummary}>
-            {credentialSummary}
-          </div>
-        ) : null}
-        {account.accessTokenMasked ? (
-          <div className="truncate font-mono text-[11px] text-muted-foreground" title={account.accessTokenMasked}>
-            {account.accessTokenMasked}
+            {account.accessTokenMasked ? (
+              <div className="truncate font-mono text-[11px] text-muted-foreground" title={account.accessTokenMasked}>
+                {account.accessTokenMasked}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -432,20 +599,39 @@ export function QoderAccountCard({
               const title = program.running
                 ? t("qoder.page.accounts.program.runningHint")
                 : stateLabel(t, program.state);
+              /* ★ 2026-10-26（复刻 WB）：**当前态不是按钮，是一枚状态角标**
+                 —— WB 的 `ProductCurrentState` 就是这个形态（`role="status"` + ✓ + 短名 +
+                 `border-primary/40 bg-primary/18 text-primary font-semibold`，26px / 圆角 8px）。
+                 此前这里渲染的是一枚 `disabled` 的按钮：没有 ✓、文字用 `text-foreground`、
+                 高度只有 ~20px —— 三张卡片的页脚因此看起来不是同一套控件。 */
+              if (active) {
+                return (
+                  <span
+                    key={program.id}
+                    role="status"
+                    aria-label={program.label}
+                    title={program.label}
+                    className="inline-flex h-[26px] items-center justify-center gap-1 rounded-[8px] border border-primary/40 bg-primary/18 px-2 text-[11px] font-semibold text-primary"
+                  >
+                    <Check className="size-3" strokeWidth={2.25} />
+                    <span>{program.label}</span>
+                  </span>
+                );
+              }
               return (
                 <button
                   key={program.id}
                   type="button"
-                  disabled={active || !ready || !onSwitch}
+                  disabled={!ready || !onSwitch}
                   title={title}
                   onClick={() => onSwitch?.(program)}
+                  /* 与 WB 的 `.prog` 同一 footprint：26px 高、圆角 8px、`px-2`、11px、字重 400。
+                     未就绪时改虚线框（「没数据」不伪装成「装了但不可点」）。 */
                   className={cn(
-                    "rounded-md border px-1.5 py-[2px] text-[11px] transition-colors",
-                    active
-                      ? "border-primary/40 bg-primary/10 font-medium text-foreground"
-                      : ready && onSwitch
-                        ? "border-border text-muted-foreground hover:border-border-strong hover:text-foreground"
-                        : "border-dashed border-border text-muted-foreground/60",
+                    "inline-flex h-[26px] items-center justify-center gap-1 rounded-[8px] border bg-transparent px-2 text-[11px] font-normal transition-colors",
+                    ready && onSwitch
+                      ? "border-border text-muted-foreground hover:border-border-strong hover:text-foreground"
+                      : "border-dashed border-border text-muted-foreground/60",
                   )}
                 >
                   {program.label}
@@ -455,8 +641,9 @@ export function QoderAccountCard({
           </div>
         ) : null}
         <div className="grow" />
-        {menu}
+        {menu ?? inlineMenu}
       </footer>
     </article>
+    </TooltipProvider>
   );
 }

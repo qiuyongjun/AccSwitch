@@ -151,6 +151,25 @@ pub fn load_accounts_for(variant: TraeVariant) -> AccountsFile {
     store::read_json(&paths::accounts_file_for(variant))
 }
 
+/// 读取账号库（按变体分家），**写路径专用**：读不到 / 解析失败一律 `Err`。
+///
+/// 与 [`load_accounts_for`] 的差别只在失败策略，但这条差别是数据安全的全部：
+/// 容错读在库损坏时返回空库，紧跟一次整份 `save` 就把用户剩下的账号全抹掉了。
+///
+/// ★ 顺带把原文登记进写事务（[`crate::modules::accounts_txn::record_read`]），
+/// 供随后的 `save` 比对「读完之后有没有别的进程改过」。
+pub fn load_accounts_checked_for(variant: TraeVariant) -> Result<AccountsFile, String> {
+    load_accounts_checked_at(&paths::accounts_file_for(variant))
+}
+
+fn load_accounts_checked_at(path: &std::path::Path) -> Result<AccountsFile, String> {
+    let Some(text) = store::read_text_checked(path)? else {
+        return Ok(AccountsFile::default());
+    };
+    crate::modules::accounts_txn::record_read(path, &text);
+    serde_json::from_str(&text).map_err(|error| format!("解析 {} 失败：{error}", path.display()))
+}
+
 /// 写入账号库（默认变体，兼容壳）。
 pub fn save_accounts(accounts: &AccountsFile) -> Result<(), String> {
     save_accounts_for(TraeVariant::default(), accounts)
@@ -158,7 +177,28 @@ pub fn save_accounts(accounts: &AccountsFile) -> Result<(), String> {
 
 /// 写入账号库（按变体分家）。
 pub fn save_accounts_for(variant: TraeVariant, accounts: &AccountsFile) -> Result<(), String> {
-    store::write_json(&paths::accounts_file_for(variant), accounts)
+    let path = paths::accounts_file_for(variant);
+    crate::modules::accounts_txn::ensure_unchanged(&path)?;
+    store::write_json(&path, accounts)
+}
+
+/// 在一份账号库的写事务里执行 `f`（键 = 账号库文件路径）。
+///
+/// ⚠️ 闭包里**不能**写 `return`：它会从外层函数直接返回，跳过事务收尾
+/// （深度计数不归零 ⇒ 该线程此后同路径写操作全都不加锁）。函数体一律拆到 `*_inner`。
+pub(crate) fn accounts_txn<T>(
+    variant: TraeVariant,
+    f: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    crate::modules::accounts_txn::with_txn(&paths::accounts_file_for(variant), f)
+}
+
+/// 同上，按**区域**取锁（区域库是国内两条产品线共用的那一本，见 [`paths::accounts_file_for`]）。
+pub(crate) fn accounts_txn_region<T>(
+    region: super::region::TraeRegion,
+    f: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    crate::modules::accounts_txn::with_txn(&paths::accounts_file_for_region(region), f)
 }
 
 /// 读取分组（默认变体，兼容壳）。
@@ -224,6 +264,13 @@ pub fn load_accounts_for_region(region: super::region::TraeRegion) -> AccountsFi
     store::read_json(&paths::accounts_file_for_region(region))
 }
 
+/// 读取某**区域**的账号库（**写路径专用**：失败即 `Err`，不回落空库）。
+pub fn load_accounts_checked_for_region(
+    region: super::region::TraeRegion,
+) -> Result<AccountsFile, String> {
+    load_accounts_checked_at(&paths::accounts_file_for_region(region))
+}
+
 /// 写入某**区域**的账号库。
 ///
 /// ⚠️ 必须**整体回存** `AccountsFile`，不得字面重建容器 —— 否则 `device_bindings`
@@ -232,7 +279,9 @@ pub fn save_accounts_for_region(
     region: super::region::TraeRegion,
     accounts: &AccountsFile,
 ) -> Result<(), String> {
-    store::write_json(&paths::accounts_file_for_region(region), accounts)
+    let path = paths::accounts_file_for_region(region);
+    crate::modules::accounts_txn::ensure_unchanged(&path)?;
+    store::write_json(&path, accounts)
 }
 
 /// 读取某区域的账号并附带解析后的 uid（过滤掉无法确定 uid 的脏记录）。
@@ -499,8 +548,20 @@ pub fn add_manual_for(
     let uid = jwt::user_id_of(jwt_value)
         .filter(|uid| !uid.is_empty())
         .ok_or("无法从 JWT 解析 UserID，请检查格式")?;
+    accounts_txn(variant, || {
+        add_manual_inner(variant, name, &uid, jwt_value, &group_id)
+    })
+}
 
-    let mut accounts = load_accounts_for(variant);
+fn add_manual_inner(
+    variant: TraeVariant,
+    name: &str,
+    uid: &str,
+    jwt_value: &str,
+    group_id: &Option<String>,
+) -> Result<String, String> {
+    // ★ 写路径用 checked 读：库损坏时宁可整次失败，也不能拿空库覆盖（那会删光账号）。
+    let mut accounts = load_accounts_checked_for(variant)?;
     if accounts
         .accounts
         .iter()
@@ -519,7 +580,7 @@ pub fn add_manual_for(
     let now = store::now_iso();
     accounts.accounts.push(RawAccount {
         name,
-        user_id: Some(uid.clone()),
+        user_id: Some(uid.to_string()),
         jwt: jwt_value.to_string(),
         refresh_token: None,
         added_at: Some(now.clone()),
@@ -528,10 +589,12 @@ pub fn add_manual_for(
     });
     save_accounts_for(variant, &accounts)?;
 
-    if let Some(group) = group_id.filter(|g| !g.trim().is_empty()) {
-        move_to_group_for(variant, &uid, Some(group))?;
+    // 分组关系写在**另一个文件**里，与账号库不同步：顺序固定「先账号、后分组」，
+    // 中途失败留下的是「账号在、未分组」——可见且可修，好过「分组有、账号没」。
+    if let Some(group) = group_id.clone().filter(|g| !g.trim().is_empty()) {
+        move_to_group_for(variant, uid, Some(group))?;
     }
-    Ok(uid)
+    Ok(uid.to_string())
 }
 
 /// 从客户端登录态导入当前账号（对齐 WorkBuddy 的「导入本机账号」）。
@@ -562,12 +625,27 @@ pub fn import_local_for(variant: TraeVariant) -> Result<RawAccount, String> {
     // 用 `import_local_login_for` 而不是 `extract_local_jwt_for`：除了 uid 与凭据，
     // 还需要它一并给出的 `device_id` —— 那是**同一个来源目录**里的设备身份，
     // 续期要用它的私钥签名。分两次取会让「凭据来自 A、设备身份来自 B」。
+    //
+    // ★ 读客户端登录态是纯 IO、不碰账号库，放在事务外：持锁期间不要做与账号库
+    //   无关的读盘 / 解析（那会把别处的写操作一并拖住）。
     let login = crate::modules::trae::profile::import_local_login_for(variant)?;
-    let uid = login.user_id;
-    let jwt_value = login.authorization;
-    let device_id = login.device_id;
+    accounts_txn(variant, || {
+        import_local_inner(
+            variant,
+            &login.user_id,
+            &login.authorization,
+            login.device_id.as_deref(),
+        )
+    })
+}
 
-    let mut accounts = load_accounts_for(variant);
+fn import_local_inner(
+    variant: TraeVariant,
+    uid: &str,
+    jwt_value: &str,
+    device_id: Option<&str>,
+) -> Result<RawAccount, String> {
+    let mut accounts = load_accounts_checked_for(variant)?;
     let now = store::now_iso();
 
     let record = match accounts
@@ -576,16 +654,16 @@ pub fn import_local_for(variant: TraeVariant) -> Result<RawAccount, String> {
         .find(|account| resolve_user_id(account) == uid)
     {
         Some(existing) => {
-            existing.jwt = jwt_value;
-            existing.user_id = Some(uid.clone());
+            existing.jwt = jwt_value.to_string();
+            existing.user_id = Some(uid.to_string());
             existing.updated_at = Some(now);
             existing.clone()
         }
         None => {
             let record = RawAccount {
                 name: format!("账号{}", &uid[uid.len().saturating_sub(6)..]),
-                user_id: Some(uid.clone()),
-                jwt: jwt_value,
+                user_id: Some(uid.to_string()),
+                jwt: jwt_value.to_string(),
                 refresh_token: None,
                 added_at: Some(now.clone()),
                 updated_at: Some(now),
@@ -599,7 +677,7 @@ pub fn import_local_for(variant: TraeVariant) -> Result<RawAccount, String> {
     // 记录**这次导入用的是哪台设备**（`Some` 才写）。
     // 取不到时**不动**既有绑定：宁可留旧值（下次续期仍可能对），也不要用一个空值把
     // 「本来正确的绑定」清掉 —— 后者会让续期退回「猜活跃目录」，且用户无从察觉。
-    bind_device(&mut accounts, &uid, device_id.as_deref());
+    bind_device(&mut accounts, uid, device_id);
     save_accounts_for(variant, &accounts)?;
     Ok(record)
 }
@@ -659,7 +737,12 @@ pub fn sweep_trash_entries(entries: &mut Vec<TrashEntry>, now: i64) -> usize {
 ///
 /// 账号不存在 ⇒ `Err`（**不静默成功**，与 WorkBuddy 侧同形）。
 pub fn trash_for_region(region: TraeRegion, user_id: &str) -> Result<(), String> {
-    let mut accounts = load_accounts_for_region(region);
+    accounts_txn_region(region, || trash_inner_for_region(region, user_id))
+}
+
+fn trash_inner_for_region(region: TraeRegion, user_id: &str) -> Result<(), String> {
+    // ★ 写路径：库损坏 ⇒ 报错，绝不拿空库去覆盖（那等于把账号全删了）。
+    let mut accounts = load_accounts_checked_for_region(region)?;
     let Some(index) = accounts
         .accounts
         .iter()
@@ -698,6 +781,10 @@ pub fn trash_for_region(region: TraeRegion, user_id: &str) -> Result<(), String>
 ///
 /// live 已存在同 uid ⇒ `Err`（**不覆盖**，避免把现有账号冲掉而丢数据）。
 pub fn restore_for_region(region: TraeRegion, user_id: &str) -> Result<(), String> {
+    accounts_txn_region(region, || restore_inner_for_region(region, user_id))
+}
+
+fn restore_inner_for_region(region: TraeRegion, user_id: &str) -> Result<(), String> {
     let mut trash = load_trash_for_region(region);
     let Some(index) = trash
         .iter()
@@ -705,7 +792,7 @@ pub fn restore_for_region(region: TraeRegion, user_id: &str) -> Result<(), Strin
     else {
         return Err("回收站中没有该账号".into());
     };
-    let mut accounts = load_accounts_for_region(region);
+    let mut accounts = load_accounts_checked_for_region(region)?;
     if accounts
         .accounts
         .iter()
@@ -855,7 +942,16 @@ pub fn update_for(
     name: Option<String>,
     raw_jwt: Option<String>,
 ) -> Result<(), String> {
-    let mut accounts = load_accounts_for(variant);
+    accounts_txn(variant, || update_inner_for(variant, user_id, &name, &raw_jwt))
+}
+
+fn update_inner_for(
+    variant: TraeVariant,
+    user_id: &str,
+    name: &Option<String>,
+    raw_jwt: &Option<String>,
+) -> Result<(), String> {
+    let mut accounts = load_accounts_checked_for(variant)?;
     let previous_uid = user_id.to_string();
     let mut next_uid = previous_uid.clone();
     {
@@ -916,7 +1012,15 @@ pub fn set_remark_for(
     user_id: &str,
     remark: Option<&str>,
 ) -> Result<(), String> {
-    let mut accounts = load_accounts_for(variant);
+    accounts_txn(variant, || set_remark_inner_for(variant, user_id, remark))
+}
+
+fn set_remark_inner_for(
+    variant: TraeVariant,
+    user_id: &str,
+    remark: Option<&str>,
+) -> Result<(), String> {
+    let mut accounts = load_accounts_checked_for(variant)?;
     let account = accounts
         .accounts
         .iter_mut()
@@ -1613,16 +1717,37 @@ pub fn login_with_exchanged_tokens_for(
 ) -> Result<(RawAccount, String), String> {
     // uid 以上游签发的 JWT 为准，而不是信任本地传入的任何 ID：
     // 这条路径上本来没有可信的 uid 来源（账号可能还不存在）。
+    // 解析是纯计算，放在事务外，失败不必白占一次锁。
     let uid = jwt::parse(&exchanged_jwt)
         .user_id
         .filter(|uid| !uid.trim().is_empty())
         .ok_or("无法从新 JWT 解析 UserID，已拒绝写库")?;
 
+    accounts_txn(variant, || {
+        login_with_exchanged_inner(
+            variant,
+            &uid,
+            &exchanged_jwt,
+            refresh_token.as_deref(),
+            display_name.as_deref(),
+            device_id,
+        )
+    })
+}
+
+fn login_with_exchanged_inner(
+    variant: TraeVariant,
+    uid: &str,
+    exchanged_jwt: &str,
+    refresh_token: Option<&str>,
+    display_name: Option<&str>,
+    device_id: Option<&str>,
+) -> Result<(RawAccount, String), String> {
     let refresh_token = refresh_token
         .map(|token| token.trim().to_string())
         .filter(|token| !token.is_empty());
 
-    let mut accounts = load_accounts_for(variant);
+    let mut accounts = load_accounts_checked_for(variant)?;
     let now = store::now_iso();
     let trimmed_name = display_name
         .map(|name| name.trim().to_string())
@@ -1634,11 +1759,11 @@ pub fn login_with_exchanged_tokens_for(
         .find(|account| resolve_user_id(account) == uid)
     {
         Some(existing) => {
-            existing.jwt = exchanged_jwt.clone();
+            existing.jwt = exchanged_jwt.to_string();
             if let Some(token) = refresh_token {
                 existing.refresh_token = Some(token);
             }
-            existing.user_id = Some(uid.clone());
+            existing.user_id = Some(uid.to_string());
             if let Some(name) = trimmed_name {
                 existing.name = name;
             }
@@ -1651,8 +1776,8 @@ pub fn login_with_exchanged_tokens_for(
                 // 保证列表里能区分多个「账号」。
                 name: trimmed_name
                     .unwrap_or_else(|| format!("账号{}", &uid[uid.len().saturating_sub(6)..])),
-                user_id: Some(uid.clone()),
-                jwt: exchanged_jwt.clone(),
+                user_id: Some(uid.to_string()),
+                jwt: exchanged_jwt.to_string(),
                 refresh_token,
                 added_at: Some(now.clone()),
                 updated_at: Some(now),
@@ -1665,9 +1790,9 @@ pub fn login_with_exchanged_tokens_for(
 
     // 绑定**这次登录用的那台设备**：续期必须复用它签名（换设备/多候选目录时，
     // 「活跃目录里的那一条」未必是这台）。
-    bind_device(&mut accounts, &uid, device_id);
+    bind_device(&mut accounts, uid, device_id);
     save_accounts_for(variant, &accounts)?;
-    Ok((record, exchanged_jwt))
+    Ok((record, exchanged_jwt.to_string()))
 }
 
 /// 刷新后的 uid 一致性校验（纯函数，便于单测）。
@@ -1734,6 +1859,24 @@ pub async fn refresh_jwt(user_id: &str) -> Result<String, String> {
 /// 续期必须用「这个账号当初登录 / 导入时那台设备」的私钥签名。旧账号没有绑定 ⇒
 /// 透传 `None`，由 [`exchange_token_for`] 回落当前目录并**留痕**。
 pub async fn refresh_jwt_for(variant: TraeVariant, user_id: &str) -> Result<String, String> {
+    // ★ 同一条账号的续期必须串行。
+    //
+    // 为什么不能只靠「写事务」：续期的危险动作在**网络那一段**——两个并发调用会拿
+    // **同一个** refresh_token 去 exchange。上游轮换后，后到的那个用的是已失效的旧
+    // token，要么直接失败，要么（更坏）拿回一个与库里不同的 refresh_token 再写回去。
+    // 写事务只能保证「写不互相覆盖」，保证不了「不重复消费同一份材料」。
+    //
+    // 闸门放在 core ⇒ HTTP 与 Tauri 两条通道都受约束（前端去重只挡 UI 重复点击）。
+    let gate = refresh_gate_for(variant, user_id);
+    let outcome = {
+        let _permit = gate.lock().await;
+        refresh_jwt_inner(variant, user_id).await
+    };
+    release_refresh_gate(variant, user_id, &gate);
+    outcome
+}
+
+async fn refresh_jwt_inner(variant: TraeVariant, user_id: &str) -> Result<String, String> {
     let account = find_for(variant, user_id).ok_or("账号不存在")?;
     let refresh_token = account
         .refresh_token
@@ -1766,6 +1909,63 @@ pub async fn refresh_jwt_for(variant: TraeVariant, user_id: &str) -> Result<Stri
     Ok(new_jwt)
 }
 
+/// 续期闸门表（键 `variant:uid`）。
+///
+/// 与 Qoder 侧 [`crate::modules::qoder::refresh`] 的表同构、**各自独立**：
+/// 两个平台的账号库不同、上游也不同，共用一把锁只会让 Qoder 的慢请求拖住 Trae。
+fn refresh_gates() -> &'static std::sync::Mutex<
+    std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+> {
+    static GATES: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    GATES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn refresh_gate_key(variant: TraeVariant, user_id: &str) -> String {
+    format!("{}:{user_id}", variant.as_str())
+}
+
+fn refresh_gate_for(
+    variant: TraeVariant,
+    user_id: &str,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let mut gates = refresh_gates()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    gates
+        .entry(refresh_gate_key(variant, user_id))
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// 无人持有该闸门时摘掉条目（否则表会随「出现过的每个 uid」永久增长）。
+fn release_refresh_gate(
+    variant: TraeVariant,
+    user_id: &str,
+    gate: &std::sync::Arc<tokio::sync::Mutex<()>>,
+) {
+    /// 表里那一份 + 当前调用方手上这一份。
+    const EXPECTED: usize = 2;
+    if std::sync::Arc::strong_count(gate) > EXPECTED {
+        return;
+    }
+    let key = refresh_gate_key(variant, user_id);
+    let mut gates = refresh_gates()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    /* 拿表锁之前可能又有线程 clone 走了这一份 —— 对表里那一份再确认一次，
+    否则会摘掉别人正在持有的闸门（那人释放时用的还是旧 Arc，串行化就漏了）。 */
+    if gates
+        .get(&key)
+        .is_some_and(|entry| std::sync::Arc::strong_count(entry) <= EXPECTED)
+    {
+        gates.remove(&key);
+    }
+}
+
 /// 把一次刷新的结果写回账号库（**纯落盘，不发网络**，故可直接单测）。
 ///
 /// ## 三条语义各自都容易写错，且错了都不会编译报错
@@ -1785,7 +1985,26 @@ fn apply_refreshed_tokens_for(
     new_jwt: &str,
     rotated_refresh_token: Option<String>,
 ) -> Result<(), String> {
-    let mut accounts = load_accounts_for(variant);
+    // ★ 续期回写是**最容易丢数据**的一处：批量续期并发 3 条，每条都在网络回来之后
+    //   整份读改写。没有事务时后写者会把前一条刚轮换的 refresh_token 顶回旧值，
+    //   下一次续期必然失败，而两边都报成功。
+    accounts_txn(variant, || {
+        apply_refreshed_tokens_inner(
+            variant,
+            user_id,
+            new_jwt,
+            rotated_refresh_token.as_deref(),
+        )
+    })
+}
+
+fn apply_refreshed_tokens_inner(
+    variant: TraeVariant,
+    user_id: &str,
+    new_jwt: &str,
+    rotated_refresh_token: Option<&str>,
+) -> Result<(), String> {
+    let mut accounts = load_accounts_checked_for(variant)?;
     let target = accounts
         .accounts
         .iter_mut()
@@ -1793,7 +2012,7 @@ fn apply_refreshed_tokens_for(
         .ok_or("账号不存在")?;
     target.jwt = new_jwt.to_string();
     if let Some(refresh_token) = rotated_refresh_token {
-        target.refresh_token = Some(refresh_token);
+        target.refresh_token = Some(refresh_token.to_string());
     }
     target.updated_at = Some(store::now_iso());
     save_accounts_for(variant, &accounts)

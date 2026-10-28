@@ -145,7 +145,12 @@ pub fn read_all_for(variant: TraeVariant) -> Vec<LogEntry> {
     entries
 }
 
-/// 按时间倒序；无时间行排最后（它们无法参与时间比较）。
+/// 按时间倒序；同秒条目后写入的在前，无时间行排最后。
+///
+/// ⚠️ 「后写入」= **入参顺序**里靠后的那一条：`sort_by` 是稳定排序，同秒分组保持
+/// 入参原序，随后整组反转。因此本函数**要求入参是文件追加顺序（旧 → 新）**。
+/// 对已排过序的切片再调一次，同秒组会被翻回去 —— 目前只有 `query_logs` 在读完全部
+/// 文件后调用一次；新增调用点前先确认这个前提仍然成立。
 pub fn sort_newest_first(entries: &mut [LogEntry]) {
     entries.sort_by(|left, right| {
         let left_known = !left.time.is_empty();
@@ -157,6 +162,15 @@ pub fn sort_newest_first(entries: &mut [LogEntry]) {
             (false, false) => std::cmp::Ordering::Equal,
         }
     });
+    let mut start = 0;
+    while start < entries.len() {
+        let mut end = start + 1;
+        while end < entries.len() && entries[end].time == entries[start].time {
+            end += 1;
+        }
+        entries[start..end].reverse();
+        start = end;
+    }
 }
 
 /// 过滤条件。
@@ -168,6 +182,8 @@ pub struct LogQuery {
     pub date: String,
     /// 关键字（大小写不敏感，匹配正文）。
     pub keyword: String,
+    /// 只保留该账号的结构化签到流水；空表示不按账号过滤。
+    pub checkin_user_id: String,
     /// 返回条数上限。
     pub limit: usize,
 }
@@ -213,6 +229,7 @@ impl LogQuery {
             kind: normalize_kind(&text("kind")),
             date: text("date"),
             keyword: text("keyword"),
+            checkin_user_id: text("checkinUserId"),
             limit,
         }
     }
@@ -232,17 +249,106 @@ impl LogQuery {
                 return false;
             }
         }
+        if !self.checkin_user_id.is_empty()
+            && parse_checkin_record(&entry.message)
+                .map_or(true, |record| record.user_id != self.checkin_user_id)
+        {
+            return false;
+        }
         true
     }
 }
 
 /// 条目 → 线上形态（camelCase）。
+///
+/// `checkin` 字段**只在**该行是结构化签到流水时出现（见 [`parse_checkin_record`]）。
+/// 由后端解析而不是让前端自己切字符串：行格式是本模块与 `checkin` 模块之间的契约，
+/// 契约只该有一处实现，也只该在一处被测试钉住。
 pub fn entry_json(entry: &LogEntry) -> Value {
-    json!({
+    let mut value = json!({
         "kind": entry.kind,
         "time": entry.time,
         "date": entry.date(),
         "message": entry.message,
+    });
+    if entry.kind == "checkin" {
+        if let Some(record) = parse_checkin_record(&entry.message) {
+            value["checkin"] = json!({
+                "userId": record.user_id,
+                "action": record.action,
+                "delta": record.delta,
+                "code": record.code,
+            });
+        }
+    }
+    value
+}
+
+/// 一条**结构化签到流水**（`签到记录 userId=… action=… delta=… code=…`）。
+///
+/// `action` 的取值与 `checkin::AccountOutcome::action` 同源：
+/// `claim_ok`（本轮签到成功）/ `skip_already`（上游今日已签到，跳过）/
+/// `fail`（失败，含设备标识生成失败）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckinRecord {
+    pub user_id: String,
+    pub action: String,
+    /// 本轮实际获得的积分（`skip_already` / `fail` 为 0）。
+    pub delta: i64,
+    /// 业务码；写侧不提供时为 `-`（解析成 `None`）。
+    pub code: Option<i64>,
+}
+
+/// 解析结构化签到流水行。
+///
+/// ## 契约（写侧 [`crate::modules::trae::checkin`] 负责产出，**改动必须同步两边**）
+///
+/// - 行首必须是 [`crate::modules::trae::TRAE_CHECKIN_RECORD_PREFIX`]，且其后紧跟空白；
+/// - 之后是空格分隔的 `key=value`：`userId` / `action` 必需，`delta` / `code` 可选；
+/// - `action` 只认 `claim_ok` / `skip_already` / `fail`；已提供但非法的数字字段使整行无效；
+/// - 未知键**忽略**（便于以后加字段而不破坏老读侧）。
+///
+/// 不满足契约（例如人工追加的日志、旧版本的行）一律返回 `None` —— 读侧绝不能
+/// 因为「这行看起来像签到」就把它当成签到结果，那正是本次要修的错误做法。
+pub fn parse_checkin_record(message: &str) -> Option<CheckinRecord> {
+    let rest = message.strip_prefix(crate::modules::trae::TRAE_CHECKIN_RECORD_PREFIX)?;
+    // 前缀必须**独立成词**：`签到记录xxx` 不是契约格式。
+    if !(rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+        return None;
+    }
+
+    let mut user_id: Option<String> = None;
+    let mut action: Option<String> = None;
+    let mut delta = 0_i64;
+    let mut code: Option<i64> = None;
+    for token in rest.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        match key {
+            "userId" => user_id = Some(value.to_string()),
+            "action" => action = Some(value.to_string()),
+            "delta" => delta = value.parse().ok()?,
+            "code" => {
+                code = if value == "-" {
+                    None
+                } else {
+                    Some(value.parse().ok()?)
+                };
+            }
+            _ => {}
+        }
+    }
+
+    let action = action.filter(|value| !value.is_empty())?;
+    if !matches!(action.as_str(), "claim_ok" | "skip_already" | "fail") {
+        return None;
+    }
+    Some(CheckinRecord {
+        user_id: user_id.filter(|value| !value.is_empty())?,
+        action,
+        delta,
+        code,
     })
 }
 
@@ -505,6 +611,86 @@ mod tests {
         assert!(value.get("log_dir").is_none());
     }
 
+    /// 端到端：真实 `checkin.log` 里签到行与 JWT 续期行混排时，**只有签到行**带 `checkin`。
+    ///
+    /// ## 这个用例钉的是用户 2026-10-27 报的那个现象
+    ///
+    /// 旧前端按「行内含 uid + 不含失败字样」判定，于是同一天里
+    /// `JWT 自动刷新成功: user=<uid>` 被当成「签到成功」，而真正的签到汇总行
+    /// `签到完成: 成功 1/…` 因为不含 uid 被当成「未签到」。这里用一份**两类行都有**的
+    /// 日志，断言读侧只认结构化行 —— 一旦有人把 `entry_json` 的判定放宽，这条会红。
+    #[test]
+    fn query_logs_marks_only_structured_lines_as_checkin_results() {
+        let dir = std::env::temp_dir().join(format!("trae-logs-checkin-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let _guard = crate::modules::config::HomeOverrideGuard::set(&dir);
+
+        let path = paths::checkin_log_file_for(TraeVariant::default());
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let text = concat!(
+            "[2026-10-27 09:57:18] OAuth 登录成功【Trae CN】: user=3810270489353475 name=QYJ jwt到期=336.0h\n",
+            "[2026-10-27 09:59:04] JWT 自动刷新成功: user=3810270489353475 新到期=336.0h\n",
+            "[2026-10-27 10:00:01] 签到记录 userId=3810270489353475 action=fail delta=0 code=500\n",
+            "[2026-10-26 09:25:52] 签到完成: 成功 1/已签到 0/失败 0/总计 1\n",
+        );
+        std::fs::write(&path, text).expect("写入测试日志");
+
+        let value = query_logs(&json!({ "kind": "checkin" }));
+        let entries = value
+            .get("entries")
+            .and_then(Value::as_array)
+            .expect("entries");
+        let structured: Vec<&Value> = entries
+            .iter()
+            .filter(|entry| entry.get("checkin").is_some())
+            .collect();
+        assert_eq!(
+            structured.len(),
+            1,
+            "只有结构化行可被当成签到结果，实际：{structured:?}"
+        );
+        assert_eq!(structured[0]["checkin"]["action"], "fail");
+        assert_eq!(structured[0]["checkin"]["code"], 500);
+        assert_eq!(structured[0]["checkin"]["userId"], "3810270489353475");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn account_history_filters_before_limit_and_uses_last_same_second_record() {
+        let dir =
+            std::env::temp_dir().join(format!("trae-logs-account-history-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let _guard = crate::modules::config::HomeOverrideGuard::set(&dir);
+        let path = paths::checkin_log_file_for(TraeVariant::default());
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut text = (0..600)
+            .map(|index| format!("[2026-10-27 10:00:00] JWT 自动刷新成功: user=other-{index}\n"))
+            .collect::<String>();
+        text.push_str(concat!(
+            "[2026-10-27 10:00:01] 签到记录 userId=u1 action=claim_ok delta=100 code=0\n",
+            "[2026-10-27 10:00:01] 签到记录 userId=u1 action=fail delta=0 code=500\n",
+        ));
+        std::fs::write(&path, text).expect("写入测试日志");
+
+        let value = query_logs(&json!({
+            "kind": "checkin",
+            "date": "2026-10-27",
+            "checkinUserId": "u1",
+            "limit": 1,
+        }));
+        let entries = value["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["checkin"]["action"], "fail");
+        assert_eq!(value["total"], 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn collect_counts_counts_each_kind() {
         let entries = vec![
@@ -528,6 +714,101 @@ mod tests {
             entry("app", "", "无日期"),
         ];
         assert_eq!(collect_dates(&entries), vec!["2026-09-17", "2026-09-15"]);
+    }
+
+    /// 结构化流水：契约字段必须逐字解析出来。
+    #[test]
+    fn parse_checkin_record_reads_contract_fields() {
+        let record = parse_checkin_record(
+            "签到记录 userId=3810270489353475 action=claim_ok delta=100 code=0",
+        )
+        .expect("契约行必须解析成功");
+        assert_eq!(record.user_id, "3810270489353475");
+        assert_eq!(record.action, "claim_ok");
+        assert_eq!(record.delta, 100);
+        assert_eq!(record.code, Some(0));
+
+        // `code=-` 是写侧「未提供」的占位，解析成 None。
+        let record = parse_checkin_record("签到记录 userId=u1 action=skip_already delta=0 code=-")
+            .expect("已签到行也必须可解析");
+        assert_eq!(record.code, None);
+        assert_eq!(record.action, "skip_already");
+
+        // 可选字段缺失时给默认值，不算坏行（写侧加字段不至于让读侧全瞎）。
+        let record = parse_checkin_record("签到记录 userId=u2 action=fail")
+            .expect("缺 delta/code 仍应可解析");
+        assert_eq!(record.delta, 0);
+        assert_eq!(record.code, None);
+    }
+
+    /// **反例集**：这些行都曾被旧逻辑误判成「签到成功」，必须全部返回 `None`。
+    ///
+    /// 其中 OAuth / JWT 两行是最具破坏力的：它们含 `user=<uid>` 且不含失败字样，
+    /// 用户刷新一次 JWT，历史表当天就会凭空多出一个「成功」。
+    #[test]
+    fn parse_checkin_record_rejects_non_signed_lines() {
+        for message in [
+            "OAuth 登录成功【Trae CN】: user=3810270489353475 name=QYJ jwt到期=336.0h",
+            "JWT 自动刷新成功: user=3810270489353475 新到期=336.0h",
+            "签到完成: 成功 1/已签到 0/失败 0/总计 1",
+            "状态预检失败 [账号353475] code=Some(500) boom —— 仍尝试 claim",
+            "设备凭证回落：账号无绑定 deviceId",
+            // 前缀粘连：不是契约格式，不能当成签到结果。
+            "签到记录userId=u1 action=claim_ok",
+            // 缺必需键：无法归属到账号 / 无法判断动作。
+            "签到记录 action=claim_ok delta=100",
+            "签到记录 userId=u1 delta=100",
+            "签到记录 userId= action=claim_ok",
+            "签到记录 userId=u1 action=unknown delta=100 code=0",
+            "签到记录 userId=u1 action=claim_ok delta=not-a-number code=0",
+            "签到记录 userId=u1 action=claim_ok delta=100 code=not-a-number",
+        ] {
+            assert!(
+                parse_checkin_record(message).is_none(),
+                "不该被解析成签到流水：{message}"
+            );
+        }
+    }
+
+    /// 未知键必须忽略：以后给流水加字段时，老读侧仍要能解析。
+    #[test]
+    fn parse_checkin_record_ignores_unknown_keys() {
+        let record = parse_checkin_record(
+            "签到记录 note=whatever userId=u1 action=claim_ok delta=50 code=0 extra=1",
+        )
+        .expect("含未知键仍应可解析");
+        assert_eq!(record.user_id, "u1");
+        assert_eq!(record.delta, 50);
+    }
+
+    /// `entry_json` 只给**已解析的**签到流水挂 `checkin` 字段，其余行保持原形。
+    #[test]
+    fn entry_json_attaches_checkin_only_for_parsed_checkin_lines() {
+        let signed = entry(
+            "checkin",
+            "2026-10-27 09:57:18",
+            "签到记录 userId=u1 action=claim_ok delta=100 code=0",
+        );
+        let value = entry_json(&signed);
+        assert_eq!(value["checkin"]["userId"], "u1");
+        assert_eq!(value["checkin"]["action"], "claim_ok");
+        assert_eq!(value["checkin"]["delta"], 100);
+
+        // 同一天里那些「含 uid 但不是签到」的行必须没有该字段。
+        let refreshed = entry(
+            "checkin",
+            "2026-10-27 09:59:04",
+            "JWT 自动刷新成功: user=u1 新到期=336.0h",
+        );
+        assert!(entry_json(&refreshed).get("checkin").is_none());
+
+        // 即使正文能解析，来自其它日志文件的行也不挂（`checkin` 是签到日志专属语义）。
+        let foreign = entry(
+            "app",
+            "2026-10-27 09:59:04",
+            "签到记录 userId=u1 action=claim_ok",
+        );
+        assert!(entry_json(&foreign).get("checkin").is_none());
     }
 
     /// 日志来源必须按变体分家：`checkin` / `switch` 各读各的，`app` 刻意共用。

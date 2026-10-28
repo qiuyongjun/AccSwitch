@@ -32,6 +32,13 @@ export const zh = {
   // P4：最小批量条的动作标签（走 actionDone / actionFailed 组合）。
   "trae.page.accounts.actionBatchCheckin": "批量签到",
   "trae.page.accounts.actionRefreshCredits": "刷新积分",
+  // ★ 2026-10-26：页头「一键刷新」回执 —— 与 WB 同一句式（「已刷新 N 个账号：…」），
+  //   只是项少三项（Trae 没有旅行 / 成长任务，Token 不进卡片）。
+  "trae.page.accounts.quickRefreshDone": "已刷新 {n} 个账号：积分 · 签到状态 · 凭证状态",
+  "trae.page.accounts.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
+  "trae.page.accounts.quickRefreshFail": "刷新失败",
+  // 勾选批量刷新积分：逐账号结果（成功 / 失败）—— 部分失败时不中断整批。
+  "trae.page.accounts.batchRefreshPartial": "{ok} 个成功，{failed} 个失败",
   // 备注单独一套提示（不走 actionDone）：保存与清空是两件不同的事，
   // 统一成「编辑备注完成」会让「我到底是删掉了还是写上了」看不出来。
   "trae.page.accounts.remarkSaved": "备注已保存",
@@ -102,6 +109,10 @@ export const zh = {
   // ⚠️ 2026-10-10：工具栏上的「分组筛选」下拉已删除（用户要求工具栏与 WorkBuddy 一致），
   //    随之删除 `groupFilterAria` / `allAccounts` / `ungrouped` / `groupItem` 四条文案。
   "trae.page.accounts.fallbackGroup": "分组",
+  // ★ 2026-10-26：抽屉里的分组编辑（Trae 的组是实体，组名 → id 的落库由页面完成）。
+  "trae.page.accounts.groupSaved": "已设为分组「{name}」",
+  "trae.page.accounts.groupNone": "未分组",
+  "trae.page.accounts.groupCreateFailed": "创建分组失败",
   // P4 工具栏：排序 / 分组选项（由 `availableSorts` / `availableGroups` 数据驱动，不摆假选项）
   "trae.page.accounts.toolbar.sort.priority": "积分优先级",
   "trae.page.accounts.toolbar.sort.name": "名称",
@@ -120,9 +131,13 @@ export const zh = {
   "trae.page.accounts.table.account": "账号",
   "trae.page.accounts.table.status": "状态",
   "trae.page.accounts.table.credits": "积分",
-  "trae.page.accounts.table.expiry": "到期",
+  // ★ 2026-10-26：`table.expiry` 已删 —— 「到期」不再是独立列，改由积分列的副行承担
+  //   （与 WB 表格同一形态；两列都写「到期」会让读者分不清是积分还是凭据到期）。
+  // ★ 2026-10-26：与 WorkBuddy 同批补「凭据」列（凭据到期，不是左边「到期」列的积分包到期）。
+  "trae.page.accounts.table.credential": "凭据",
   "trae.page.accounts.table.programs": "程序位",
-  "trae.page.accounts.table.current": "当前",
+  // ★ 2026-10-27：`table.current`（「当前」）已删 —— 表格改用卡片同一枚
+  //   `trae.comp.card.currentLogin`（「当前登录」），保持两种视图同一文案与同一底色。
   // ⚠️ 2026-10-23：账号页抽屉的「更多操作」已删除 ⇒ 自动签到 / 跳过已签到的开关文案
   //   只留在设置页（`trae.page.settings.autoCheckin*`）。这里删除以下已无引用的键：
   //   autoCheckin / autoCheckinSaving / skipChecked / skipCheckedAria /

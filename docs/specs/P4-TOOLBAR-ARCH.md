@@ -195,14 +195,46 @@ export interface AccountColumn<T> {
 }
 ```
 
-**WB 列**：账号（头像+名+脱敏邮箱+当前登录/使用中徽标）/ 状态 / 积分 / 程序位（只读徽标）。
+**WB 列**：账号（头像+名+脱敏邮箱+当前登录/使用中徽标）/ 状态 / 积分 / 凭据 / 程序位（只读徽标）。
 > ★ 2026-10-23：列表与卡片同契约 —— 「状态」列复用卡片的互斥状态 / 成长任务 / 旅行徽章；
 > 「积分」列 = `当前/总额` + `最近到期` + `优先`（与卡片指标行同一份 `creditMetricValues` 与
 > `nextExpiryLabel`；「最近到期」只报最急一批的金额与**到期日 + 时分**，更远批次在 tooltip）；
 > 账号格的当前徽标复用卡片文案 `card.currentLogin`（「当前登录」）。
-> 「今日 Token」列随卡片指标行瘦身一并移除（其正式界面是用量统计页 / 详情抽屉）；
-> 「到期」列同批移除（卡片从不显示凭证到期，到期信息只在详情抽屉；排序项 `expiry` 保留）。
-**Trae 列**：账号 / 状态 / 积分 / 到期 / 程序位（只读徽标）。**无「今日 Token」**（Trae 无该口径 —— 与 `traeStats` 的既有说明一致）。
+> 「今日 Token」列随卡片指标行瘦身一并移除（其正式界面是用量统计页 / 详情抽屉）。
+> ★ 2026-10-26：「到期」列曾被移除（当时理由是「卡片从不显示凭证到期」）。同日卡片在
+> 指标行下方补了 `凭证到期 … · 刷新令牌到期 …`，该前提不再成立 ⇒ 表格补回一列，列头用
+> 「凭据」（与 `shared.stat.credential` / 抽屉页签同一措辞），两行分别给凭证到期与刷新令牌到期。
+> 单元格复用卡片导出的 `CredentialExpiryMeta`（`layout="column"`）：日期格式与
+> 「有值 / 需重登 / 未知」三分支只有一份实现，两处不可能漂移。理由是纯文本、无 `onClick`，
+> 不占用行可点区预算。排序项 `expiry` 不受影响（仍在详情抽屉与排序里）。
+**Trae 列**：账号 / 状态 / 积分（主行 `剩余/总量` + 副行最急一批到期）/ 凭据 / 程序位（只读徽标）。**无「今日 Token」**（Trae 无该口径 —— 与 `traeStats` 的既有说明一致）。
+> ★ 2026-10-26（跨作用域复刻）：Trae 表格按 WB 重排 —— ① 补「凭据」列，但**只给凭据到期**
+> （`TraeAccount` 只有 `hasRefreshToken`，没有刷新令牌的到期时间；用「有」冒充「到期日」会造出
+> 一行答非所问的信息），单元格复用 `CredentialExpiryMeta`（`showRefreshToken={false}`）；
+> ② **删掉独立的「到期」列**，改由积分列的副行承担（WB 同一形态）。
+> ⚠️ Trae 的 `jwtExpTimestamp` 是 **Unix 秒**（后端 `trae/jwt.rs:20`），换算必须过
+> `traeJwtExpiryMs`（卡片与表格两处共用）；积分总量过 `traeCreditTotal`。
+> **Qoder「凭据」列**（2026-10-27，T05 / T02 完成后启用）：`expiresAt` 已由 core 的
+> `normalize_expiry_ms` 从数据层归一成 Unix 毫秒 ⇒ 卡片与列表都复用 `CredentialExpiryMeta`
+> 展示凭据到期（列表 `layout="column"`，`showRefreshToken={false}` —— Qoder 无刷新令牌到期），
+> 抽屉「凭据」页签同样展示。卡片指标行仍只放**额度**到期，两条字段不要混用。
+> ★ 2026-10-27（用户要求「列表与卡片的标签一致」）：① 账号格徽标改用卡片同一枚
+> `trae.comp.card.currentLogin`（「当前登录」+ `info` primary 底），此前写「当前」+ secondary；
+> ② 积分明细先过 `traeCreditPackages`（`get_trae_credits.packages[uid]` 优先、回落账号快照）
+> 再算 `traeCreditTotal` / `summarizeExpiry` —— 只读账号快照会让卡片有 `剩余/总数` 与到期金额、
+> 列表只剩剩余；③ 程序位列复用卡片页脚的 `TraeCurrentProgramChip`（primary 18% 底 + ✓），
+> 不再用 secondary 徽章。
+> **Qoder 表格**：账号格同样复用卡片的「当前登录」徽章；积分列补副行「X 积分 MM-DD HH:mm 到期」
+> （与卡片指标行同一份 `summarizeExpiry` + `nextExpiryLabel`）。Qoder 表格**没有**程序位列。
+> ★ 2026-10-27（用户报障「今日未签到，卡片和列表不一致」）：**「状态」列整列改为复用卡片的
+> `TraeStatusChips`**，不再在表格里另拼一套。此前表格自写：未签到 = secondary 灰、无图标，
+> 卡片 = warning 琥珀 + 日历勾；凭据过期同理（卡片「凭据已过期」、列表「已过期」）。
+> 该组件现在是 Trae 状态标签的**唯一实现**：互斥状态（凭据已过期 / 需重新登录 → 今日未签到 /
+> 已签到）+ 冷却中 + 凭据有效期。冷却中从表格独有收进共享组件（后端只在未到期时下发
+> `cooldownType`，见 `trae/account.rs` 的 `active_cooldown`），tooltip 给类型 / 解除时刻 / 原因。
+> 表格同时改读 `checkinTodayOf(account)`（`checkinMap` 优先、快照兜底）—— 只读快照会让
+> 刷过签到状态的账号在列表里停在旧值；工具栏「状态」分桶也改为同一判据。
+> Qoder 无需改动：它的 `QoderStatusChips` 早已是卡片与表格共用的同一份实现。
 
 **行交互（≤4 可点区）**：勾选框（1）+ 行本身（点行打开详情，1）= **2 个**；程序位是**只读徽标**（不可点）。满足 §3.3。
 
@@ -226,7 +258,7 @@ export interface AccountColumn<T> {
 ### 1.10 与「卡片可点区 ≤4」的关系
 
 - 工具栏在**列表之外**（列表标题行），**不新增任何卡内可点区**。`AccountCard` / `TraeAccountCard` 的 props **不变**。
-- 表格视图的程序位列是**只读徽标**（复用 `account-detail-drawer.tsx` 的 `DetailProgramBadge` 呈现口径），**不是切换控件** —— 与抽屉同纪律。
+- 表格视图的程序位列是**只读徽标**（复用 `account-detail-drawer.tsx` 的 `DetailProgramBadge` 呈现口径；Trae 侧复用卡片页脚的 `TraeCurrentProgramChip`），**不是切换控件** —— 与抽屉同纪律。
 - **禁止**在工具栏里为每张卡加「快速操作」按钮。
 
 ### 1.11 ★ 批量执行模型与跨版本状态隔离（2026-10-23 审查整改）
@@ -245,7 +277,7 @@ export interface AccountColumn<T> {
 
 **③ 中止是协作式的，文案必须承认「未处理」。**
 `signal` 只拦**尚未开始**的账号，在途请求会跑完 ⇒ 中止后必须报「N 个未处理」（`wbAccounts.toast.batchCancelled`），**不能**报成全部完成，也不能把它们混进 `failedIds`（它们没有失败）。因此重试名单 `retryIds = 失败 + 未处理`，而不是只有失败。
-进度（`shared.batch.progress`）只对「按账号循环」的动作出现；整批请求（一键刷新）没有可计数单位，不显示进度。
+进度（`shared.batch.progress`）只对「按账号循环」的动作出现；一键刷新不接进度（它的积分是 N 个上游请求、其余是整批请求，没有统一的计数单位），因此页头只显示转圈。
 
 **④ 「需处理」与「按状态」分桶必须同源。**
 判据唯一出处：`src/lib/account-attention.ts`。`attentionOf` 供分桶（三档：需重登 / 已过期 / 今日未签到），`needsManualAttention` 供页头计数（**只算凭据类**——签到与成长任务有一键按钮可自动完成，不该变成永不归零的数字）。
@@ -720,3 +752,52 @@ graph TD
   T03 --> T05["T05 验证与门禁<br/>(check:api / check:scope / tsc / 变异验证)"]
   T04 --> T05
 ```
+
+### 1.12 ★ 账号界面对齐（2026-10-27，Trae / Qoder 与 WorkBuddy 同骨架）
+
+本轮把三平台账号页的**入口、状态与结果反馈**收成同一套骨架（`docs/specs/trae-parity-design.md` §11）。
+五条约束，**约束后续改动**：
+
+**① 作用域隔离靠 `key` 重挂载，三个平台一致。**
+`TraeAccountsPage` / `QoderAccountsPage` 与 `AccountsPage` 同构：外层只读作用域，
+渲染 `<Panel key={scope} …/>`。查询 / 排序 / 分组 / 视图 / 勾选 / 抽屉 / 结果条 / 签到快照
+全部随作用域重挂载，不逐项 clear。作用域内重叠读取另加请求序号：
+旧响应不得覆盖新结果（Qoder `reloadSeq` / `enrichmentSeq`；Trae 由 `useCachedResource` 的 superseded 承担）。
+
+**② 详情抽屉按 `scope:accountId` 取活账号。**
+展示与动作读**当前账号集合**里的那一条，不是打开时的快照；账号被删除时关闭抽屉，
+不再对失效快照续期 / 签到。详情动作的 `onRefresh` **返回 Promise**
+（`DetailActions.onRefresh`），`void refreshOne(...)` 会让忙态提前结束。
+
+**③ 单账号菜单只装配一份。**
+每个平台页提供 `renderAccountMenu(account, compact?)`，**卡片页脚**（`menu` prop）与
+**表格 `renderActions`** 消费同一个节点。卡片只负责摆位；`compact` 只影响触发按钮尺寸。
+签到状态用显式值 `AccountCheckinState`（checked / unchecked / unknown / unreadable / unavailable）
+表达，未开放与读取失败各自给原因；平台扩展动作（Trae 保存登录态 / 解除冷却）走
+`extraActions`，业务判定留在页面。
+
+**④ 批量与单账号共用动作定义，批量执行走固定并发池。**
+批量「刷新」是**只读下拉**（积分 / 签到 / 凭证），「续期凭据」是下拉外的写操作；
+逐账号任务走 `mapWithConcurrency`（并发 3、间隔 150ms）并接进度与**协作式取消**。
+结果分四档：成功 / 已签或未开放（跳过）/ 失败 / **未处理**（取消后未发出）；
+重试名单只含失败 + 未处理，重复续期与未开放通道不重试。
+
+**⑤ Qoder 时间契约与积分筛选。**
+到期时间在 core 归一（`qoder::account::normalize_expiry_ms`：秒/毫秒按量级、RFC3339 在导入边界解析），
+账号视图、保活判断与客户端写回共用同一函数；前端只接收 Unix 毫秒或 `null`。
+`qoder_credits` 支持可选账号筛选，过滤在上游请求前完成（见
+`docs/specs/api-trae-qoder-per-account-refresh.md` §9）。
+
+**⑥ 2026-10-28 复审整改（异步状态，非布局）**
+
+- **取消后的「未处理」必须算出来**：`mapWithConcurrency` 返回**稠密**数组（未执行项为 `undefined`），
+  调用方按**目标索引**统计；稀疏数组会让 `filter` / `forEach` 跳过空位，取消后误报全部成功。
+- **切区卸载即中止**：面板卸载时 `abort()` 尚未开始的批处理；Trae 另调 `trae_checkin_cancel(taskId)`
+  停掉后端批签到。卸载后不再弹旧批次的结果 toast（`aliveRef` 守卫）。
+- **续期跨入口去重**：Qoder 页面按 `uid` 复用在途 Promise（菜单 / 详情 / 批量共用）；
+  core 在 `refresh_for` 里按 `(region, uid)` 串行化，挡住两个客户端同时对同一账号续期。
+- **签到成功覆盖旧失败条目**：`ok:false` 的上游条目必须被「已签到 + ledger」整体替换，
+  否则它的优先级高于区域快照，卡片 / 详情会继续显示「读取失败」。
+- **签到金额未知显示「—」**：抽屉不再 `?? 0` 补零。
+- **Trae 批量签到的进度与取消**：任务 id + 协作式取消契约，见
+  `docs/specs/api-trae-qoder-per-account-refresh.md` §10；不可用前端取消冒充后端停止。
