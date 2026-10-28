@@ -389,7 +389,14 @@ npm install
 npm run tauri dev     # 桌面端开发
 npm run build         # 前端构建 + 契约 / 作用域 / 平台门禁
 npm run check:api     # 只校验前端 API 契约
+npm run check:rust    # 只校验 Rust 全量编译（cargo check --workspace --all-targets）
+npm run verify        # 提交前跑这个：build + check:rust
 ```
+
+> ⚠️ `npm run build` **不含** Rust 编译：Dockerfile 的 frontend 阶段是纯 node 镜像，
+> 把 cargo 塞进去会让镜像构建失败。因此改过 `crates/` / `src-tauri/` 时必须另跑
+> `npm run check:rust`（或直接 `npm run verify`）—— 否则「前端门禁全绿、后端编译不过」
+> 不会被发现。CI 的 `pr-check` 已有独立的 clippy / test job 兜底。
 
 ```
 crates/
