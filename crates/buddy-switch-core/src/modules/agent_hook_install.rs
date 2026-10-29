@@ -153,9 +153,7 @@ pub fn is_our_hook(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
     // 旧名保留：改名前的安装仍可能留着旧路径的 hook，卸载/重装要认得出并替换，
     // 否则同一客户端里会同时挂两条 hook。
-    (lower.contains("accswitch")
-        || lower.contains("buddyswitch")
-        || lower.contains("buddy-switch"))
+    (lower.contains("accswitch") || lower.contains("buddyswitch") || lower.contains("buddy-switch"))
         && lower.contains(" hook")
         && lower.contains("--source")
 }
@@ -395,8 +393,7 @@ pub fn uninstall(slot_key: &str) -> Result<Value, String> {
 mod tests {
     use super::*;
 
-    const CMD: &str =
-        "\"C:\\Program Files\\AccSwitch\\AccSwitch.exe\" hook --source workbuddy";
+    const CMD: &str = "\"C:\\Program Files\\AccSwitch\\AccSwitch.exe\" hook --source workbuddy";
 
     fn others_hook() -> Value {
         json!({

@@ -292,7 +292,11 @@ pub fn export_accounts_for(region: Region, ids: &[String]) -> Result<Vec<Value>,
     select_export_records(&account::load_accounts_for(region), ids)
 }
 
-/// 导出文件名白名单：只允许 `buddy-switch-accounts-YYYY-MM-DD.json` 这类由前端生成的文件名。
+/// 导出文件名白名单：拒绝路径分隔符 / `..` / 非 `.json`。
+///
+/// ⚠️ **刻意不校验品牌前缀**：前端生成的名字跟产品名走（2026-10-21 前是
+/// `buddy-switch-accounts-YYYY-MM-DD.json`，现在是 `accswitch-accounts-*.json`），
+/// 保存对话框里用户也可以自己改名。名字不是安全边界，**路径才是**，所以只挡穿越。
 fn validate_export_file_name(file_name: &str) -> Result<(), String> {
     let name = file_name.trim();
     if name.is_empty()
@@ -585,6 +589,9 @@ mod tests {
         assert!(validate_export_file_name("a\\b.json").is_err());
         assert!(validate_export_file_name("out.txt").is_err());
         assert!(validate_export_file_name("").is_err());
+        // 前端现在生成 `accswitch-accounts-*.json`；旧的 `buddy-switch-accounts-*` 也照收
+        //（前缀不是安全边界，见函数注释）。
+        assert!(validate_export_file_name("accswitch-accounts-2026-10-23.json").is_ok());
         assert!(validate_export_file_name("buddy-switch-accounts-2026-08-21.json").is_ok());
     }
 

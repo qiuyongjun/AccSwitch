@@ -96,7 +96,7 @@ WebviewWindowBuilder::new(app, "companion", WebviewUrl::App("index.html?window=c
 
 ### 1.5 宿主侧入口（侧栏左下角 + 托盘，**双入口同一偏好**）
 
-**入口 1 · 侧栏左下角图标**（`App.tsx` 的侧栏底部 `<section>`，与 `AppFooter` / `DonateButton` 同区，`App.tsx:625-631`）：一个 `size-5` 的 mini 图标按钮（与原型 `index.html:67` 的 `.mini-btn` 同位），`onClick` → `setCompanionVisible(!visible)`。**不占侧栏 5 项**（§3.16：不占侧栏项，入口在侧栏左下角）。
+**入口 1 · 侧栏左下角图标**：挂在侧栏底部 `<section>`（`App.tsx:792`；2026-10-21 起该区块先放品牌行、再放版本行）内的 `AppFooter` 版本行上（`App.tsx:497-509`），是一个 `size-5` 的 mini 图标按钮（与原型 `index.html:67` 的 `.mini-btn` 同位），`onClick` → `setCompanionVisible(!visible)`。**不占侧栏 5 项**（§3.16：不占侧栏项，入口在侧栏左下角）。
 
 **入口 2 · 托盘菜单项**（`tray.rs:422-459` 的 `build_tray_menu`）：新增一项「会话悬浮窗」（`CheckMenuItem`，勾选态 = 当前可见），与既有 `lightweight-mode` 同款；`on_menu_event` 加 `"toggle-companion"` 分支。
 

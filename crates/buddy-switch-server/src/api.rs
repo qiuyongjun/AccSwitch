@@ -1488,16 +1488,16 @@ async fn api_growth_tasks_scan(Json(body): Json<Value>) -> Response {
         }
     };
     if region != Region::Cn {
-        return json_err("国际版暂无成长任务体系".to_string(), StatusCode::BAD_REQUEST);
+        return json_err(
+            "国际版暂无成长任务体系".to_string(),
+            StatusCode::BAD_REQUEST,
+        );
     }
     let account_id = body
         .get("accountId")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty());
-    let force = body
-        .get("force")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let force = body.get("force").and_then(Value::as_bool).unwrap_or(false);
     json_ok(growth_tasks::scan_for(region, account_id, force).await)
 }
 
@@ -6565,12 +6565,15 @@ mod tests {
             "/api/data-dir/open",
             "/api/credits/query",
             "/api/checkin/status/query",
-            // 成长任务 5 路由同款：`scope` 是必填维度，未知 / 缺失一律 400。
+            // 成长任务 6 路由全部同款：`scope` 是必填维度，未知 / 缺失一律 400。
+            // ⚠️ 新增路由必须同步加进来 —— `scan` 曾漏在这里，导致「区域闸门」只有实现、
+            //    没有回归护栏（改坏它不会有任何断言变红）。
             "/api/growth-tasks/list",
             "/api/growth-tasks/accept",
             "/api/growth-tasks/claim",
             "/api/growth-tasks/claim-all",
             "/api/growth-tasks/auto",
+            "/api/growth-tasks/scan",
         ] {
             // 未知 / 拼错的作用域 ⇒ 400（`resolve_scope_param` 在落盘之前失败）。
             let (status, body) = call_api(

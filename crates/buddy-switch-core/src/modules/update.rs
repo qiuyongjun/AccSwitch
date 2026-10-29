@@ -19,7 +19,14 @@ use crate::modules::config::{
 
 /// 应用当前版本（来自 Cargo.toml package.version）。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const GITHUB_OWNER: &str = "NextAgentX";
+/// 更新源仓库 —— **必须与 `git remote origin` 一致，且仓库真实存在**。
+///
+/// ⚠️ 这里踩过两次（`docs/releases/v2026.10.172351.md`）：仓库改名后客户端里写死的
+/// owner/repo 没跟着改，用户看到的是「已是最新」或 404，且**不会报错**。
+/// 改成 `NextAgentX/AccSwitch` 也是一次（该仓库并不存在，实际仓库是个人 fork
+/// `qiuyongjun/AccSwitch`）。改这里时同步改三处：本常量、`src/lib/update.ts`、
+/// `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints`（测试里的 URL 断言会跟着红）。
+pub const GITHUB_OWNER: &str = "qiuyongjun";
 pub const GITHUB_REPO: &str = "AccSwitch";
 
 /// 自动轮询间隔，与前端 `src/lib/update-preference.ts` 的
@@ -664,8 +671,8 @@ mod tests {
         assert_eq!(
             urls,
             vec![
-                "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest.json",
-                "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest-macos-aarch64.json",
+                "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest.json",
+                "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest-macos-aarch64.json",
             ]
         );
     }
@@ -676,9 +683,9 @@ mod tests {
         assert_eq!(
             urls,
             vec![
-                "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest.json",
-                "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest-windows-x86_64.json",
-                "https://github.com/NextAgentX/AccSwitch/releases/latest/download/latest-macos-x86_64.json",
+                "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest.json",
+                "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest-windows-x86_64.json",
+                "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest-macos-x86_64.json",
             ]
         );
     }

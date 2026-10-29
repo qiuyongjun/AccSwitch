@@ -6,15 +6,15 @@
  * macOS 会给方形图标套 squircle 遮罩，Windows 则原样显示位图。因此 Windows 侧的
  * ico / Square* / StoreLogo 必须自己烘焙圆角，否则会出现难看的直角边框。
  *
- * 流程（与仓库既有约定一致）：
+ * 流程（下文括号里是控制台打印的进度编号；第 1 项是前置校验，不打编号）：
  *   1. 校验源图：真实 PNG、正方形、边长 >= 1024（Tauri 官方要求）
- *   2. `tauri icon` 生成基础全套：png / icns / ico / Square* / StoreLogo / android / ios
- *   3. 强制同步 `icon.png` = 源图（托盘图标与圆角脚本都以它为输入，必须确保是新图）
- *   4. 运行 `gen-windows-rounded-icon.py`，把 Windows 侧图标烘焙成 macOS 风格圆角
+ *   2. `tauri icon` 生成基础全套：png / icns / ico / Square* / StoreLogo / android / ios（1/6）
+ *   3. 强制同步 `icon.png` = 源图（托盘图标与圆角脚本都以它为输入，必须确保是新图）（2/6）
+ *   4. 运行 `gen-windows-rounded-icon.py`，把 Windows 侧图标烘焙成 macOS 风格圆角（3/6）
  *   5. 运行 `gen-tray-icon.py`，生成 macOS 菜单栏单色模板（template image）与
- *      Windows / Linux 彩色托盘图标（模板形状取自 `tray-mark.png`，不是整枚 App 图标）
- *   6. 运行 `gen-public-icons.py`，同步 `public/` 下的前端图标（侧栏标记 + favicon）
- *   7. 校验关键产物齐备，并打印清单
+ *      Windows / Linux 彩色托盘图标（模板形状取自 `tray-mark.png`，不是整枚 App 图标）（4/6）
+ *   6. 运行 `gen-public-icons.py`，同步 `public/` 下的前端图标（侧栏标记 + favicon）（5/6）
+ *   7. 校验关键产物齐备，并打印清单（6/6）
  *
  * ⚠️ `public/` 下的图标**不在 `tauri icon` 的产出范围**内，缺少第 6 步时
  * 换 logo 只会更新安装包图标，而**侧栏品牌标记与 Web favicon 会一直停在旧图**
@@ -126,7 +126,7 @@ function main() {
   }
 
   // ---------- 2. 生成基础全套 ----------
-  console.log("[gen-icons] 1/5 生成基础图标（tauri icon）...");
+  console.log("[gen-icons] 1/6 生成基础图标（tauri icon）...");
   execFileSync(process.execPath, [TAURI_CLI, "icon", input, "--output", ICONS_DIR], {
     cwd: ROOT,
     stdio: "inherit",
@@ -135,7 +135,7 @@ function main() {
   // ---------- 3. 同步 icon.png ----------
   // 托盘图标（tray.rs include_bytes）与下一步的圆角脚本都以 icon.png 为输入，
   // 不能假设 tauri icon 一定产出它，这里显式对齐，避免出现「新图配旧托盘」。
-  console.log("[gen-icons] 2/5 同步 icon.png <- 源图");
+  console.log("[gen-icons] 2/6 同步 icon.png <- 源图");
   const masterPng = path.join(ICONS_DIR, "icon.png");
   copyFileSync(input, masterPng);
 
@@ -149,7 +149,7 @@ function main() {
   }
 
   // ---------- 4. Windows 圆角 ----------
-  console.log("[gen-icons] 3/5 烘焙 Windows 圆角（含 .ico / Square* / StoreLogo）...");
+  console.log("[gen-icons] 3/6 烘焙 Windows 圆角（含 .ico / Square* / StoreLogo）...");
   execFileSync(python, [ROUNDED_SCRIPT], { cwd: ROOT, stdio: "inherit" });
 
   // ---------- 5. macOS 菜单栏单色模板 ----------

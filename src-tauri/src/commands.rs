@@ -803,7 +803,9 @@ pub async fn growth_tasks_scan(
     let region = match scope.product() {
         Product::Workbuddy => require_wb_region(scope)?,
         Product::Trae => return Err("Trae 没有成长任务体系".to_string()),
-        Product::Qoder => return Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string()),
+        Product::Qoder => {
+            return Err("成长任务只服务 WorkBuddy 作用域（Qoder 无此体系）".to_string())
+        }
     };
     if region != Region::Cn {
         return Err("国际版暂无成长任务体系".to_string());

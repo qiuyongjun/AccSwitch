@@ -39,11 +39,17 @@ interface Props {
   scope?: Scope;
 }
 
-/** 导出文件名：buddy-switch-accounts-YYYY-MM-DD.json */
+/**
+ * 导出文件名：`accswitch-accounts-YYYY-MM-DD.json`（跟当前品牌）。
+ *
+ * ⚠️ 后端 `export_import.rs::validate_export_file_name` **不校验前缀**（只挡路径分隔符 /
+ * `..` / 非 `.json`），所以这里换前缀不需要同步改后端；旧导出的
+ * `buddy-switch-accounts-*.json` 仍能被导入（导入不看文件名）。
+ */
 function exportFileName(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `buddy-switch-accounts-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
+  return `accswitch-accounts-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
 }
 
 /** 前端 Blob 下载（webui 浏览器用）。 */

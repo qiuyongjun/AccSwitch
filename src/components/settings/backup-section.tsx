@@ -290,7 +290,9 @@ export function BackupSection() {
     setPending(true);
     try {
       const envelope = await api.exportBackup(buildSelectionState());
-      const filename = `buddy-switch-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      /* 文件名跟当前品牌（AccSwitch）；envelope 里的 `kind` 仍是 `buddy-switch-backup`
+         —— 那是**格式标识**，改了会让旧备份导入不进来（见 `backup.rs::BACKUP_KIND`）。 */
+      const filename = `accswitch-backup-${new Date().toISOString().slice(0, 10)}.json`;
       downloadJson(filename, envelope);
       toast.success(t("backup.export.saved", { path: filename }));
     } catch (e) {

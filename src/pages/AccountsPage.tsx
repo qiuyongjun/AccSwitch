@@ -1065,16 +1065,30 @@ function RegionPanel({ region }: { region: Region }) {
       const failed = outcomes.filter((ok) => ok === false).length;
       const notAttempted = outcomes.filter((ok) => ok === undefined).length;
       const n = outcomes.filter((ok) => ok === true).length;
-      if (n === 0) {
-        toast.error(t("wbAccounts.toast.batchGrowthFail"), {
-          description: t("wbAccounts.toast.batchGrowthDesc", { n: 0, failed: failed + notAttempted }),
-        });
-      } else {
-        toast.success(t("wbAccounts.toast.batchGrowthDone"), {
-          description: t("wbAccounts.toast.batchGrowthDesc", { n, failed: failed + notAttempted }),
-        });
+      const attempted = n + failed;
+
+      /* 与批签**同一口径**（见 `reportCheckinOutcome`）：取消 ≠ 失败。
+         未轮到的账号一个请求都没发过，把它算进失败数会让用户以为上游拒了它；
+         更糟的是「立刻取消」会被报成「已刷新 0 个，N 个失败」这种自相矛盾的结论。
+         因此：失败数与未处理数分开写，两者都为零时才谈「刷新完成」。 */
+      const parts: string[] = [];
+      if (attempted > 0) {
+        parts.push(t("wbAccounts.toast.batchGrowthDesc", { n, failed }));
       }
-      setBatchRefreshDoneKind("growth");
+      if (notAttempted > 0) {
+        parts.push(t("wbAccounts.toast.batchCancelled", { n: notAttempted }));
+      }
+      const description = parts.join(t("shared.punct.comma"));
+
+      if (attempted === 0) {
+        // 一个都没轮到（用户立刻点了取消）⇒ 不报成功，也不点亮「已完成」角标。
+        toast.info(t("wbAccounts.toast.batchCancelledToast"), { description });
+      } else if (n === 0) {
+        toast.error(t("wbAccounts.toast.batchGrowthFail"), { description });
+      } else {
+        toast.success(t("wbAccounts.toast.batchGrowthDone"), { description });
+      }
+      if (attempted > 0) setBatchRefreshDoneKind("growth");
     } finally {
       setBatchRefreshKind(null);
       setBatchBusy(false);
