@@ -34,7 +34,7 @@ function accountLabel(a: TraeAccount, t: Translate): string {
 /**
  * 导出文件名：`trae-accounts-YYYY-MM-DD.json`。
  *
- * 刻意与 WorkBuddy 的 `buddy-switch-accounts-*.json` 区分：
+ * 刻意与 WorkBuddy 的 `accswitch-accounts-*.json` 区分：
  * 两份账号库的导出文件会被放在同一个下载目录里，文件名必须能自证归属，
  * 否则用户回导时极易拿错文件（Trae 的记录形状含 `UserID` 大写键，
  * 导进 WorkBuddy 会被当成无 uid 的条目）。

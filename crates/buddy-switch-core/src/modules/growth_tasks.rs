@@ -1021,13 +1021,21 @@ pub async fn accept_tasks_for(region: Region, account: &Value, codes: &[String])
 /// 任务码会**直接拼进 URL 路径**（`/activity/growth/tasks/<code>/claim`），不校验就等于
 /// 允许调用方指定任意路径 —— webui 支持 `--host 0.0.0.0` 部署，带的是用户自己的 Bearer。
 /// 上游真实任务码含点号（如 `Model_chat_GLM5.2`），故白名单必须放行 `.`。
+///
+/// ⚠️ 放行 `.` 的副作用是 `..` 也能通过字符白名单，而 `..` 会把拼出来的路径
+/// **重定向到同一 host 的其它端点**（`/activity/growth/tasks/../claim` 归一化成
+/// `/activity/growth/claim`）—— 白名单原本要挡的就是这类「调用方决定打哪个路径」。
+/// 因此额外拒绝**以 `.` 开头**与**含 `..`** 的码：上游真实任务码两者都不会出现。
 fn validate_task_code(code: &str) -> Result<&str, String> {
     let code = code.trim();
     let valid = !code.is_empty()
         && code.len() <= 64
         && code
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        // 下面两条才是真正的路径穿越闸门（`.` 单独出现 / `..` / `a..b` 全挡掉）。
+        && !code.starts_with('.')
+        && !code.contains("..");
     if valid {
         Ok(code)
     } else {
@@ -1503,7 +1511,8 @@ pub async fn run_auto_for(region: Region, account: &Value) -> Value {
         if ACTIONS.iter().any(|spec| spec.code == task.task_code) {
             continue; // 已在上面的循环里处理（达标必已被领取或记为失败）
         }
-        results.push(claim_only(region, &account, &task.task_code, &task.title, "进度已达标").await);
+        results
+            .push(claim_only(region, &account, &task.task_code, &task.title, "进度已达标").await);
         tokio::time::sleep(CLAIM_GAP).await;
     }
 
@@ -2081,7 +2090,11 @@ mod tests {
         // 每轮只补一个模板 ⇒ 用户要连点四次（线上实测症状）。
         assert_eq!(effective_target(&task), 5);
         assert_eq!((effective_target(&task) - task.current).max(0), 4);
-        assert_eq!(template_window(1, 4, 5), (1, 4), "零进度兜底后应补第 2–5 个");
+        assert_eq!(
+            template_window(1, 4, 5),
+            (1, 4),
+            "零进度兜底后应补第 2–5 个"
+        );
 
         // 上游给了目标就以它为准 —— 不能把 target=3 的任务硬拉成 5。
         task.task_code = "chat_5".to_string();
@@ -2094,7 +2107,13 @@ mod tests {
         assert_eq!(effective_target(&task), 1);
     }
 
-    fn sample_task(code: &str, current: i64, target: i64, accept: &str, locked: bool) -> GrowthTask {
+    fn sample_task(
+        code: &str,
+        current: i64,
+        target: i64,
+        accept: &str,
+        locked: bool,
+    ) -> GrowthTask {
         let claimed = accept == "claimed";
         GrowthTask {
             task_code: code.to_string(),
@@ -2138,7 +2157,10 @@ mod tests {
             sample_task("first_buddy", 1, 1, "claimed", false),
             sample_task("expert_5", 2, 5, "accepted", false),
         ];
-        assert!(summarize(&idle).is_idle(), "没有可领也没有可自动时不得挂标签");
+        assert!(
+            summarize(&idle).is_idle(),
+            "没有可领也没有可自动时不得挂标签"
+        );
     }
 
     #[test]
@@ -2278,13 +2300,21 @@ mod tests {
             validate_task_code("Model_chat_GLM5.2").unwrap(),
             "Model_chat_GLM5.2"
         );
-        assert_eq!(validate_task_code("  chat_5  ").unwrap(), "chat_5");
+        assert_eq!(validate_task_code(&"  chat_5  ").unwrap(), "chat_5");
         for bad in [
             "", "   ", "../admin", "a/b", "a?x=1", "a#f", "a b", "a%b", "a\\b",
         ] {
             assert!(
                 validate_task_code(bad).is_err(),
                 "应拒绝非法任务码：{bad:?}"
+            );
+        }
+        // 字符白名单放行 `.`（`Model_chat_GLM5.2` 需要），因此点号本身要单独挡：
+        // `.` / `..` / `a..b` 都能拼出会被上游归一化的路径（`tasks/../claim`）。
+        for dot in [".", "..", "...", ".hidden", "a..b", "a../b"] {
+            assert!(
+                validate_task_code(dot).is_err(),
+                "应拒绝含路径穿越语义的任务码：{dot:?}"
             );
         }
         assert!(validate_task_code(&"a".repeat(65)).is_err(), "超长须拒绝");

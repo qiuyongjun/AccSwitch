@@ -8,6 +8,9 @@ mod trae_gateway;
 // ⚠️ 端口分工上是**第四个监听**（WB 57891 / Trae 57894 / Qoder 57895 / 统一 57892），
 //    因此 setup 里必须有**四段** apply spawn —— 漏一段只在「保存配置」时才起监听，
 //    重启后静默断服（issue #52）。
+// 开机自启的注册身份（永久固定为更名前的旧名）与启动期路径自愈。
+#[cfg(desktop)]
+mod autostart;
 #[cfg(desktop)]
 mod companion;
 #[cfg(desktop)]
@@ -277,10 +280,17 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![tray::SILENT_STARTUP_ARG]),
-        ));
+        // ★ 自启注册名必须显式指定为旧名：`app_name` 缺省取 `productName`，
+        //   而 `productName` 2026-10-21 已从 `BuddySwitch` 改成 `AccSwitch`。
+        //   跟着改会让老用户的自启条目变成孤儿（静默失效），详见 `autostart.rs` 模块头。
+        let autostart_plugin = tauri_plugin_autostart::Builder::new()
+            .args([tray::SILENT_STARTUP_ARG])
+            .app_name(autostart::REGISTRATION_NAME);
+        // `macos_launcher` 只在 macOS 存在；`LaunchAgent` 与旧 `init(..)` 传的是同一个值。
+        #[cfg(target_os = "macos")]
+        let autostart_plugin =
+            autostart_plugin.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+        builder = builder.plugin(autostart_plugin.build());
         builder = builder.on_window_event(on_window_event);
     }
 
@@ -295,6 +305,9 @@ pub fn run() {
                     app.handle(),
                     tray::is_silent_startup(std::env::args()),
                 );
+                // 自启条目若已开启，用当前 exe 路径重写一次：改名后安装目录也变了，
+                // 旧条目里存的是旧绝对路径（条目还在、开机起不来）。幂等，关闭态不碰。
+                autostart::refresh_registration(app.handle());
             }
             // 网关运行时句柄（管理命令依赖它查询/切换独立监听）。
             app.manage(gateway::GatewayRuntime::new());

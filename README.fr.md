@@ -11,9 +11,9 @@
 
 <p align="center">
   <img alt="Plateformes" src="https://img.shields.io/badge/Plateformes-macOS_%7C_Windows_%7C_Linux-2ea043" />
-  <a href="https://github.com/NextAgentX/AccSwitch/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/NextAgentX/AccSwitch?label=Version" /></a>
+  <a href="https://github.com/qiuyongjun/AccSwitch/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/qiuyongjun/AccSwitch?label=Version" /></a>
   <a href="./LICENSE"><img alt="Licence" src="https://img.shields.io/badge/Licence-PolyForm_Noncommercial-4c8bf5" /></a>
-  <a href="https://github.com/NextAgentX/AccSwitch/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/NextAgentX/AccSwitch?style=social" /></a>
+  <a href="https://github.com/qiuyongjun/AccSwitch/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/qiuyongjun/AccSwitch?style=social" /></a>
 </p>
 
 <p align="center">
@@ -38,8 +38,8 @@ Un poste de travail multi-comptes **100 % local** : il rassemble les comptes de 
 | 🔌 **Le quota profite aussi aux autres outils** | Exposé en endpoint compatible OpenAI / Anthropic : Cursor, Claude Code, OpenWebUI. |
 
 <p align="center">
-  <a href="https://github.com/NextAgentX/AccSwitch/releases/latest"><img alt="Télécharger" src="https://img.shields.io/badge/T%C3%A9l%C3%A9charger-Releases-2ea043?style=for-the-badge" /></a>
-  <a href="https://github.com/NextAgentX/AccSwitch/stargazers"><img alt="Mettre une étoile" src="https://img.shields.io/badge/Mettre_une_%C3%A9toile-Star-f5c542?style=for-the-badge" /></a>
+  <a href="https://github.com/qiuyongjun/AccSwitch/releases/latest"><img alt="Télécharger" src="https://img.shields.io/badge/T%C3%A9l%C3%A9charger-Releases-2ea043?style=for-the-badge" /></a>
+  <a href="https://github.com/qiuyongjun/AccSwitch/stargazers"><img alt="Mettre une étoile" src="https://img.shields.io/badge/Mettre_une_%C3%A9toile-Star-f5c542?style=for-the-badge" /></a>
   <a href="CONTRIBUTING.en.md"><img alt="Contribuer" src="https://img.shields.io/badge/Contribuer-Pull_Request-4c8bf5?style=for-the-badge" /></a>
 </p>
 
@@ -184,7 +184,7 @@ flowchart TB
 
 | Forme | Comment l'obtenir | Remarque |
 | --- | --- | --- |
-| **Application de bureau** | Télécharger l'installateur depuis [GitHub Releases](https://github.com/NextAgentX/AccSwitch/releases/latest) | Empaquetée avec Tauri ; recommandée au quotidien |
+| **Application de bureau** | Télécharger l'installateur depuis [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) | Empaquetée avec Tauri ; recommandée au quotidien |
 | **webui** | Compiler depuis les sources (ci-dessous) | Même bundle frontal que l'application, servi en HTTP local |
 | **Docker** | Récupérer l'image préconstruite `ghcr.io/nextagentx/buddy-switch` (amd64 / arm64) | Le conteneur embarque le **serveur headless** (webui + passerelles API), **pas** le commutateur de bureau ; voir [Déploiement Docker](docs/guides/DOCKER.md) |
 | **Démo en ligne** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | Démo en lecture seule ; comptes et usage fictifs |
@@ -407,7 +407,7 @@ L'index complet est dans [docs/README.md](docs/README.md) — par cycle de vie :
 
 | | |
 | --- | --- |
-| 🐞 **Signaler un bug** | Avec la version et une capture du journal : [ouvrir une issue](https://github.com/NextAgentX/AccSwitch/issues/new) |
+| 🐞 **Signaler un bug** | Avec la version et une capture du journal : [ouvrir une issue](https://github.com/qiuyongjun/AccSwitch/issues/new) |
 | 🧩 **Ajouter une plateforme** | Les différences se déclarent une seule fois dans `src/lib/platforms/registry.ts` et `product.rs` ; les pages ne changent pas. |
 | 🌍 **Corriger une traduction** | Les textes vivent par paires `src/locales/domains/*.zh.ts` ↔ `*.en.ts` ; les relectures des huit README sont bienvenues. |
 | 📸 **Rafraîchir les captures** | Une commande refait toutes les images clair/sombre — voir l'en-tête de `scripts/gen-readme-shots.mjs`. |
@@ -454,11 +454,11 @@ Texte complet : **[docs/policies/DISCLAIMER.en.md](docs/policies/DISCLAIMER.en.m
 
 ## Historique des stars
 
-<a href="https://www.star-history.com/?repos=NextAgentX%2FAccSwitch&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=qiuyongjun%2FAccSwitch&type=date&legend=top-left">
 
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=NextAgentX/AccSwitch&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&legend=top-left" />
  </picture>
 </a>

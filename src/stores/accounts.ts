@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as api from "@/lib/api";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import type { AccountMeta, AppStatus, CreditExpiry, Region } from "@/lib/types";
 
 /** 单个 region 的账号/状态/积分切片。CN 的切片与既有顶层字段同形，便于兼容既有调用方。 */
@@ -234,32 +235,26 @@ async function loadCredits(accountIds: string[], force: boolean, silent: boolean
     });
   }
 
-  /* 固定 worker 池而非 Promise.all：批量刷新时把「N 账号 × 3 路请求」的瞬间并发压到 3 路，
-     单账号刷新仍是一次请求，行为不变。 */
-  let cursor = 0;
-  const workers = Array.from(
-    { length: Math.min(CREDIT_FETCH_CONCURRENCY, toFetch.length) },
-    async () => {
-      while (cursor < toFetch.length) {
-        const id = toFetch[cursor++];
-        const result = await fetchCreditExpiry(id, region);
-        creditInflight[region].delete(id);
-        useAccountsStore.setState((s) => {
-          const cur = selectRegionSlice(s, region);
-          return regionPatch(s, region, {
-            creditMap: { ...cur.creditMap, [id]: result },
-            creditLoadingMap: silent
-              ? cur.creditLoadingMap
-              : { ...cur.creditLoadingMap, [id]: false },
-          });
+  /* 走 `lib/concurrency.ts` 的固定 worker 池（**本仓唯一的批量并发口径**，与账号页的
+     批量签到 / 续期 / 成长任务同一份实现）：批量刷新时把「N 账号 × 3 路请求」的瞬间
+     并发压到 3 路，单账号刷新仍是一次请求，行为不变。
+     ⚠️ 不要在这里再手写一份 cursor + gapMs 的循环 —— 2026-10-23 之前就是那样，两份
+     实现一旦要一起改（比如加中止或改间隔）必然漏一边。 */
+  await mapWithConcurrency(
+    toFetch,
+    async (id) => {
+      const result = await fetchCreditExpiry(id, region);
+      creditInflight[region].delete(id);
+      useAccountsStore.setState((s) => {
+        const cur = selectRegionSlice(s, region);
+        return regionPatch(s, region, {
+          creditMap: { ...cur.creditMap, [id]: result },
+          creditLoadingMap: silent ? cur.creditLoadingMap : { ...cur.creditLoadingMap, [id]: false },
         });
-        if (cursor < toFetch.length) {
-          await new Promise((resolve) => setTimeout(resolve, CREDIT_FETCH_GAP_MS));
-        }
-      }
+      });
     },
+    { concurrency: CREDIT_FETCH_CONCURRENCY, gapMs: CREDIT_FETCH_GAP_MS },
   );
-  await Promise.all(workers);
 
   useAccountsStore.setState((s) => {
     const cur = selectRegionSlice(s, region);
