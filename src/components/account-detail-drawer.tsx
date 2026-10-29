@@ -65,7 +65,7 @@ import { cn } from "@/lib/utils";
 /**
  * 空值占位符的固定字形。
  *
- * ★ 2026-10-26 用户报障：同一个「—」在抽屉里两种长相 —— 邮箱行带 `mono`、今日 Token 行
+ * ★ 2026-10-26 用户报障：同一个「—」在抽屉里两种长相 —— 邮箱行带 `mono`、另一行
  * 不带，两套字体下横线的字形与宽度都不一致。空值同义，字形也必须同源 ⇒ 占位符一律按
  * `mono` 渲染，不跟随行字体。
  */
@@ -84,7 +84,7 @@ export interface DetailRow {
 }
 
 /**
- * 顶部指标块（积分 / 今日 Token / 签到 / 凭据）。
+ * 顶部指标块（三个平台各自装配，如 积分 / 签到 / 凭据）。
  *
  * ⚠️ 四段文本**已在调用方格式化**（与本文件其余区块同一约束）：抽屉不判断单位与日期格式。
  * `refreshKind` 指向 `lib/account-refresh` 的某一项 ⇒ 块右上角出现就地 ⟳，
@@ -1121,11 +1121,12 @@ export function AccountDetailDrawer({
                       value={
                         !checkin.todayCheckedIn
                           ? t("shared.drawer.checkin.notCheckedIn")
-                          : /* 金额未知（上游只回了「已签到」）⇒ 显示「—」，**不补成 +0**
-                               —— 补零会让用户以为确实领到 0 积分。 */
+                          : /* 金额未知（上游只回了「已签到」/ 台账兜底）⇒ 写「已签到」，**不补成 +0**
+                               —— 补零会让用户以为确实领到 0 积分；写「—」又会和上方指标块的
+                               「已签到」打架（2026-10-29 用户报障「卡片说已签、签到页一片 —」）。 */
                             todayGain !== null
                             ? `+${todayGain}`
-                            : "—"
+                            : t("shared.stat.checkedIn")
                       }
                       tone={checkin.todayCheckedIn ? "ok" : "muted"}
                       title={

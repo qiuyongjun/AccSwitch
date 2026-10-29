@@ -202,6 +202,12 @@ Qoder 的 cn/global 会与 WB/Trae **共用同一把键**。方案：把键从 `
 | **L5** 门禁同步 | ✅ 完成 | `check:api` / `check:scope` / `check:docker` / `check:store-selectors` / `check:npm-platforms` / `check:agent-sources` 全跑过；`check:scope` 的「4 作用域」→ 6、「每 dest 2 次」→ 3、「恰 10 条参数化」→ 16、备份 4×3 → 6×3 已同步 |
 | 附加 | ✅ | 作用域快捷键上限 **5 → 9**（PLAN §3.1 v2.8 修订）——否则 6 个作用域会把既有用户的 `⌘1..⌘4` 一起关掉 |
 
+> ★ 2026-10-28（用户要求，三平台同批）：**卡片 / 列表身份行不再显示 UID，改显示备注**
+> （无备注时 WorkBuddy 回落脱敏邮箱，Trae / Qoder 留空行位以免名称垂直居中）；Qoder 卡片另去掉
+> **来源徽章**与**凭据摘要 / 访问令牌掩码**（仍在详情抽屉可见）；Qoder 列表删除
+> 「来源」「备注」两列（备注并入「账号」列）。实现见
+> `src/components/qoder/qoder-account-card.tsx` 文件头。
+
 **验证基线（2026-10-15，含二轮交互校准）**：`cargo check --workspace` 绿；`check:api` 绿（routes 189 / call 179 / server 173 / invoke 197 / 参数化 16）；
 `check:scope` **295 passed / 0 failed**（含新增的「Qoder 账号页 = 原型工作台同构」门禁，已做两次变异验证：注入未实现动作 / 混入未落地 `ways` ⇒ 均变红，sha256 还原）；
 `tsc` 绿；`cargo test -p buddy-switch-gateway` **482/0**。

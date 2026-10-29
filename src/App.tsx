@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type ElementType } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, GitBranch, LayoutDashboard, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
+import { ArrowUp, GitBranch, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -50,7 +50,6 @@ import type { TraeVariantStatus } from "@/lib/trae-types";
 const AccountsPage = lazy(() => import("@/pages/AccountsPage"));
 const ApiServicePage = lazy(() => import("@/pages/ApiServicePage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
-const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const UsagePage = lazy(() => import("@/pages/UsagePage"));
 const TraeAccountsPage = lazy(() => import("@/pages/TraeAccountsPage"));
 const TraeApiServicePage = lazy(() => import("@/pages/TraeApiServicePage"));
@@ -60,11 +59,10 @@ const TraeSettingsPage = lazy(() => import("@/pages/TraeSettingsPage"));
    ⚠️ Trae 侧**不渲染入口**（能力门控），但 URL 直达仍可达 ⇒ 仍需一个组件接住。 */
 const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
 const TraeSessionsPage = lazy(() => import("@/pages/TraeSessionsPage"));
-/* Qoder（第三个平台）：账号页 / 概览页 / 设置页是**真实页面**（真实数据 + 应用级设置）；
-   用量 / 网关 / 会话依赖网关请求日志与额度缓存，尚未落地 ⇒ 共用「尚未接入」的结构化空态
+/* Qoder（第三个平台）：账号页 / 设置页是**真实页面**（真实数据 + 应用级设置）；
+   用量 / 网关自 2026-10-18 起接回真实页面；会话依赖「会话副本」数据源，尚未落地 ⇒ 结构化空态
    （**不**复用其它平台的页面，否则会把别的平台的账号渲染进来，用户会以为 Qoder 已经在用）。 */
 const QoderAccountsPage = lazy(() => import("@/pages/QoderAccountsPage"));
-const QoderOverviewPage = lazy(() => import("@/pages/QoderOverviewPage"));
 const QoderSettingsPage = lazy(() => import("@/pages/QoderSettingsPage"));
 const QoderPendingPage = lazy(() => import("@/pages/QoderPendingPage"));
 const QoderApiServicePage = lazy(() => import("@/pages/QoderApiServicePage"));
@@ -117,7 +115,7 @@ import { useSessionsStore } from "@/stores/sessions";
  *
  * ## 现在
  *
- * 侧栏由 `DESTINATIONS`（注册表，6 项，**平台无关**）+ `DEST_META`（文案键与图标）
+ * 侧栏由 `DESTINATIONS`（注册表，5 项，**平台无关**）+ `DEST_META`（文案键与图标）
  * 在 `Layout` 里拼出**当前 scope 的路径**（`/s/{scope}/{dest}`）。
  * ⇒ 加一个目的地只需改注册表 + `DEST_META`，**两个平台同时生效**。
  *
@@ -159,7 +157,6 @@ const productFromPath = platformOfPath;
  */
 const SCOPED_ROUTES: Record<Product, Record<Destination, ElementType>> = {
   workbuddy: {
-    overview: OverviewPage,
     accounts: AccountsPage,
     usage: UsagePage,
     sessions: SessionsPage,
@@ -167,9 +164,8 @@ const SCOPED_ROUTES: Record<Product, Record<Destination, ElementType>> = {
     settings: SettingsPage,
   },
   trae: {
-    /* 概览与用量两个分区**共用同一个组件**（P3）：它们从路由推平台，因此不需要两份。
+    /* 用量分区与 WorkBuddy **共用同一个组件**（P3）：它从路由推平台，因此不需要两份。
        这正是「差异只剩数据与能力开关」的实例。 */
-    overview: OverviewPage,
     accounts: TraeAccountsPage,
     usage: UsagePage,
     /* P8：Trae 侧**不渲染**「会话」入口（能力门控），但 URL 直达仍可达 ⇒
@@ -179,16 +175,12 @@ const SCOPED_ROUTES: Record<Product, Record<Destination, ElementType>> = {
     settings: TraeSettingsPage,
   },
   qoder: {
-    /* 概览 / 设置是**真实页面**（概览：账号数 + 本机客户端四态；设置：应用级设置 + 备份）。
+    /* 账号 / 设置是**真实页面**（设置：应用级设置 + 备份）。
        网关也已落地（**第三个平台的产品线**：独立监听 57895 + 按区域分家的池与 Key 库）。
        ★ 用量页**已接回**（2026-10-18，issue #46 的 C 项）：`UsagePage` 按 `USAGE_PAGES.qoder`
          映射到 `QoderUsagePage`（后端 `qoder_usage` 命令早已存在，数据源有真实值），
          而 `usage` 入口此前还停在占位页 ⇒「有数据却显示尚未接入」。
-         ⚠️ 与 `OverviewPage` 的处理**刻意不同**：概览页读的是 WorkBuddy 的 store，复用会给
-         Qoder 分区渲染别的平台的数据；`UsagePage` 本身**从路由推平台**（`platformOfPath`），
-         三个平台共用是设计内复用，不是妥协。
        会话**仍未落地**（数据源「会话副本」不存在）⇒ 继续给「尚未接入」空态而不是空壳 KPI。 */
-    overview: QoderOverviewPage,
     accounts: QoderAccountsPage,
     usage: UsagePage,
     sessions: QoderPendingPage,
@@ -203,7 +195,7 @@ const SCOPED_ROUTES: Record<Product, Record<Destination, ElementType>> = {
  * ⚠️ 存**文案键**而非成品文案：本表是模块级常量，拿不到 `useT()`
  * （与 `PRODUCT_LABEL_KEY` 同一处理，否则语言切换对它失效）。
  *
- * ⚠️ **两个平台共用同一份** —— 这正是「侧栏固定 6 项」成立的依据：
+ * ⚠️ **所有平台共用同一份** —— 这正是「侧栏固定 5 项」成立的依据：
  * 改造前两套 `PRODUCT_NAV` 的 labelKey 与 icon **本来就完全相同**，
  * 唯一的差别是**路径前缀**（`/` vs `/trae/`）。P2 之后路径由 scope 决定，差别就消失了。
  */
@@ -211,7 +203,6 @@ const DEST_META: Record<
   Destination,
   { labelKey: TranslationKey; icon: ComponentType<{ className?: string }> }
 > = {
-  overview: { labelKey: "nav.overview", icon: LayoutDashboard },
   accounts: { labelKey: "nav.accounts", icon: User },
   /* P3：`usage` 现在承载 **Token 统计 + 积分统计**（§3.9 的合并）——
      所以标签从「Token 统计」改成「用量」，否则侧栏会漏掉积分。 */
@@ -239,6 +230,12 @@ function ScopedDestination() {
   const scope = parseScope(rawScope);
   if (!scope) return <Navigate to="/" replace />;
 
+  /* 概览页已移除（2026-10-28）⇒ 旧 `/s/{scope}/overview` 链接落到**同作用域**账号页，
+     不要走下面的 fail-closed（那会跨到 WorkBuddy 默认作用域）。 */
+  if (rawDest === "overview") {
+    return <Navigate to={`/s/${scope}/accounts`} replace />;
+  }
+
   if (!(DESTINATIONS as readonly string[]).includes(rawDest ?? "")) {
     return <Navigate to="/" replace />;
   }
@@ -246,6 +243,18 @@ function ScopedDestination() {
   const { product } = scopeParts(scope);
   const Page = SCOPED_ROUTES[product][rawDest as Destination];
   return <Page />;
+}
+
+/**
+ * 旧路由的**查询串保留**重定向（`/overview` / `/trae` → 各自的账号页）。
+ *
+ * ⚠️ 不能写死 `to="/"`：`Navigate` 会连 `?region=global` 一起丢掉，区域退回
+ * 「上次作用域」或国内版 —— 旧书签明明指向国际版，却打开国内版账号库。
+ * Trae 侧的旧 `?line=` 同理（见 `useTraeVariant` 的 P2 桥接）。
+ */
+function LegacyRedirect({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={{ pathname: to, search }} replace />;
 }
 
 /**
@@ -566,7 +575,7 @@ function Layout() {
     [visibleScopes, shortcutsEnabled],
   );
 
-  /* P2：**侧栏由注册表生成** —— 平台之间只差 scope（§3.1「侧栏固定 6 项」）。
+  /* P2：**侧栏由注册表生成** —— 平台之间只差 scope（§3.1「侧栏固定 5 项」）。
      改造前是两套硬编码的 `PRODUCT_NAV`（5:5），新增目的地要改两处。
      ⚠️ 路径由**当前作用域**拼出，所以切作用域时侧栏链接**跟着变**（URL 成为唯一真值）。
      P8：入口先按**能力门控**过滤（`DESTINATION_CAPABILITY` + `hasCapability`）——
@@ -847,15 +856,17 @@ export default function App() {
             {/* P2：作用域路由 —— `/s/{scope}/{dest}`（如 `/s/wb-global/accounts`）。
                 ⚠️ 与下面的旧路由**并存**：旧路由不删 ⇒ 旧书签与外部链接继续可达（P2 验收项）。 */}
             <Route path="/s/:scope/:dest" element={<ScopedDestination />} />
-            <Route path="/overview" element={<OverviewPage />} />
+            {/* 概览页已移除：旧书签落到账号页（与 `destinationOfLegacyPath` 同一口径），
+                查询串经 `LegacyRedirect` 保留 —— `?region=global` 不能丢。 */}
+            <Route path="/overview" element={<LegacyRedirect to="/" />} />
             <Route path="/" element={<AccountsPage />} />
             <Route path="/credit-stats" element={<UsagePage defaultTab="credits" />} />
             <Route path="/token-stats" element={<UsagePage />} />
             <Route path="/api-service" element={<ApiServicePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             {/* Trae 侧与 WorkBuddy 侧逐条同构；`/trae` 本身重定向到账号管理，
-                避免旧书签或外部链接落在空路由上。 */}
-            <Route path="/trae" element={<Navigate to="/trae/accounts" replace />} />
+                避免旧书签或外部链接落在空路由上。查询串同样保留（旧 `?line=`）。 */}
+            <Route path="/trae" element={<LegacyRedirect to="/trae/accounts" />} />
             <Route path="/trae/accounts" element={<TraeAccountsPage />} />
             <Route path="/trae/token-stats" element={<UsagePage />} />
             <Route path="/trae/credits" element={<UsagePage defaultTab="credits" />} />

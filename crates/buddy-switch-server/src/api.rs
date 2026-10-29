@@ -4,8 +4,6 @@
 //! token 不出本机。
 
 use std::sync::Mutex;
-#[cfg(target_os = "windows")]
-use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::RawQuery;
@@ -44,30 +42,6 @@ use buddy_switch_core::modules::product::{
 };
 use buddy_switch_core::modules::qoder::region::QoderRegion;
 use buddy_switch_core::modules::trae::region::TraeRegion;
-
-/// WorkBuddy 运行状态缓存：Windows 上检测要跑 tasklist（慢），缓存几秒避免
-/// 前端切 tab 频繁触发命令行导致卡顿/闪窗。缓存按 region 分别记录，避免两版串台。
-#[cfg(target_os = "windows")]
-static RUNNING_CACHE: Mutex<Option<(Region, Instant, bool)>> = Mutex::new(None);
-
-fn cached_workbuddy_running(region: Region) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cache = RUNNING_CACHE.lock().unwrap();
-        if let Some((cached_region, t, v)) = cache.as_ref() {
-            if *cached_region == region && t.elapsed() < Duration::from_secs(3) {
-                return *v;
-            }
-        }
-        let v = process::is_workbuddy_running_for(region);
-        *cache = Some((region, Instant::now(), v));
-        v
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        process::is_workbuddy_running_for(region)
-    }
-}
 
 #[derive(RustEmbed)]
 #[folder = "../../dist/"]
@@ -701,7 +675,8 @@ async fn api_status(RawQuery(query): RawQuery) -> Response {
         }))
     });
     json_ok(json!({
-        "running": cached_workbuddy_running(region),
+        // 展示口径：core 的 1 秒进程快照与 Tauri 侧共用，不再单独缓存。
+        "running": process::is_workbuddy_running_display_for(region),
         "region": region,
         "authFile": auth_file::auth_file_path_for(region).to_string_lossy(),
         "current": current,

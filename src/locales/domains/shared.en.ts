@@ -491,7 +491,8 @@ export const en = {
   // Card "more" menu: the read-only refresh group + the account action group.
   // ★ 2026-10-26: the group only holds credits / check-in / credential (+ tasks, `refresh.tasks`);
   // "Refresh today's tokens" is gone from every menu, so `refresh.tokens` no longer exists.
-  // ⚠️ `refresh.tokensHint` is still used by the Trae card's "today's tokens" tooltip — keep it.
+  // ★ 2026-10-29: `refresh.tokensHint` is gone too — the Trae card's "today's tokens" block
+  // (its last consumer) was already removed.
   "shared.cardMenu.refreshGroup": "Refresh",
   "shared.cardMenu.refresh.credits": "Refresh credits",
   "shared.cardMenu.refresh.travel": "Refresh travel status",
@@ -502,7 +503,6 @@ export const en = {
   "shared.cardMenu.switchAccountHint": "Open the switch wizard (same entry as the detail drawer; sessions can be migrated too)",
   "shared.cardMenu.refresh.creditsHint": "Query remaining credits and expiry from upstream (slowest, may be rate-limited)",
   "shared.cardMenu.refresh.travelHint": "Query travel / accelerator status from upstream (in transit, arrival time, reward credits)",
-  "shared.cardMenu.refresh.tokensHint": "Re-read local client session logs + gateway logs (fast)",
   "shared.cardMenu.refresh.checkinHint": "Re-read today's check-in result for this account (local)",
   "shared.cardMenu.refresh.credentialHint": "Re-read the local credential validity (refreshes all accounts)",
   "shared.cardMenu.refresh.tasks": "Refresh tasks",
@@ -536,11 +536,11 @@ export const en = {
   "shared.refreshPart.credential": "Credential status refreshed",
   "shared.refreshPart.fail": "Refresh failed",
   "shared.stat.credits": "Credits",
-  "shared.stat.tokens": "Today's tokens",
   "shared.stat.checkin": "Check-in",
   "shared.stat.credential": "Credential",
-  // 2026-10-23: the stat tiles now mirror the tabs (credits / check-in / tasks / credential);
-  // today's tokens moved into the overview rows.
+  // 2026-10-23: the stat tiles now mirror the tabs (credits / check-in / tasks / credential).
+  // 2026-10-29: the overview's "today's tokens" row was removed as well — the accounts pages
+  // no longer show that number (usage lives on the usage stats page), so its keys are gone.
   "shared.stat.tasks": "Tasks",
   "shared.stat.taskClaimable": "{n} claimable",
   // 2026-10-26: "claimed" tile now carries the task total ("claimed/total"),
@@ -555,12 +555,11 @@ export const en = {
   "shared.stat.checkinUnreadable": "Unreadable",
   "shared.stat.checkinUnavailable": "Not available here",
   "shared.stat.checkinFromLedger": "From local ledger (refresh to confirm upstream)",
-  "shared.stat.tokensGatewayOnly": "Requests via this gateway only",
   "shared.stat.credentialOk": "Valid",
   "shared.stat.credentialExpired": "Expired",
   "shared.stat.credentialRelogin": "Sign in again",
-  "shared.stat.credentialOkSub": "Usable",
   // 2026-10-26: a valid credential reports its actual expiry instead of "Usable".
+  // 2026-10-29: Qoder now does the same, so `shared.stat.credentialOkSub` ("Usable") is gone.
   "shared.stat.credentialValidUntil": "Valid until {date}",
   "shared.stat.credentialBadSub": "Sign in first",
   "shared.stat.noExpiring": "No expiring credits",
@@ -573,6 +572,9 @@ export const en = {
   // expiry; the plan name only appears as the pack name in the Credits tab.
   "shared.drawer.close": "Close",
   "shared.drawer.loading": "Loading details…",
+  // 2026-10-29: header subtitle is UID-only on all three platforms (the name used to be
+  // duplicated from the title, and WB showed a masked email instead of the uid).
+  "shared.drawer.subtitleUid": "UID · {uid}",
   "shared.drawer.tab.overview": "Overview",
   "shared.drawer.tab.credits": "Credits",
   "shared.drawer.tab.checkin": "Check-in",

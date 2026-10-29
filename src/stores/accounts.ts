@@ -111,14 +111,22 @@ interface AccountsState {
   reconcileAccounts: (region?: Region) => Promise<void>;
 }
 
+/** 本地账号先入库，客户端探测在后台完成，避免慢探测阻塞列表首屏。 */
 async function loadRegion(region: Region): Promise<void> {
   useAccountsStore.setState((s) => regionPatch(s, region, { loading: true, error: null }));
-  try {
-    const [status, { accounts }] = await Promise.all([fetchStatus(region), api.getAccounts(region)]);
-    useAccountsStore.setState((s) => regionPatch(s, region, { status, accounts, loading: false }));
-  } catch (e) {
-    useAccountsStore.setState((s) => regionPatch(s, region, { error: api.asError(e), loading: false }));
-  }
+  const results = await Promise.allSettled([
+    fetchStatus(region).then((status) => {
+      useAccountsStore.setState((s) => regionPatch(s, region, { status }));
+    }),
+    api.getAccounts(region).then(({ accounts }) => {
+      useAccountsStore.setState((s) => regionPatch(s, region, { accounts }));
+    }),
+  ]);
+  const failure = results.find((result) => result.status === "rejected");
+  useAccountsStore.setState((s) => regionPatch(s, region, {
+    loading: false,
+    error: failure?.status === "rejected" ? api.asError(failure.reason) : null,
+  }));
 }
 
 export const useAccountsStore = create<AccountsState>((set, get) => ({

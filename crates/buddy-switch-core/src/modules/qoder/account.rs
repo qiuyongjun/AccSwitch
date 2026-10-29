@@ -454,16 +454,21 @@ fn record_checkin_inner(
     save_accounts_for(region, &file)?;
     Ok(true)
 }
-/// 该账号本地盖章的日期（`YYYY-MM-DD`）；没有戳 ⇒ `None`。
+/// 该账号本地盖章的日期（`YYYY-MM-DD`）；没有戳**或戳不是合法日期** ⇒ `None`。
 ///
-/// 只截前 10 个字符 —— 戳的形态是 `YYYY-MM-DD HH:MM:SS`（见 [`record_checkin_for`]）。
+/// 戳的形态是 `YYYY-MM-DD HH:MM:SS`（见 [`record_checkin_for`]），但账号库是磁盘上可被
+/// 外部改写的普通 JSON：`&text[..10]` 切的是**字节**，非 ASCII 内容下第 10 字节可能落在
+/// 字符中间，直接 panic —— 一条坏记录就能打挂整个账号列表和签到状态查询。
+/// `str::get` 只在字符边界上返回，再叠一层日期校验，脏值就退化成「不知道」，
+/// 而调用方（`account_view` 的 `lastCheckinToday`、`checkin::campaign_entry`）
+/// 本就把 `None` 读成「今日未签」。
 pub fn checkin_stamp_day(account: &RawAccount) -> Option<&str> {
     account
         .last_checkin
         .as_deref()
         .map(str::trim)
-        .filter(|text| text.len() >= 10)
-        .map(|text| &text[..10])
+        .and_then(|text| text.get(..10))
+        .filter(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").is_ok())
 }
 
 /// 展示字段归一：**字符串或 `null`**，绝不把 `undefined` / 数字 / 对象交给前端。
@@ -493,6 +498,10 @@ pub fn display_name(account: &RawAccount) -> String {
 pub fn account_view(account: &RawAccount, region: QoderRegion) -> Value {
     let shape = account.credential_shape();
     let mismatched = matches!(account.region(), Some(other) if other != region);
+    /* 本地签到台账：**只作初值与提示，不作判据**（上游 `claimStatus` 才是真值，
+       见 `checkin::campaign_entry`）。前端进页面时用 `lastCheckinToday` 画「今日已签」，
+       等用户点「刷新签到状态」再由上游覆盖 —— 与 Trae 的 `checkedToday` 同一口径。 */
+    let stamped_today = checkin_stamp_day(account) == Some(store::today().as_str());
     json!({
         "uid": account.uid,
         "name": display_name(account),
@@ -524,6 +533,9 @@ pub fn account_view(account: &RawAccount, region: QoderRegion) -> Value {
         "domainMismatch": mismatched,
         "addedAt": display_opt(&account.added_at),
         "updatedAt": display_opt(&account.updated_at),
+        // 本地签到盖章（`YYYY-MM-DD HH:MM:SS`）+ 是否就是今天 —— 前者供展示，后者作初值。
+        "lastCheckin": display_opt(&account.last_checkin),
+        "lastCheckinToday": stamped_today,
     })
 }
 
@@ -689,6 +701,63 @@ mod tests {
                 view[key]
             );
         }
+    }
+
+    /// ★ 签到初值：本地盖章**只有落在今天**才算「今日已签」——
+    /// 更早的戳不能代表今天（那会把「不知道」画成「已签到」）。
+    ///
+    /// 可证伪：把 `stamped_today` 改成 `account.last_checkin.is_some()`，
+    /// 旧戳那条断言立即变红。
+    #[test]
+    fn last_checkin_today_requires_todays_stamp() {
+        let mut raw = account("u1", "qoder.com.cn");
+        let view = account_view(&raw, QoderRegion::Cn);
+        assert_eq!(view["lastCheckin"], Value::Null);
+        assert_eq!(view["lastCheckinToday"], json!(false));
+
+        raw.last_checkin = Some("2020-01-01 09:00:00".into());
+        let view = account_view(&raw, QoderRegion::Cn);
+        assert_eq!(view["lastCheckin"], json!("2020-01-01 09:00:00"));
+        assert_eq!(view["lastCheckinToday"], json!(false), "旧戳不等于今天签到");
+
+        raw.last_checkin = Some(format!(
+            "{} 09:00:00",
+            crate::modules::qoder::store::today()
+        ));
+        assert_eq!(
+            account_view(&raw, QoderRegion::Cn)["lastCheckinToday"],
+            json!(true)
+        );
+    }
+
+    /// 脏戳只能是**未知**，不能 panic：账号库是磁盘上可被外部改写的 JSON，
+    /// 按字节切前 10 位会在非 ASCII 字符中间切下去，一条坏记录就能打挂整个账号列表。
+    ///
+    /// 可证伪：把 `checkin_stamp_day` 里的 `get(..10)` 换回 `[..10]`，
+    /// 第一条 4 字节 emoji 的用例当场 panic。
+    #[test]
+    fn malformed_checkin_stamp_degrades_to_unknown() {
+        let mut raw = account("u1", "qoder.com.cn");
+        for dirty in [
+            "😀😀😀😀😀😀😀😀😀😀",
+            "2026-01-😀 09:00:00",
+            "盖章盖章",
+            "2026-13-45 09:00:00",
+            "not-a-date 09:00:00",
+            "2026-01-0",
+        ] {
+            raw.last_checkin = Some(dirty.into());
+            assert_eq!(checkin_stamp_day(&raw), None, "{dirty:?} 应判为未知");
+            assert_eq!(
+                account_view(&raw, QoderRegion::Cn)["lastCheckinToday"],
+                json!(false),
+                "{dirty:?} 不能画成今日已签"
+            );
+        }
+
+        // 尾部脏但前 10 位是合法日期：照常认，别把一条好记录误判成没签。
+        raw.last_checkin = Some("2026-01-01 中文盖章".into());
+        assert_eq!(checkin_stamp_day(&raw), Some("2026-01-01"));
     }
 
     /// 展示名**恒非空**：昵称 → uid 前 8 位 → `—`。

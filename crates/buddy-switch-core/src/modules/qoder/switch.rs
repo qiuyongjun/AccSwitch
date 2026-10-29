@@ -152,6 +152,17 @@ pub fn program_running(region: QoderRegion, program: QoderProgram) -> bool {
     program_running_with(region, program, crate::modules::process::is_image_running)
 }
 
+/// [`program_running`] 的**展示**版本：读共享进程快照（1 秒 TTL）。
+///
+/// 只供 [`program_status_for`] 的状态胶囊；切换写前守卫仍走实时 [`program_running`]。
+fn program_running_display(region: QoderRegion, program: QoderProgram) -> bool {
+    program_running_with(
+        region,
+        program,
+        crate::modules::process::is_image_running_display,
+    )
+}
+
 /// [`program_running`] 的可注入版本。
 ///
 /// ## 为什么做成闭包参数
@@ -737,7 +748,7 @@ pub fn program_status_for(region: QoderRegion) -> Value {
                 "label": program.label(),
                 "state": probe.map(|p| p.state.as_str()).unwrap_or("missing"),
                 "detail": probe.and_then(|p| p.state.detail()),
-                "running": program_running(region, program),
+                "running": program_running_display(region, program),
                 "currentUid": super::profile::current_uid_for(region, kind),
             })
         })

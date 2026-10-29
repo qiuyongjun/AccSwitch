@@ -3324,6 +3324,11 @@ export interface QoderCreditsRow {
   isExceeded?: boolean;
   /** 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）；缺值 ⇒ null。 */
   expiresAt?: number | null;
+  /**
+   * 上游哨兵「9999-12-31」= **不过期**（此时 `expiresAt` 为 null）。
+   * 界面写「长期有效」，不把哨兵渲染成日期。
+   */
+  expiresForever?: boolean;
   plan?: string | null;
   raw?: unknown;
 }
@@ -3580,6 +3585,19 @@ export interface QoderAccountView {
   domainMismatch: boolean;
   addedAt: string | null;
   updatedAt: string | null;
+  /**
+   * 本地签到盖章（`YYYY-MM-DD HH:MM:SS`；从未签过 ⇒ `null`）。
+   *
+   * ⚠️ 只作**展示与初值**，不作判据：用户可能在网页 / IDE 里签到过，本机看不见。
+   */
+  lastCheckin: string | null;
+  /**
+   * 本地盖章是否就是今天 —— 签到状态的**初值**来源（与 Trae 的 `checkedToday` 同口径）。
+   *
+   * 进页面时上游读数还没回来（或读取失败）⇒ 卡片 / 抽屉据此画「今日已签 · 按本地台账」，
+   * 而不是显示「—」；用户点「刷新签到状态」后以上游读数覆盖。
+   */
+  lastCheckinToday: boolean;
 }
 
 /** 账号列表（含归属不符计数）。 */

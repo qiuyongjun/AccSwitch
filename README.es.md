@@ -34,7 +34,6 @@ Una estación de trabajo multicuenta **totalmente local**: reúne las cuentas de
 |  |  |
 | --- | --- |
 | 🪪 **6 ámbitos en un solo sitio** | Tres líneas de producto × CN / Global, cada una con su propio almacén de cuentas. El cambio muestra progreso y se revierte solo si falla la escritura. |
-| ✅ **La lista de pendientes se escribe sola** | El resumen enumera «reiniciar sesión / registro de hoy / créditos por caducar / cliente no iniciado», con la acción en la propia fila. |
 | 📊 **Uso y límites a la vista** | Tokens, créditos, límites «cuenta × modelo» y qué copia de sesión va atrás o divergió: todo en una pantalla. |
 | 🔌 **La cuota también alimenta otras herramientas** | Se expone como endpoint compatible con OpenAI / Anthropic: Cursor, Claude Code, OpenWebUI. |
 
@@ -49,18 +48,6 @@ Una estación de trabajo multicuenta **totalmente local**: reúne las cuentas de
 
 ## Capturas
 
-
-<table>
-  <thead>
-    <tr><th>Resumen (claro)</th><th>Resumen (oscuro)</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/overview-light.png" alt="Resumen, tema claro" /></td>
-      <td><img src="docs/images/overview-dark.png" alt="Resumen, tema oscuro" /></td>
-    </tr>
-  </tbody>
-</table>
 
 <table>
   <thead>
@@ -257,13 +244,12 @@ El selector de la esquina superior izquierda decide qué conjunto de cuentas ges
 
 Los seis ámbitos son **totalmente independientes**: almacenes de cuentas, clientes, configuración y claves de pasarela separados. Las dos líneas antiguas de Trae (TraeWork / TraeCode) se fusionaron aguas arriba en un solo cliente; los identificadores antiguos solo se mantienen por compatibilidad.
 
-## 6 destinos de la barra lateral
+## 5 destinos de la barra lateral
 
-Idénticos punto por punto en las tres plataformas: **Resumen · Cuentas · Uso · Sesiones · Pasarela · Ajustes**. Las entradas se filtran por **capacidad** (no por rama de plataforma): sin capacidad no hay entrada, y un acceso directo por URL devuelve un estado vacío estructurado.
+Idénticos punto por punto en las tres plataformas: **Cuentas · Uso · Sesiones · Pasarela · Ajustes**. Las entradas se filtran por **capacidad** (no por rama de plataforma): sin capacidad no hay entrada, y un acceso directo por URL devuelve un estado vacío estructurado.
 
 | Destino | En una línea |
 | --- | --- |
-| **Resumen** | Lo que requiere acción (reiniciar sesión / registro de hoy / créditos por caducar / cliente no iniciado) + tarjetas de estadísticas + gráfico de tokens de 14 días + vistazo a otros ámbitos |
 | **Cuentas** | Vistas de tarjetas y tabla, ranuras de programa, inicio por QR o código de dispositivo, importación local, registros, papelera (30 días), registro de límites (solo WorkBuddy) |
 | **Uso** | Una sola estación con cuatro vistas: tendencia · modelos · sesiones · créditos; una única barra de parámetros (rango + origen de datos) |
 | **Sesiones** | Copias de una misma sesión entre cuentas: quién va atrás, quién divergió, a quién sincronizar (**solo WorkBuddy**) |
@@ -379,7 +365,7 @@ Un bucle en segundo plano fija la cuenta por defecto de **los siguientes arranqu
 
 ```mermaid
 flowchart TB
-    FE["src/ · React 19 + Vite<br/>6 destinos · api.ts doble canal"] --> H["Anfitriones: comandos Tauri | HTTP (axum)"]
+    FE["src/ · React 19 + Vite<br/>5 destinos · api.ts doble canal"] --> H["Anfitriones: comandos Tauri | HTTP (axum)"]
     H --> CORE["crates/buddy-switch-core<br/>cuentas · auth · registros · sesiones · ámbitos"]
     H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / unificada"]
     CORE --> DATA[("~/.buddy-switch/")]

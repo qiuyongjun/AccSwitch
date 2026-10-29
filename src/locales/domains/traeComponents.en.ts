@@ -36,15 +36,10 @@ export const en = {
   // =====================================================================
   // trae-account-card.tsx —— Trae account card
   // =====================================================================
-  // ---- Duration / JWT status ----
-  "trae.comp.card.hours.unknown": "Unknown",
-  "trae.comp.card.hours.expired": "Expired",
-  "trae.comp.card.hours.minutes": "{count} min",
-  "trae.comp.card.hours.hours": "{count} h",
-  "trae.comp.card.hours.days": "{count} d",
-  "trae.comp.card.jwt.valid": "Valid {hours}",
-  "trae.comp.card.jwt.warn": "Expiring {hours}",
-  "trae.comp.card.jwt.expired": "Expired",
+  // ---- JWT status ----
+  // 2026-10-29: countdown wording (`hours.*`, `jwt.valid` / `warn` / `expired` / `validTip`)
+  // removed to match WB / Qoder — status words come from `shared.stat.*`, expiry time
+  // comes from the credential-expiry row.
   "trae.comp.card.jwt.unparsable": "Unparsable",
 
   // ---- Expiry ----
@@ -120,6 +115,8 @@ export const en = {
   // Same names and meaning as the WorkBuddy card: both product areas render one card shape.
   "trae.comp.card.currentLogin": "Current login",
   "trae.comp.card.metric.credits": "Credits",
+  "trae.comp.card.priority": "Priority",
+  "trae.comp.card.priorityTip": "Recommended priority",
   "trae.comp.card.expiryOn": "Expires {date}",
   "trae.comp.card.expiryOnTip": "Credit expiry (package breakdown not fetched yet, so no amount)",
 
@@ -131,7 +128,8 @@ export const en = {
   // ---- Details (P4: carried by the shared drawer `account-detail-drawer.tsx`) ----
   // (2026-10-27: the menu's "View details" entry was removed; details open by clicking
   //  the card itself, so the key went with it.)
-  "trae.comp.card.detail.subtitle": "{name} · UID {uid}",
+  // (2026-10-29: the drawer subtitle now comes from `shared.drawer.subtitleUid` — UID only —
+  //  so `trae.comp.card.detail.subtitle` is gone.)
   "trae.comp.card.detail.jwtExpiry": "Credential expiry",
   "trae.comp.card.detail.jwtAutoRefresh": "Auto-refresh JWT",
   "trae.comp.card.detail.deviceId": "Device ID",

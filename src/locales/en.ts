@@ -14,7 +14,6 @@ import { en as qoderPages } from "./domains/qoderPages.en";
 import { en as qoderGateway } from "./domains/qoderGateway.en";
 import { en as traeStats } from "./domains/traeStats.en";
 import { en as wbAccounts } from "./domains/wbAccounts.en";
-import { en as wbOverview } from "./domains/wbOverview.en";
 import { en as wbSettings } from "./domains/wbSettings.en";
 import { en as wbStats } from "./domains/wbStats.en";
 import type { TranslationKey } from "./zh";
@@ -44,7 +43,6 @@ export const en: Partial<Record<TranslationKey, string>> = {
   ...shared,
   ...wbSettings,
   ...wbAccounts,
-  ...wbOverview,
   ...wbStats,
   ...traePages,
   ...qoderPages,

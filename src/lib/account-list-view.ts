@@ -16,8 +16,8 @@ import { matchesAccountQuery } from "@/lib/account-search";
  * ⚠️ 本模块可单测（不 import React / 页面 / 组件 / store）。
  */
 
-/** 排序键。默认 `priority`（= 现状写死的「自动积分优先级」）。 */
-export type AccountSortKey = "priority" | "name" | "expiry" | "recent";
+/** 排序键。默认 `priority`（= 「自动积分优先级」）。 */
+export type AccountSortKey = "priority" | "name" | "expiry";
 
 /**
  * 分组键（**分桶**，与「分组筛选」`groupFilter` 语义不同 —— 见 `P4-TOOLBAR-ARCH §1.6`）。
@@ -58,6 +58,14 @@ export interface AccountListConfig<T> {
   pinFirst?: (sorted: T[]) => T[];
   /** 分组取桶键；返回 `null` ⇒ 该行落入「无桶名」桶（不渲染分组标题）。 */
   bucketKey: (row: T, group: AccountGroupKey) => string | null;
+  /**
+   * 桶顺序（可选）。`groupAccounts` 收集完桶后用它排**桶标题**；缺省保持首次出现顺序。
+   *
+   * 为什么需要：首次出现顺序会随当前排序键漂移 —— 同一批账号换个排序，组标题就换位置；
+   * 三平台默认排序不同时更像「分组方式不同」。固定桶序让「问题桶在前、正常最后」这类
+   * 规则不再受排序影响。
+   */
+  bucketCompare?: (left: string, right: string, group: AccountGroupKey) => number;
   /** 可用的排序 / 分组选项（**按需出现**，`§3.4` 规则 1：无数据不摆假选项）。 */
   availableSorts: AccountSortKey[];
   availableGroups: AccountGroupKey[];
@@ -93,7 +101,8 @@ export function sortAccounts<T>(rows: T[], key: AccountSortKey, config: AccountL
  * 分桶。`none` 返回单桶（`key = null`）。
  *
  * 桶内保持入参顺序（调用方通常先 `sortAccounts` 再 `groupAccounts`）；
- * 桶之间的顺序按**首次出现**排列（Map 的插入序），因此「先出现的状态排前面」。
+ * 桶之间的顺序默认按**首次出现**排列（Map 的插入序）；提供 `bucketCompare` 时
+ * 改为按它排序（相等时仍回落到首次出现，保证稳定）。
  */
 export function groupAccounts<T>(
   rows: T[],
@@ -114,7 +123,14 @@ export function groupAccounts<T>(
     }
     items.push(row);
   }
-  return order.map((bucketKey) => ({
+  const compareBuckets = config.bucketCompare;
+  const orderedKeys = compareBuckets
+    ? [...order].sort((left, right) => {
+        const diff = compareBuckets(left, right, group);
+        return diff !== 0 ? diff : order.indexOf(left) - order.indexOf(right);
+      })
+    : order;
+  return orderedKeys.map((bucketKey) => ({
     key: bucketKey === "" ? null : bucketKey,
     items: map.get(bucketKey) ?? [],
   }));

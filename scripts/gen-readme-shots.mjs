@@ -40,13 +40,12 @@ const OUT = process.env.SHOT_OUT ?? "docs/images";
 
 /** 目标页 → 文件名（顺序即截图顺序）。
  *
- * `scope` + `dest` 决定路由；**一律先从该作用域的「概览」进站，再点侧栏导航**：
+ * `scope` + `dest` 决定路由；**一律先从该作用域的「账号」进站，再点侧栏导航**：
  * 顶栏那颗作用域按钮的「N 个账号」来自各页自己维护的 store / 快照，
  * 直接 `goto` 深链时 WorkBuddy 侧还没人拉过账号列表 ⇒ 图上会写「0 个账号」。
  * 按真实用法走一遍（进站 → 点导航）才有 8 个账号，也不必为截图改产品代码。
  */
 const SHOTS = [
-  { scope: "wb-cn", dest: "概览", name: "overview" },
   { scope: "wb-cn", dest: "账号", name: "workbuddy-accounts" },
   { scope: "wb-cn", dest: "用量", name: "usage-trend" },
   { scope: "wb-cn", dest: "用量", name: "usage-credits", tab: "积分" },
@@ -57,7 +56,6 @@ const SHOTS = [
   { scope: "trae-cn", dest: "用量", name: "trae-usage" },
   { scope: "qoder-cn", dest: "账号", name: "qoder-accounts" },
   { scope: "qoder-cn", dest: "网关", name: "qoder-gateway" },
-  { scope: "qoder-cn", dest: "概览", name: "qoder-overview" },
 ];
 
 const THEMES = ["light", "dark"];
@@ -77,10 +75,10 @@ async function shoot(context, shot, theme) {
     await settle(500);
   };
 
-  // ① 进站（概览会把账号列表读进 store）② 点侧栏导航到目标页 —— 见 SHOTS 的说明。
-  await page.goto(`${BASE}/s/${shot.scope}/overview`, { waitUntil: "load", timeout: 30_000 });
+  // ① 进站（账号页会把账号列表读进 store）② 点侧栏导航到目标页 —— 见 SHOTS 的说明。
+  await page.goto(`${BASE}/s/${shot.scope}/accounts`, { waitUntil: "load", timeout: 30_000 });
   await waitForShell();
-  if (shot.dest !== "概览") {
+  if (shot.dest !== "账号") {
     await page.getByRole("link", { name: new RegExp(`^${shot.dest}`) }).first().click({ timeout: 15_000 });
     await settle(700);
   }

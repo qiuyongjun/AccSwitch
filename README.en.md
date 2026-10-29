@@ -34,7 +34,6 @@ A **local-first** multi-account workbench: it gathers accounts from four product
 |  |  |
 | --- | --- |
 | 🪪 **6 scopes, one place** | Three product lines × CN / Global, each with its own account store. Switching shows live progress and rolls back automatically on a failed write. |
-| ✅ **The to-do list writes itself** | Overview lists what needs attention — re-login, today's check-in, expiring credits, client not running — each with an inline action. |
 | 📊 **Usage and rate limits, visible** | Tokens, credits, per-account model limits, and which session replica lags or diverged — all on one screen. |
 | 🔌 **Feed the quota to your other tools** | Expose it as an OpenAI / Anthropic compatible endpoint and drop it into Cursor, Claude Code or OpenWebUI. |
 
@@ -49,18 +48,6 @@ A **local-first** multi-account workbench: it gathers accounts from four product
 
 ## Screenshots
 
-
-<table>
-  <thead>
-    <tr><th>Overview (light)</th><th>Overview (dark)</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/overview-light.png" alt="Overview, light" /></td>
-      <td><img src="docs/images/overview-dark.png" alt="Overview, dark" /></td>
-    </tr>
-  </tbody>
-</table>
 
 <table>
   <thead>
@@ -257,13 +244,12 @@ The scope selector at the top-left decides which set of accounts you are managin
 
 The six scopes are **fully independent**: separate account stores, separate clients, separate config, separate gateway keys. Trae's two legacy program lines (TraeWork / TraeCode) were merged upstream into one client; the old ids remain for compatibility only.
 
-## 6 sidebar destinations
+## 5 sidebar destinations
 
-Identical item for item across all three platforms: **Overview · Accounts · Usage · Sessions · Gateway · Settings**. Entries are gated by **capability** (not by platform branch): no capability, no entry — and a direct URL still yields a structured empty state.
+Identical item for item across all three platforms: **Accounts · Usage · Sessions · Gateway · Settings**. Entries are gated by **capability** (not by platform branch): no capability, no entry — and a direct URL still yields a structured empty state.
 
 | Destination | In one line |
 | --- | --- |
-| **Overview** | Things needing attention (re-login / today's check-in / expiring credits / client not running) + stat cards + 14-day token chart + a glance at other scopes |
 | **Accounts** | Card and table views, program slots, QR or device-code sign-in, local import, check-in, recycle bin (30 days), client rate-limit ledger (WorkBuddy only) |
 | **Usage** | One workbench, four views: trend · models · sessions · credits; a single parameter bar (range + data source) |
 | **Sessions** | Replicas of the same session across accounts: who lags, who diverged, sync to whom (**WorkBuddy only**) |
@@ -379,7 +365,7 @@ A background loop sets the account used by **subsequent CodeBuddy CLI launches**
 
 ```mermaid
 flowchart TB
-    FE["src/ · React 19 + Vite<br/>6 destinations · api.ts dual channel"] --> H["Hosts: Tauri commands | HTTP (axum)"]
+    FE["src/ · React 19 + Vite<br/>5 destinations · api.ts dual channel"] --> H["Hosts: Tauri commands | HTTP (axum)"]
     H --> CORE["crates/buddy-switch-core<br/>accounts · auth · check-in · sessions · scopes"]
     H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / unified"]
     CORE --> DATA[("~/.buddy-switch/")]

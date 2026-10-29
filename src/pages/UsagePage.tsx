@@ -129,7 +129,7 @@ const USAGE_PAGES: Record<
 
 export default function UsagePage({ defaultTab = "trend" }: { defaultTab?: UsageTab } = {}) {
   const t = useT();
-  /* 平台从**路由**推（同 `OverviewPage`）：`/s/trae-cn/usage` 里就带着平台。 */
+  /* 平台从**路由**推：`/s/trae-cn/usage` 里就带着平台。 */
   const location = useLocation();
   const product = platformOfPath(location.pathname);
   const [region] = useScope(product);

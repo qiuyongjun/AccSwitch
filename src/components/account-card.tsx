@@ -1,5 +1,5 @@
 import { Ban, Check, Coins, Loader2, PlaneTakeoff, QrCode } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 // P0 · 程序位表（含「计划新增 / 尚未支持」态）—— 展示侧镜像，与后端 `programs.rs` 逐字对齐。
@@ -158,7 +158,11 @@ export function formatCredits(value: number): string {
 }
 
 /**
- * 「今日 Token」的**诚实**展示串（卡片与表格**同一份**实现，避免两处口径漂移）。
+ * 「今日 Token」的**诚实**展示串（口径只此一份，避免多处漂移）。
+ *
+ * ★ 2026-10-29：账号页已不再展示「今日 Token」（抽屉概览行移除后没有任何渲染入口）。
+ * 本函数与 {@link todayTokensBreakdown} 仍被 `scripts/check-scope-registry.cjs` 钉住 ——
+ * 它们是 Token 口径的唯一实现，重接界面时按这里复用，别另写一份。
  *
  * 四条边界（见 `AccountTokenTodayResponse`）：
  * - `entry` 缺失 = 该账号今日**无记录 / 未知** ⇒ **「—」**（**绝不**当 0）；
@@ -309,18 +313,70 @@ export function nextExpiryLabel(
   return t("wbAccounts.card.nextExpiryDate", { amount, date: day.text, time: day.time });
 }
 
-export function accountIdentity(account: AccountMeta): string {
+/**
+ * 签到两态的 tooltip（**只讲状态**）—— 三平台卡片与表格共用这一句。
+ *
+ * 凭据两态（需重新登录 / 凭据已过期）不在这里：标签本身已说明下一步，再解释一遍是冗余
+ * （{@link AccountStatusBadge} 同口径）。
+ */
+export function checkinBadgeTip(checked: boolean, t: Translate): string {
+  return t(checked ? "wbAccounts.card.checkedInTip" : "wbAccounts.card.notCheckedInTip");
+}
+
+/**
+ * 可点标签 / 可点指标的**无障碍名**：按下之后落在抽屉哪一页。
+ *
+ * 与 tooltip 分开的理由：tooltip 讲「这是什么状态」，无障碍名讲「按下去会怎样」——
+ * 合成一句会让读屏用户每悬停一次都听到一次操作说明。
+ */
+export function drawerTabOpenAria(
+  tab: "credential" | "checkin" | "credits",
+  name: string,
+  t: Translate,
+): string {
+  return t(
+    tab === "credential"
+      ? "wbAccounts.card.openCredential"
+      : tab === "checkin"
+        ? "wbAccounts.card.openCheckin"
+        : "wbAccounts.card.openCredits",
+    { name },
+  );
+}
+
+/** 卡片可 Tab 聚焦 + Enter 打开详情的读屏说明（见 `AccountCard` 的 `<article>`）。 */
+export function cardFocusHint(t: Translate): string {
+  return t("wbAccounts.card.focusHint");
+}
+
+/** 脱敏邮箱（`z***@workbuddy.ai`）；没有邮箱 ⇒ 空串。 */
+function maskedEmail(account: AccountMeta): string {
   // 先归一再看：脏值（对象）会让下面的 `split` 直接抛 TypeError，
   // 而渲染期的 TypeError 会顺着错误边界外的路径把整棵树带走（issue #2）。
   const email = displayText(account.email);
-  if (email) {
-    const [local, domain] = email.split("@");
-    if (!domain) return email;
-    return `${local.slice(0, 1)}${"*".repeat(Math.max(3, local.length - 1))}@${domain}`;
-  }
+  if (!email) return "";
+  const [local, domain] = email.split("@");
+  if (!domain) return email;
+  return `${local.slice(0, 1)}${"*".repeat(Math.max(3, local.length - 1))}@${domain}`;
+}
+
+export function accountIdentity(account: AccountMeta): string {
+  const email = maskedEmail(account);
+  if (email) return email;
   const uid = displayText(account.uid);
   if (uid) return `UID · ${uid}`;
   return `ID · ${displayText(account.id) ?? "—"}`;
+}
+
+/**
+ * 卡片 / 列表的**副标题行**：备注优先，其次脱敏邮箱；**不回落 UID**。
+ *
+ * ★ 2026-10-28（用户要求）：UID 对识别账号没有价值 ⇒ 该行改为展示备注；
+ * 两者都没有时返回空串，调用方以空占位**保留这一行**（否则名称会在头像旁垂直居中）。
+ * toast / 切换向导等仍走 {@link accountIdentity} —— 那里需要「一定有个名字」的兜底。
+ */
+export function accountSubtitle(account: AccountMeta): string {
+  return displayText(account.remark) || maskedEmail(account);
 }
 
 /**
@@ -375,6 +431,45 @@ export function identityDisplayName(
 export const ACCOUNT_CHIP_CLASS = "border-0 px-[7px] font-medium";
 
 const chipClass = ACCOUNT_CHIP_CLASS;
+
+/**
+ * 程序位按钮的**唯一几何**（WB / Trae / Qoder 三张卡片与表格共用）。
+ *
+ * 高 26px、圆角**字面 8px**、`px-2`、11px、字重 400 —— 逐值对齐原型 `.prog`
+ * （`buddy-switch-prototype.html:345-357`）。圆角不能写 `rounded-lg`（本主题 = 12px）。
+ *
+ * ⚠️ `border` 必须写在**这里**：`border-border` 只设颜色，而 Tailwind preflight 把所有元素的
+ * `border-width` 归零 ⇒ 直接渲染原生 `<button>` 的 Qoder 页脚会整个丢框（禁用态虚线也没了）。
+ * WB / Trae 用 `Button variant="outline"`（自带 `border`），重复写 1px 等价。
+ */
+export const PROGRAM_SLOT_BUTTON_CLASS =
+  "inline-flex h-[26px] items-center justify-center gap-1 rounded-[8px] border border-border bg-transparent px-2 text-[11px] !font-normal text-muted-foreground";
+
+/** 程序位未就绪（没装 / 没数据目录 / 客户端在跑）—— 虚线弱化，不伪装成可切换。 */
+export const PROGRAM_SLOT_UNAVAILABLE_CLASS = "border-dashed border-border text-muted-foreground/60";
+
+/**
+ * 「该程序位此刻登录的就是这个账号」的只读胶囊 —— 三平台卡片页脚与表格程序位列**同一份**。
+ *
+ * 样式出处：原型 `.prog.on`（`demo.css:332`）—— primary 18% 底 + primary 40% 描边 +
+ * primary 字 + **字重 600**；硬编码的 `inset 0 1px 0 rgba(255,255,255,.8)` 在深色下是
+ * 一条刺眼白线，故不抄。
+ */
+export function ProgramSlotChip({ className, children, ...props }: ComponentProps<"span">) {
+  return (
+    <span
+      {...props}
+      role="status"
+      className={cn(
+        "inline-flex h-[26px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[8px] border border-primary/40 bg-primary/18 px-2 text-[11px] font-semibold text-primary",
+        className,
+      )}
+    >
+      <Check className="size-3" strokeWidth={2.25} />
+      <span>{children}</span>
+    </span>
+  );
+}
 
 /**
  * 旅行标签（**带文字**）。
@@ -523,10 +618,7 @@ export function AccountStatusBadge({
         <CheckinIcon /> {t("wbAccounts.card.checkedIn")}
       </>
     );
-  const ariaLabel = t(
-    credentialSide ? "wbAccounts.card.openCredential" : "wbAccounts.card.openCheckin",
-    { name: accountDisplayName(account) },
-  );
+  const ariaLabel = drawerTabOpenAria(tab, accountDisplayName(account), t);
 
   const badge = (
     <Badge
@@ -548,11 +640,7 @@ export function AccountStatusBadge({
   /* ★ 2026-10-26（用户反馈）：签到两态补 tooltip（只讲状态）。凭据两态不加 ——
      标签本身（需重新登录 / 凭据已过期）已说明下一步，再解释一遍是冗余。 */
   const tip =
-    kind === "checkedIn"
-      ? t("wbAccounts.card.checkedInTip")
-      : kind === "notCheckedIn"
-        ? t("wbAccounts.card.notCheckedInTip")
-        : null;
+    kind === "checkedIn" || kind === "notCheckedIn" ? checkinBadgeTip(kind === "checkedIn", t) : null;
   if (!tip) return badge;
 
   return (
@@ -824,10 +912,10 @@ interface Props {
   onCheckin?: (a: AccountMeta) => void;
   onRefresh?: (a: AccountMeta) => void;
   /**
-   * 单项刷新（积分 / 今日 Token / 签到状态 / 凭据状态）。
+   * 单项刷新（积分 / 旅行 / 签到状态 / 凭据状态）。
    *
    * 不传 ⇒ 菜单退回旧的单条「续期凭据」项（向后兼容：页面还没接上时行为不变）。
-   * 传了 ⇒ 渲染「刷新」分组，四项各自独立（理由见 `lib/account-refresh.ts` 文件头）。
+   * 传了 ⇒ 渲染「刷新」分组，各项独立（理由见 `lib/account-refresh.ts` 文件头）。
    */
   onRefreshPart?: (a: AccountMeta, kind: AccountRefreshKind) => void;
   /** 本账号正在进行中的刷新项；用于把对应菜单项标成「刷新中…」。 */
@@ -968,22 +1056,9 @@ function ProductCurrentState({
         ? t("wbAccounts.card.currentIde")
         : t("wbAccounts.card.currentCli");
   return (
-    <span
-      role="status"
-      aria-label={title}
-      title={title}
-      className={cn(
-        /* 不用硬编码的 `inset 0 1px 0 rgba(255,255,255,.8)`：深色下那是一条刺眼的白线
-           （原型 `.prog.on` 只有底色 + 描边，无内阴影）。 */
-        "inline-flex items-center justify-center border border-primary/40 bg-primary/18 text-primary font-semibold",
-        /* ⚠️ 与程序位**同一 footprint**（原型 `.prog` 26px / 圆角 8px / `gap:4px`）。
-           内容 = `✓ + 短名`（原型 `.prog.on` 逐字一致，**没有产品图标**）。 */
-        "h-[26px] gap-1 rounded-[8px] px-2 text-[11px]",
-      )}
-    >
-      <Check className="size-3" strokeWidth={2.25} />
-      <span>{short}</span>
-    </span>
+    <ProgramSlotChip aria-label={title} title={title}>
+      {short}
+    </ProgramSlotChip>
   );
 }
 
@@ -999,7 +1074,8 @@ export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshin
    */
   const name = displayText(account.nickname) || displayText(account.uid) || t("wbAccounts.card.unnamed");
   const expired = typeof account.expiresAt === "number" && account.expiresAt < Date.now();
-  const identity = accountIdentity(account);
+  /* ★ 2026-10-28（用户要求）：身份行改显示备注（其次脱敏邮箱），不再显示 UID。 */
+  const identity = accountSubtitle(account);
   const avatarClass = avatarTone(name);
 
 /**
@@ -1036,11 +1112,10 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
    * ★★ 2026-10-22 **本行瘦身（用户要求）**：原型的三项
    * `积分 x/y` · `今日 42.1K` · `2 分钟前` 里有**两项**被移出卡片：
    * - **今日 Token** —— 它是「按时间累计的量」，塞在账号卡上只能看到一列瞬时数字，
-   *   真正的读法在**用量统计页**（`TokenStatsPage`，按天/模型/账号聚合）与**详情抽屉**
-   *   「今日 Token」指标块（`detailStats`）⇒ 卡片上这一项是重复且不可比较的；
-   * - **最后使用（相对时间）** —— 它只在「我该切哪个号」时有用，而那个场景的答案
-   *   由**排序选项**（`recent`，按 `lastUsedAt` 倒序）给出，读一个「2 分钟前」既不排序
-   *   也不可比；其精确时刻仍保留在详情抽屉的「最近使用」一行。
+   *   真正的读法在**用量统计页**（`TokenStatsPage`，按天/模型/账号聚合）⇒ 卡片上这一项
+   *   是重复且不可比较的（★ 2026-10-29：详情抽屉也已不再展示它）；
+   * - **最后使用（相对时间）** —— 它是「回顾」而非「决策」，读一个「2 分钟前」既不排序
+   *   也不可比；该字段只由后端记录，卡上与抽屉都不展示。
    *
    * ⇒ 让出的位置**留给真正需要在卡上一眼看到的两个状态**：临期积分与「优先」——
    * 它们是**决策**（这号要不要赶紧用掉 / 是不是优先扣费号），而今日用量与最近使用是
@@ -1100,7 +1175,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
               "cursor-pointer tabular-nums transition-opacity hover:opacity-85",
               isExpiryUrgent(nextExpiry.expireAt, expiryNow) ? "text-warning" : "text-muted-foreground",
             )}
-            aria-label={t("wbAccounts.card.openCredits", { name })}
+            aria-label={drawerTabOpenAria("credits", name, t)}
           >
             {expiringLabel}
           </button>
@@ -1195,7 +1270,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
       data-no-account-open
       onClick={() => onOpenTab(account, "credits")}
       className="cursor-pointer text-left tabular-nums transition-opacity hover:opacity-85"
-      aria-label={t("wbAccounts.card.openCredits", { name })}
+      aria-label={drawerTabOpenAria("credits", name, t)}
     >
       {creditLine}
     </button>
@@ -1279,8 +1354,7 @@ const isCurrentAccount = programSlots.some((slot) => slot.active);
      `border-input`，基础样式里还有 `font-medium` ⇒ 必须逐项压回去。
      ⚠️ `font-normal` 与 `font-medium` **同特异性**，只能靠 `!` 稳定覆盖
      （仓库里 `sonner.tsx` 也是这么压的）。 */
-  const btnClass =
-    "h-[26px] gap-1 rounded-[8px] border-border bg-transparent px-2 text-[11px] !font-normal text-muted-foreground";
+  const btnClass = PROGRAM_SLOT_BUTTON_CLASS;
 
   /**
    * 程序位按钮的**内容** —— 严格照原型 `.prog`（`buddy-switch-prototype.html:2530`）：
@@ -1402,20 +1476,13 @@ const workbuddyControl = workbuddyActive ? (
     const { id, short, label, available, active, busy, loading, onSwitch } = opts;
     if (active) {
       return (
-        <span
-          role="status"
+        <ProgramSlotChip
+          key={id}
           aria-label={t("wbAccounts.card.currentPlugin", { client: label })}
           title={t("wbAccounts.card.currentPlugin", { client: label })}
-          className={cn(
-            /* 与 `ProductCurrentState` 同一口径（同底色/描边，去掉了硬编码内阴影）。 */
-            "inline-flex items-center justify-center border border-primary/40 bg-primary/18 text-primary font-semibold",
-            /* 与 `ProductCurrentState` 同一口径：26px / 圆角 8px。 */
-            "h-[26px] gap-1 rounded-[8px] px-2 text-[11px]",
-          )}
         >
-          <Check className="size-3" strokeWidth={2.25} />
-          <span>{short}</span>
-        </span>
+          {short}
+        </ProgramSlotChip>
       );
     }
     if (available) {
@@ -1624,7 +1691,7 @@ const workbuddyControl = workbuddyActive ? (
           ⚠️ 条件必须与徽章**同为** `isCurrentAccount`（绑定任一程序位）：两者是同一信号的两重表达，
           否则会出现「有徽章却无竖条」/「有竖条却无徽章」的矛盾态。 */}
       {/* 读屏说明：卡片可 Tab 聚焦 + Enter 打开详情（见 `<article>` 上的注释）。 */}
-      {onOpenDetail ? <span className="sr-only">{t("wbAccounts.card.focusHint")}</span> : null}
+      {onOpenDetail ? <span className="sr-only">{cardFocusHint(t)}</span> : null}
       {isCurrentAccount ? (
         <span
           aria-hidden="true"
@@ -1659,7 +1726,8 @@ const workbuddyControl = workbuddyActive ? (
           {/* `.acct-id`：`min-width:0; flex:1`，昵称 13px/600、身份 11px muted（均单行省略）。 */}
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-[13px] font-semibold" title={name}>{name}</h3>
-            <p className="truncate text-[11px] text-muted-foreground" title={identity}>{identity}</p>
+            {/* 无备注（且无邮箱）也**保留这一行**（空占位）——否则名称会在头像旁垂直居中。 */}
+            <p className="truncate text-[11px] text-muted-foreground" title={identity || undefined}>{identity || "\u00A0"}</p>
           </div>
           {currentLoginBadge}
         </div>

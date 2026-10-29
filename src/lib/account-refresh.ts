@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * |:--|:--|:--|
  * | `credits` | 上游接口（查剩余积分 / 到期） | 最慢，可能被限流 |
  * | `travel` | 上游接口（旅行 / 加速器状态） | 逐账号，webui 下一次批量；**仅 WorkBuddy** |
- * | `tokens` | 本机客户端日志 + 网关日志 | 快，离线可读。**⚠️ 只用于指标块，不进菜单** |
+ * | `tokens` | 本机客户端日志 + 网关日志 | 快，离线可读。**⚠️ 已无界面入口，仅保留类型与文案** |
  * | `checkin` | 本机签到记录 | 快 |
  * | `credential` | 本机账号库（JWT 有效期 / 需重登） | 最快；**实际重取整个账号库**（`getAccounts` 无单账号变体），菜单 tooltip 已标注「刷新所有账号」 |
  *
@@ -23,8 +23,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *
  * ★ 2026-10-26（用户要求）：**「刷新今日 Token」不再出现在任何刷新菜单**——
  * 卡片已不展示今日 Token，菜单里留入口会让人以为有东西会变。`tokens` 这个 kind
- * 因此只服务「指标块上的刷新按钮」（Trae 卡片的今日 Token、抽屉的读数），
  * 因而**不在** {@link ACCOUNT_REFRESH_KINDS} 里 —— 那个常量是**菜单可见项**的顺序来源。
+ * ★ 2026-10-29（用户要求）：抽屉概览的「今日 Token」行也已移除 ⇒ `tokens` 连
+ * 「指标块上的刷新按钮」这最后一处入口都没有了（三平台账号页均不再调用它）。
+ * 类型与 {@link REFRESH_DONE_LABEL} 里的字面量暂留：`AccountRefreshKind` 是公开契约、
+ * 删一项会牵动卡片与菜单的图标/文案表；等真有第二处 UI 需要「今日 Token」时再按现状接回。
  *
  * ★ 2026-10-26 新增 `travel`（用户要求）：旅行状态此前**只有「一键刷新」会写**
  * （另一条路径是「续期凭据」顺带刷一次），单账号与批量都没有入口 —— 于是一枚

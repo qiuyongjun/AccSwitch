@@ -47,17 +47,18 @@
 
 **逐项核对 WB 与 Trae 的工具栏差异**：
 
-| 维度 | WorkBuddy | Trae | 差异性质 |
-|:---|:---|:---|:---|
-| 搜索字段 | `nickname` / `email` / `remark` | `name` / `uid` / `remark` | **数据**（字段集） |
-| 排序选项 | priority / name / expiry（**无 recent**，✅ #3） | priority / name / expiry（**同样无 recent** —— 见 §1.5 的更正） | **数据**（两个平台的账号记录**都没有**「最近使用」字段） |
-| 分组选项 | none / program / status | none / program / status / **group** | **数据**（WB 无 `group` 字段，见 `types.ts:12-32`） |
-| 视图 | 卡片 / 表格 | 卡片 / 表格 | 相同 |
-| 表格列 | 账号/状态/积分/程序位（2026-10-23 起无今日Token、无到期） | 账号/状态/积分/到期/程序位（无今日Token） | **数据**（列定义） |
-| 平台专属控件 | 自动签到 + 自动旅行（开关） | 自动签到 + 跳过已签（开关）+ 分组筛选 | **数据/插槽** |
-| 程序位 | 3（WorkBuddy/IDE/CLI） | ≤4（2 区域 × 2 程序位） | **数据** |
+| 维度 | WorkBuddy | Trae | Qoder | 差异性质 |
+|:---|:---|:---|:---|:---|
+| 搜索字段 | `nickname` / `email` / `remark` | `name` / `uid` / `remark` / `group` | `name` / `uid` / `remark` | **数据**（字段集） |
+| 默认排序 | `priority` | `priority` | `priority`（2026-10-28 前是 `name`） | 相同 |
+| 排序选项 | priority / name / expiry | priority / name / expiry | priority / name / expiry | 相同（2026-10-28 起三平台一致，不再提供 `recent`） |
+| 分组选项 | none / program / status / group | none / program / status / group | none / program / status / group | 相同（状态集各平台自备，✅ #8） |
+| 视图 | 卡片 / 表格 | 卡片 / 表格 | 卡片 / 表格 | 相同 |
+| 表格列 | 账号/状态/积分/凭据/程序位 | 账号/状态/积分/凭据/程序位 | 账号/状态/积分/凭据（无程序位列） | **数据**（列定义） |
+| 平台专属控件 | 自动签到 + 自动旅行（开关） | 自动签到 + 跳过已签（开关）+ 分组筛选 | — | **数据/插槽** |
+| 程序位 | 5（WorkBuddy/IDE/CLI/VS Code 扩展/JetBrains 插件） | ≤4（2 区域 × 2 程序位） | 2（桌面版 / CLI） | **数据** |
 
-**结论**：四个核心控件（搜索框 / 排序下拉 / 分组下拉 / 视图切换）**结构完全相同**，差异**全部是「选项数据 + 专属插槽」**，**没有任何行为差异**。
+**结论**：四个核心控件（搜索框 / 排序下拉 / 分组下拉 / 视图切换）**结构完全相同**，差异**全部是「选项数据 + 专属插槽」**，**没有任何行为差异**。排序 / 分组的口径见 §1.13（2026-10-28 三平台统一）。
 
 ⇒ **共用壳 + 平台注入 options/slots**：
 
@@ -105,19 +106,47 @@ export function matchesAccountQuery(searchText: string, query: string): boolean;
 
 ### 1.5 排序
 
-**选项**（§3.4）：`priority`（积分优先级，**默认**）/ `name`（名称）/ `expiry`（到期时间）/ `recent`（最近使用）。
+**当前口径（2026-10-28 三平台统一后）**：
 
-> **✅ 已决策 #3：两个平台都**不提供 `recent`。** `AccountMeta`（`types.ts:12-32`）**无 `lastUsed` 字段**（只有 `refreshedAt` / `createdAt`）。用 `refreshedAt` 近似是**假选项** —— 用户会以为那是「最近使用」，实际是「最近刷新」，两者语义不同。按 §3.4 规则 1「无数据不渲染」，**WB 的排序选项 = `priority` / `name` / `expiry`（3 项）**。
+| 排序键 | 语义 | WorkBuddy | Trae | Qoder |
+|:---|:---|:---|:---|:---|
+| `priority`（**默认**） | **积分优先级**：最急一批积分的到期时刻**升序** → 同到期按金额**降序**；**没有未来到期批次**（凭据失败 / 积分用完 / 全部过期）的账号**沉底** | ✓ | ✓ | ✓ |
+| `name` | 展示名（数字感知、忽略大小写） | ✓ | ✓ | ✓ |
+| `expiry` | **凭据到期**（`expiresAt` / JWT `exp`）**升序**，缺值沉底 | ✓ | ✓ | ✓（2026-10-28 新增） |
+
+> ★ **2026-10-28（本轮统一，用户拍板）**：三处改动 —— ① 三个平台默认排序统一为 `priority`；
+> ② `expiry` 一律读**凭据到期**（原 WB 就是；Trae 原读 `creditsExpireAt`（积分到期），Qoder 无此项），
+> 与三页的「凭据」列 / 抽屉「凭据」页签同口径；积分到期由 `priority` 承担，两者是两根不同的轴
+> （「先用哪个号」vs「哪个号快失效」）；③ Trae 的 `priority` 补上「无可用积分即沉底」
+> （`creditsExpireAt` 是 Unix 秒、可能落在过去，此前会把已过期的号排在最前）。
+> Qoder 的 `priority` 同时从「余额降序」改为与 WB 同义的「最急到期优先、同到期余额降序」，
+> 并新增 `expiry`。分组桶的顺序另见 §1.6 / §1.13。
+>
+> ★ **同日后续（用户要求）**：**移除 `recent` 排序** —— WB 的「最近使用」与 Qoder 的「最近更新」
+> 一并删除，`AccountSortKey` 不再含该键。三平台排序键统一为 `priority` / `name` / `expiry`。
+> `lastUsedAt` 仍由后端记录，但前端既不排序也不展示。
+>
+> **✅ 已决策 #3（2026-10-04；WB 部分 2026-10-10 反转、2026-10-28 随选项删除而复原）**：初版因
+> `AccountMeta` 无 `lastUsed` 字段而判定「两个平台都不提供 `recent`」。后端此后为 `AccountMeta`
+> 记录了 `lastUsedAt`，WB 曾因此提供 `recent`；2026-10-28 用户要求移除该排序项 ⇒ **三平台均无
+> `recent`**（`check-scope-registry.cjs` 断言三页 `availableSorts` 一致且都不含该键）。
+> 用 `refreshedAt` 近似「最近使用」依旧是假选项，不得复活。
 >
 > ⚠️ **本文件的一处更正（2026-10-04，实施期发现）**：本节初稿曾写「**Trae 的排序选项 = 4 项**（Trae 有 `lastUsedAt`，见 `trae-types.ts:796`）」—— **这个引用是错的**。`trae-types.ts:796` 附近是 `TraeApiKeyRecord.lastUsedAt`，那是 **API Key 记录**的字段，**不是 `TraeAccount`**。核实 `TraeAccount` 的全部字段（`trae-types.ts:321-350`）：只有 `addedAt` / `updatedAt`，**没有「最近使用」口径**。
-> ⇒ 按 #3 **自己的规则**（无数据不渲染），**Trae 的排序选项同样是 3 项**。这是实施者核对字段时发现的，已回写本文件各处（差异表 / 本节 / T04 / 决策记录）。
+> ⇒ 按 #3 **自己的规则**（无数据不渲染），**Trae 的排序选项同样是 3 项**（现在三平台都是 3 项）。这是实施者核对字段时发现的，已回写本文件各处（差异表 / 本节 / T04 / 决策记录）。
 > **教训**：设计文档引用**具体字段**时，要核实该字段**属于哪个类型** —— 同名的 `lastUsedAt` 在两个接口里含义不同，只按名字搜索就会张冠李戴。
 
 **★ 保留现状语义**：现有 `orderedAccounts`（`AccountsPage.tsx:908-933`）写死的「积分优先级」**成为 `priority` 选项**（而非唯一选项），并**保留 `pin_current_account` 的置顶覆盖**（`:929-932`）—— 该覆盖是「显式置顶，不插进比较函数」的既有正确做法，不得改动其语义。
 
-> ★ 2026-10-23：`priority` 的比较键改为「**最急一批**积分的到期时刻升序 → 该批金额降序」，
+> ★ 2026-10-23：WB 的 `priority` 比较键改为「**最急一批**积分的到期时刻升序 → 该批金额降序」，
 > 与卡片「最近到期」同源（`summarizeExpiry().batches[0]`）。没有任何未来到期批次的账号
 > （凭据失败 / 积分用完 / 全部过期）沉底 —— 已过期积分不能再被消耗，不该挡住能用的账号。
+> ★ 2026-10-28：该规则升格为**三平台同一口径**（Qoder 用 `qoder_credits.expiresAt`；
+> Trae 用账号快照的 `creditsExpireAt`）。
+> ★ 2026-10-29：Trae 的到期时刻改为**先取仍然有效的积分包**（与卡面 / 表格同一份
+> `summarizeExpiry`），没有可用批次时才回落快照的 `creditsExpireAt`。快照是刷新时刻算出的
+> 「最早有效到期」，时间走过之后会变成过去的时刻 —— 只看它会把「最早一包已过期、后面还有
+> 有效包」的账号当过期沉底（卡面写着「明天到期」，排序却排在 7 天后到期的账号之后）。
 
 **实现**：把排序抽成**纯函数**，比较器与置顶由平台经 `AccountListConfig` 注入（WB 用积分优先级，Trae 用自身积分字段）：
 
@@ -132,7 +161,7 @@ export function sortAccounts<T>(
 ): T[];
 ```
 
-**选项按需出现（§3.4 规则 1）**：某排序键若在当前平台无数据支撑则**不渲染该选项** —— **✅ 已决策 #3：两个平台都不渲染 `recent`**（`availableSorts` 由页面填，见 §3.1；Trae 侧的更正见 §1.5）。
+**选项按需出现（§3.4 规则 1）**：某排序键若在当前平台无数据支撑则**不渲染该选项**（`availableSorts` 由页面填，见 §3.1）。当前：三平台均为三项（`priority` / `name` / `expiry`）。
 
 ### 1.6 分组
 
@@ -151,14 +180,20 @@ export function sortAccounts<T>(
 
 | `group` 值 | 桶键 | 可用平台 |
 |:---|:---|:---|
-| `none` | 单桶（不渲染分组标题） | 两平台 |
-| `program` | 绑定的程序位标签（多个用 ` + ` 连接；未绑定 → 「未绑定程序位」） | 两平台 |
-| `status` | 状态派生：正常 / 今日未签到 / 凭据已过期 / 需重新登录（Trae 状态集不同） | 两平台 |
-| `group` | 自定义组名（`group`/`groupId`；无 → 默认组） | **仅 Trae**（WB `AccountMeta` 无 group 字段） |
+| `none` | 单桶（不渲染分组标题） | 三平台 |
+| `program` | 绑定的程序位标签（多个用 ` + ` 连接；未登录 → 「未登录任何程序位」） | 三平台 |
+| `status` | 状态派生（**状态集各平台自备**，见下） | 三平台 |
+| `group` | 自定义组名（WB `groupName` / Trae `groupId` / Qoder `group`；空 → 「未分组」） | 三平台（WB 2026-10-10 起后端记录 `groupName`） |
 
-**选项按需出现（§3.4 规则 1）**：`group` 选项仅当平台**有**分组概念时渲染（WB 不渲染「按自定义组」）；`program` 选项仅当存在程序位时渲染。
+**选项按需出现（§3.4 规则 1）**：`program` 选项仅当存在程序位时渲染；当前三平台四项齐全。
 
-> **✅ 已决策 #8：状态集各平台一份。** 「按状态」分桶的**状态集由各平台自备**（`bucketKey` 由平台提供，见 §3.1），**不统一**。理由：Trae 有 `cooling` / `jwt` 等独有状态（`trae-types.ts:15`、`TraeAccountsPage.tsx:1180-1195`），统一为一套会**丢掉 Trae 的语义**。
+**★ 桶的固定顺序（2026-10-28）**：桶标题的顺序由各页 `bucketCompare` 决定，**不再依赖当前排序键**（默认的「首次出现序」会随排序漂移，看起来就像「换个平台分组方式变了」）。三平台同一套规则：
+
+1. **状态桶**：问题在前、正常最后 —— WB `需重新登录 → 凭据已过期 → 今日未签到 → 正常`；Trae `冷却中 → 凭据已过期 → 今日未签到 → 正常`；Qoder `无凭据 → 无法识别 → 正常`（**状态集本身仍各平台自备**，✅ #8）。
+2. **程序位桶**：按该平台程序位的**展示顺序**；组合桶（`A + B`）取第一个程序位的次序；未登录任何程序位排最后。
+3. **自定义组桶**：按组名 `localeCompare`；「未分组」永远最后。
+
+> **✅ 已决策 #8：状态集各平台一份。** 「按状态」分桶的**状态集由各平台自备**（`bucketKey` 由平台提供，见 §3.1），**不统一**。理由：Trae 有 `cooling` / `jwt` 等独有状态（`trae-types.ts:15`、`TraeAccountsPage.tsx:1180-1195`），统一为一套会**丢掉 Trae 的语义**。2026-10-28 统一的只是**桶的先后规则**（问题在前、正常最后），不是状态集本身。
 
 **渲染**：每个桶渲染一行分组标题（组名 + 数量徽标，`accountListHtml` 原型 `demo-app.js:635`），后跟该桶的卡片/表格。`none` 时不渲染标题。
 
@@ -200,7 +235,7 @@ export interface AccountColumn<T> {
 > 「积分」列 = `当前/总额` + `最近到期` + `优先`（与卡片指标行同一份 `creditMetricValues` 与
 > `nextExpiryLabel`；「最近到期」只报最急一批的金额与**到期日 + 时分**，更远批次在 tooltip）；
 > 账号格的当前徽标复用卡片文案 `card.currentLogin`（「当前登录」）。
-> 「今日 Token」列随卡片指标行瘦身一并移除（其正式界面是用量统计页 / 详情抽屉）。
+> 「今日 Token」列随卡片指标行瘦身一并移除（其正式界面是用量统计页；★ 2026-10-29 起详情抽屉也不再展示它）。
 > ★ 2026-10-26：「到期」列曾被移除（当时理由是「卡片从不显示凭证到期」）。同日卡片在
 > 指标行下方补了 `凭证到期 … · 刷新令牌到期 …`，该前提不再成立 ⇒ 表格补回一列，列头用
 > 「凭据」（与 `shared.stat.credential` / 抽屉页签同一措辞），两行分别给凭证到期与刷新令牌到期。
@@ -222,10 +257,19 @@ export interface AccountColumn<T> {
 > `trae.comp.card.currentLogin`（「当前登录」+ `info` primary 底），此前写「当前」+ secondary；
 > ② 积分明细先过 `traeCreditPackages`（`get_trae_credits.packages[uid]` 优先、回落账号快照）
 > 再算 `traeCreditTotal` / `summarizeExpiry` —— 只读账号快照会让卡片有 `剩余/总数` 与到期金额、
-> 列表只剩剩余；③ 程序位列复用卡片页脚的 `TraeCurrentProgramChip`（primary 18% 底 + ✓），
+> 列表只剩剩余；③ 程序位列复用卡片页脚的 `ProgramSlotChip`（primary 18% 底 + ✓），
 > 不再用 secondary 徽章。
 > **Qoder 表格**：账号格同样复用卡片的「当前登录」徽章；积分列补副行「X 积分 MM-DD HH:mm 到期」
-> （与卡片指标行同一份 `summarizeExpiry` + `nextExpiryLabel`）。Qoder 表格**没有**程序位列。
+> （与卡片指标行同一份 `summarizeExpiry` + `nextExpiryLabel`）。
+> ★ 2026-10-28（用户要求）：Qoder 表格**补「程序位」列**（只读 `ProgramSlotChip`，展示当前登录的
+> 桌面版 / CLI），与 WB / Trae 同列同形；同时三平台卡片指标行与表格积分列统一带「优先」文字
+> （判定 = 按 `priority` 排序后第一个有未来到期额度的账号，与当前排序键无关）。
+> ★ 2026-10-28（统一程序位风格）：三平台卡片页脚与表格程序位列共用 `account-card.tsx` 的
+> `ProgramSlotChip` / `PROGRAM_SLOT_BUTTON_CLASS`；Qoder 页脚按钮改用短名（`桌面` / `CLI`），
+> 完整展示名保留在 tooltip 与表格。
+> ★ 2026-10-28（用户要求）：**Qoder 卡片指标行去掉「套餐」** —— 指标行收敛为
+> `积分 剩余/总额 · 临期 · 优先`，与 WB / Trae 同三项；套餐名只在详情抽屉的积分包行
+> （`DetailPack.name` 直接取 `qoder_credits.plan`），词条 `qoder.page.accounts.metric.plan` 随之删除。
 > ★ 2026-10-27（用户报障「今日未签到，卡片和列表不一致」）：**「状态」列整列改为复用卡片的
 > `TraeStatusChips`**，不再在表格里另拼一套。此前表格自写：未签到 = secondary 灰、无图标，
 > 卡片 = warning 琥珀 + 日历勾；凭据过期同理（卡片「凭据已过期」、列表「已过期」）。
@@ -258,7 +302,7 @@ export interface AccountColumn<T> {
 ### 1.10 与「卡片可点区 ≤4」的关系
 
 - 工具栏在**列表之外**（列表标题行），**不新增任何卡内可点区**。`AccountCard` / `TraeAccountCard` 的 props **不变**。
-- 表格视图的程序位列是**只读徽标**（复用 `account-detail-drawer.tsx` 的 `DetailProgramBadge` 呈现口径；Trae 侧复用卡片页脚的 `TraeCurrentProgramChip`），**不是切换控件** —— 与抽屉同纪律。
+- 表格视图的程序位列是**只读徽标**（复用 `account-detail-drawer.tsx` 的 `DetailProgramBadge` 呈现口径；三平台统一用 `account-card.tsx` 的 `ProgramSlotChip`），**不是切换控件** —— 与抽屉同纪律。
 - **禁止**在工具栏里为每张卡加「快速操作」按钮。
 
 ### 1.11 ★ 批量执行模型与跨版本状态隔离（2026-10-23 审查整改）
@@ -285,6 +329,9 @@ export interface AccountColumn<T> {
 
 **⑤ 「今日 Token」批量刷新是整版本范围，文案如实说。**
 `get_account_token_today` 无「只算这几个账号」的入参 ⇒ 勾 3 个也会重算全部。此前复用「已对 {n} 个所选账号执行」，与批量「成长摘要」自己写下的边界（越界更新未勾选账号是越权）自相矛盾 ⇒ 改用 `wbAccounts.toast.batchRefreshTokensRegion`。
+> ★ 2026-10-29：抽屉概览的「今日 Token」行移除后，批量条与单账号菜单都没有该项 ⇒
+> 这条文案（`wbAccounts.toast.batchRefreshTokensRegion`）与批量 / 单账号的 `tokens` 分支一并删除；
+> 若将来重接该批量动作，须恢复「整版本范围」的如实表述，不要复用「已对 {n} 个所选账号执行」。
 
 **本轮明确不做**（各有理由，勿顺手补）：
 - 状态筛选控件（「只看未签到 / 临期」）—— 要动三平台共用的工具栏壳与门禁脚本，属独立一轮；分组只是分桶不是过滤，这点要照实留着。
@@ -330,7 +377,7 @@ export interface AccountColumn<T> {
 import type { ReactNode } from "react";
 
 /** 排序键。默认 `priority`（= 现状写死的「自动积分优先级」）。 */
-export type AccountSortKey = "priority" | "name" | "expiry" | "recent";
+export type AccountSortKey = "priority" | "name" | "expiry";
 
 /**
  * 分组键。
@@ -359,6 +406,11 @@ export interface AccountListConfig<T> {
   pinFirst?: (sorted: T[]) => T[];
   /** 分组取桶键；返回 null ⇒ 不分组。 */
   bucketKey: (row: T, group: AccountGroupKey) => string | null;
+  /**
+   * 桶顺序（可选）。缺省保持「首次出现序」；提供时按它排桶标题，
+   * 相等仍回落到首次出现（稳定）。规则见 §1.6「桶的固定顺序」。
+   */
+  bucketCompare?: (left: string, right: string, group: AccountGroupKey) => number;
   /** 可用的排序 / 分组选项（**按需出现**，§3.4 规则 1）。 */
   availableSorts: AccountSortKey[];
   availableGroups: AccountGroupKey[];
@@ -639,9 +691,9 @@ sequenceDiagram
 - **依赖**：T02
 - **要点**：
   - 用 `AccountToolbar` 替换现工具栏的布局（**保留**自动签到/旅行开关 → 走 `children` 插槽；**保留** `compact` 开关，**仅卡片视图下渲染**，见 §1.7 / ✅ #5）。
-  - **`availableSorts = ["priority","name","expiry"]`（3 项，✅ #3：WB 无 `lastUsed` 字段 ⇒ 不渲染 `recent`）**；`availableGroups = ["none","program","status"]`。
+  - **`availableSorts = ["priority","name","expiry"]`（3 项）；`availableGroups = ["none","program","status","group"]`。**
   - 把写死的 `orderedAccounts`（`:908-933`）改为 `sortAccounts(priority, config)`，**保留 `pin_current_account` 置顶**。
-  - 新增 `query`/`sort`/`group`/`view` 页内 state（✅ #2：不持久化）；`group` 选项**不含**「按自定义组」（WB 无 group 字段）。
+  - 新增 `query`/`sort`/`group`/`view` 页内 state（✅ #2：不持久化）；`group` 选项含「按自定义组」（`groupName`）。
   - 两种空态（真没有 / 被筛没）；表格列**不含**「今日 Token」与「到期」（2026-10-23 随卡片指标行瘦身移除；到期只在详情抽屉）。
   - 工具栏全选 + 表头全选（✅ #6），共用 `selectedIds`。
 
@@ -651,7 +703,7 @@ sequenceDiagram
   - 修改 `src/locales/domains/traeComponents.zh.ts` / `.en.ts`（Trae 排序/分组选项标签、表格列头、分组相关）
 - **依赖**：T02
 - **要点**：
-  - 同 T03；**`availableSorts = ["priority","name","expiry"]`（3 项 —— ⚠️ 初稿写的 4 项是错的，`TraeAccount` 无「最近使用」字段，更正见 §1.5）**；`availableGroups = ["none","program","status","group"]`。
+  - 同 T03；**`availableSorts = ["priority","name","expiry"]`（3 项 —— 初稿写的 4 项是错的，`TraeAccount` 无「最近使用」字段；2026-10-28 起三平台均为这 3 项）**；`availableGroups = ["none","program","status","group"]`。
   - **`group` 选项含「按自定义组」**（Trae 有 `groupId`）。
   - **保留并区分**既有 `groupFilter`（筛选到某组）与新增 `group`（分桶），命名/位置分开（§1.6 / ✅ #4）。
   - 表格列**无「今日 Token」**；程序位列复用 `programsFor`（跨区域，含区域消歧）。
@@ -712,6 +764,8 @@ sequenceDiagram
 - **⚠️ 实施期更正**：初稿写「Trae 仍为 4 项（有 `lastUsedAt`，`trae-types.ts:796`）」—— 该行是 **`TraeApiKeyRecord`** 的字段，不是 `TraeAccount`。核实 `TraeAccount`（`trae-types.ts:321-350`）**无「最近使用」口径** ⇒ 按本决策自己的规则（无数据不渲染），Trae 同样只有 3 项。详见 §1.5。
 - **理由**：`AccountMeta`（`types.ts:12-32`）**无 `lastUsed` 字段**；用 `refreshedAt` 近似是**假选项**（用户以为是「最近使用」，实为「最近刷新」，语义不同）。按 §3.4 规则 1「无数据不渲染」。
 - **对正文的影响（★ 改变了设计）**：**已同步**——§1.3 差异表 WB 排序行、§1.5 决策块与末句、§3.1 `availableSorts` 说明、**§4 T03 要点**均改为 WB 3 项。
+- **⚠️ 2026-10-10 部分反转**：后端此后为 `AccountMeta` 记录 `lastUsedAt` ⇒ **WB 提供 `recent`**（`availableSorts` 4 项，`check-scope-registry.cjs` 有断言）。**Trae 仍不提供**（该类型始终无此字段），故决策 #3 对 Trae 继续有效。
+- **⚠️ 2026-10-28 复原（用户要求）**：WB「最近使用」与 Qoder「最近更新」排序一并移除，`AccountSortKey` 删除 `recent` ⇒ **三平台重新都不提供该排序项**，与决策 #3 一致。`lastUsedAt` 字段保留，但前端不排序、不展示。门禁改为「三页 `availableSorts` 一致且不含 `recent`」。
 
 ### ✅ #4 · Trae 的 `group`（分桶）与既有 `groupFilter`（筛选）如何共存？—— **都保留，文案区分（候选 A）** ✅ 已决策（lead 拍板 · 2026-10-04）
 - **决策**：两者**共存**；`group` = 「分组方式」（靠排序）、`groupFilter` = 「只看某组」（靠搜索），**命名与位置分开**。
@@ -801,3 +855,48 @@ graph TD
 - **签到金额未知显示「—」**：抽屉不再 `?? 0` 补零。
 - **Trae 批量签到的进度与取消**：任务 id + 协作式取消契约，见
   `docs/specs/api-trae-qoder-per-account-refresh.md` §10；不可用前端取消冒充后端停止。
+
+### 1.13 ★ 三平台排序 / 分组口径统一（2026-10-28）
+
+用户报「不同客户端的账号页，排序和分组方式好像不同」。核对结论：**结构早已共用**
+（`AccountWorkbench` / `AccountToolbar` / `account-list-view.ts`），是**口径**分了叉。
+本轮统一以下四条，**约束后续改动**：
+
+**① 默认排序三平台一律 `priority`。**
+Qoder 此前默认 `name`。`priority` 在三个平台是同一句话：**最急一批积分先到期者先用 →
+同到期余额多者先 → 没有可用积分者沉底**。
+- WB：`summarizeExpiry(...).batches[0]`（原有，2026-10-23 口径）；
+- Trae：**仍然有效的积分包批次** `summarizeExpiry(creditPackages / credits.packages)`
+  （与卡面同源）→ 无可用批次时回落账号快照 `creditsExpireAt`（Unix 秒）+ `remainingCredits`；
+  2026-10-28 补上「已过期 / 零积分沉底」（此前把 `creditsExpireAt` 直接当升序键，过期的号
+  排最前），2026-10-29 改为优先读包（快照的「最早有效到期」在包过期后会变陈旧）；
+- Qoder：`qoder_credits.expiresAt` + `remaining`；2026-10-28 由「余额降序」改为本口径。
+
+**② `expiry` 一律 = 凭据到期。**
+WB `expiresAt`；Trae `jwtExpTimestamp`（过 `traeJwtExpiryMs`）；Qoder `expiresAt`
+（2026-10-28 新增该项）。与三页的「凭据」列、抽屉「凭据」页签同口径。Trae 此前读的是
+**积分到期**（`creditsExpireAt`）—— 同一枚下拉在两页回答两个问题，是本轮消灭的主要歧义。
+缺值一律沉底（比较器**显式判相等**，避免 `Infinity - Infinity = NaN`）。
+
+**③ 桶的固定顺序（`bucketCompare`）。**
+`groupAccounts` 原按「首次出现」排桶 ⇒ 换个排序键组标题就换位置。新增可选
+`bucketCompare`（见 §3.1），三页注入同一套规则：状态桶「问题在前、正常最后」、
+程序位桶按该平台展示顺序（组合桶取首个程序位、未登录最后）、自定义组按组名、
+未分组永远最后。**状态集本身不统一**（决策 #8 不变）。
+
+**④ 词条对齐。**
+`sort.expiry` = 「凭据到期」；`group.group` = 「按自定义组」（Qoder 原「按分组」）；
+`group.program` = 「按程序位」；`programBucket.unbound` / `.none` = 「未登录任何程序位」；
+状态桶「凭据已过期」（与卡片徽章同措辞）。
+
+**⑤ 同日移除 `recent` 排序（用户要求）。**
+WB「最近使用」、Qoder「最近更新」两项删除，`AccountSortKey` 同步删掉该键；
+三平台排序统一为 `priority` / `name` / `expiry`。`lastUsedAt` 仍由后端记录，前端不排序、不展示。
+
+**保留的差异（不是漏统一）**：
+- WB 的 `pin_current_account` 置顶仍只在 WB；
+- 状态桶的状态集各平台自备；
+- Trae 的 `groupFilter`（只看某组）与 `group`（按组分桶）仍是两个控件（决策 #4）。
+
+**门禁**：`check-scope-registry.cjs` 断言三页 `availableSorts` 一致（`priority` / `name` / `expiry`）
+且均不含 `recent` —— 改排序选项前先读它；改完跑 `npm run build`。

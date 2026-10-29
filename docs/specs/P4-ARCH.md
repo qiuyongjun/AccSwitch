@@ -180,7 +180,7 @@ export interface AccountDetailDrawerProps {
   onOpenChange: (open: boolean) => void;
   /** 头部展示名（已过 displayText 出口） */
   name: string;
-  /** 头部副标题（身份 / uid，已归一） */
+  /** 头部副标题：**仅 UID**（`shared.drawer.subtitleUid`，已归一；2026-10-29 起三平台统一） */
   subtitle: string;
   /** 头像底色种子（复用 `avatarTone`，与卡片同一套色板） */
   avatarSeed: string;

@@ -56,7 +56,7 @@
 
 | 文档 | 内容 |
 |:--|:--|
-| [`P3-ARCH.md`](specs/P3-ARCH.md) | 用量图表四视图 + 概览今日用量摘要 |
+| [`P3-ARCH.md`](specs/P3-ARCH.md) | 用量图表四视图（原「概览今日用量摘要」部分已于 2026-10-28 随概览页移除而作废） |
 | [`P4-ARCH.md`](specs/P4-ARCH.md) | 账号详情抽屉 + 卡片瘦身 + 程序位常显 |
 | [`P4-MIGRATION-ARCH.md`](specs/P4-MIGRATION-ARCH.md) | 跨作用域迁移向导（三步抽屉） |
 | [`P4-TOOLBAR-ARCH.md`](specs/P4-TOOLBAR-ARCH.md) | 搜索 / 排序 / 分组 / 卡片·表格视图 |

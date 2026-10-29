@@ -23,7 +23,6 @@ export const en = {
   "product.switchAria": "Switch product",
   "product.navAria": "{product} navigation",
 
-  "nav.overview": "Overview",
   /* Short labels, mirroring the prototype's `DESTINATIONS` (buddy-switch-prototype.html:1139-1146). */
   "nav.accounts": "Accounts",
   "nav.usage": "Usage",
@@ -64,8 +63,6 @@ export const en = {
 
   // ---- Page-head scope subtitles (redesign §3.2) ----
   // Read-only: the only scope switcher lives in the top bar (region is part of L1 scope).
-  "pageHead.overview.signedIn": "Signed in as {name}",
-  "pageHead.overview.signedOut": "Not signed in",
   // Scope is rendered by the header ScopeChip; subtitles no longer repeat {scope}.
   "pageHead.accounts": "{n} accounts",
   "pageHead.accounts.pending": "{n} accounts · {m} need action",
@@ -73,15 +70,6 @@ export const en = {
   "pageHead.gateway": "Expose the account pool as OpenAI / Anthropic compatible APIs",
   "pageHead.settings": "Grouped by topic instead of one long scroll",
   "pageHead.sessions": "One session with a copy in each account — who lags, who diverged, sync to whom",
-
-  // ---- Platform capability labels (overview "Capabilities" card; from `Capability` in registry) ----
-  "capability.checkin": "Auto check-in",
-  "capability.travel": "Auto travel",
-  "capability.credits": "Credits",
-  "capability.oauth": "OAuth sign-in",
-  "capability.gateway": "API gateway",
-  "capability.autoRotate": "Auto rotate",
-  "capability.sessionCopy": "Session copy",
 
   // ---- Command palette (⌘K, P6 §3.7) ----
   "palette.entry": "Search or jump",

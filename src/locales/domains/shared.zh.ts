@@ -546,7 +546,8 @@ export const zh = {
   // 卡片「更多」菜单：刷新组（**只读项**）+ 账号动作分组（三平台共用同一套文案，避免各自造词）。
   // ★ 2026-10-26：刷新组只有 积分 / 签到状态 / 凭证状态（+ 任务 `refresh.tasks`，仅 WB·CN）；
   // 「刷新今日 Token」不再进任何菜单 ⇒ 没有 `refresh.tokens` 这个标题键。
-  // ⚠️ `refresh.tokensHint` 仍被 Trae 卡片「今日 Token」指标块的 tooltip 使用，别一起删。
+  // ★ 2026-10-29：`refresh.tokensHint` 也随之删除（Trae 卡片「今日 Token」指标块早已移除），
+  // 菜单里已没有任何一项会用到这条说明。
   "shared.cardMenu.refreshGroup": "刷新",
   "shared.cardMenu.refresh.credits": "刷新积分",
   "shared.cardMenu.refresh.travel": "刷新旅行状态",
@@ -559,7 +560,6 @@ export const zh = {
   // 刷新项各自的说明（菜单项的 title）：说清「读的是哪一层」，失败时用户才知道卡在哪。
   "shared.cardMenu.refresh.creditsHint": "向上游查询剩余积分与到期时间（最慢，可能被限流）",
   "shared.cardMenu.refresh.travelHint": "向上游查询旅行 / 加速器状态（是否在途、到达时刻、奖励积分）",
-  "shared.cardMenu.refresh.tokensHint": "重读本机客户端会话日志 + 网关日志（本地，快）",
   "shared.cardMenu.refresh.checkinHint": "重读今天这个账号的签到结果（本地）",
   "shared.cardMenu.refresh.credentialHint": "重读本机登录凭据的有效期（刷新所有账号）",
   // ★ 2026-10-26：成长任务摘要作为刷新组的第四项（仅 WB·CN）—— 与前三项一样只读重扫，不执行任务。
@@ -604,11 +604,12 @@ export const zh = {
   "shared.refreshPart.fail": "刷新失败",
   // 详情抽屉顶部的四个指标块（文本在页面侧格式化，这里只提供标签与固定短语）。
   "shared.stat.credits": "积分",
-  "shared.stat.tokens": "今日 Token",
   "shared.stat.checkin": "今日签到",
   "shared.stat.credential": "凭据",
   // ★ 2026-10-23：指标块由「积分 / 今日 Token / 签到 / 凭据」改为「积分 / 签到 / 任务 / 凭据」，
-  // 与下面的页签一一对应（用户要求「对齐下面的页面」）。今日 Token 下沉到「概览」的信息行。
+  // 与下面的页签一一对应（用户要求「对齐下面的页面」）。
+  // ★ 2026-10-29（用户要求）：概览里的「今日 Token」行也一并移除，账号页不再展示该数字
+  // （用量以用量统计页为准）⇒ `shared.stat.tokens` / `shared.stat.tokensGatewayOnly` 已删除。
   "shared.stat.tasks": "任务",
   "shared.stat.taskClaimable": "可领 {n}",
   // ★ 2026-10-26（用户要求）：「已领 {n}」补上任务总数 —— 只写「已领 13」读不出
@@ -617,20 +618,19 @@ export const zh = {
   "shared.stat.taskClaimedTotal": "已领 {claimed}/{total}",
   "shared.stat.checkedIn": "已签到",
   "shared.stat.notCheckedIn": "未签到",
-  // issue #47：Trae / Qoder 的签到与 Token 两个块多出来的**诚实**措辞。
+  // issue #47：Trae / Qoder 的签到块多出来的**诚实**措辞。
   // 「读不到」「未开放」「按本地台账」三档必须分开 —— 合成一句就是把「不知道」
   // 说成「没有」，用户会反复去点一个注定无效的按钮。
   "shared.stat.checkinUnreadable": "读不到",
   "shared.stat.checkinUnavailable": "本区域未开放",
   "shared.stat.checkinFromLedger": "按本地台账（刷新签到状态可向上游确认）",
-  "shared.stat.tokensGatewayOnly": "仅经本网关的调用",
   "shared.stat.credentialOk": "有效",
   "shared.stat.credentialExpired": "已过期",
   "shared.stat.credentialRelogin": "需重登",
-  "shared.stat.credentialOkSub": "可正常使用",
   /* ★ 2026-10-26（用户要求）：「可正常使用」不携带信息 ⇒ 凭据有效时改报**具体到期时刻**
-     （WB 侧 `expiresAt`）；没有到期时间才退回「长期有效」。Qoder 侧不在指标块副行报日期
-     （到期在抽屉「凭据」页签展示），仍用 `credentialOkSub`。 */
+     （WB 侧 `expiresAt`）；没有到期时间才退回「长期有效」。
+     ★ 2026-10-29：Qoder 侧也已改为到期时刻（与 WB / Trae 同口径，缺值不写副行），
+     因此 `shared.stat.credentialOkSub`（「可正常使用」）已删除。 */
   "shared.stat.credentialValidUntil": "有效至 {date}",
   "shared.stat.credentialBadSub": "先重新登录",
   "shared.stat.noExpiring": "无临期积分",
@@ -643,6 +643,10 @@ export const zh = {
   //   积分页签的包名在用（`detailPacks.name`），不再需要这句。
   "shared.drawer.close": "关闭",
   "shared.drawer.loading": "正在加载详情…",
+  /* 头部副标题：**只显示 UID**（2026-10-29 用户要求）。
+     此前三平台各写各的（WB 脱敏邮箱 / Trae、Qoder 的 `{name} · UID {uid}`），
+     名称与标题重复、邮箱也不是 uid ⇒ 统一成这一句。 */
+  "shared.drawer.subtitleUid": "UID · {uid}",
   // 详情页签：把 7 段长滚动切成四块（概览 / 积分 / 签到 / 凭据）。只切「看」的部分，
   // 备注 / 分组 / 程序位切换固定在上方，不随页签隐藏。
   "shared.drawer.tab.overview": "概览",

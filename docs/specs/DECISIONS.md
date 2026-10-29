@@ -931,6 +931,45 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
   卡片 / 表格 / 抽屉共用；自动补拉按 `scope:userId` 去重，并区分「尚未查询」与
   「已查询但没有积分包」。
 
+### D52 「概览」目的地移除 —— ✅ **已落地（2026-10-28）**
+
+**结论**：`overview` 从 `DESTINATIONS` 中删除，三平台共用；侧栏默认项数回到 **5**
+（账号 / 用量 / 会话 / 网关 / 设置）。两个页面组件（`OverviewPage` / `QoderOverviewPage`）、
+`src/components/overview/*`、`src/lib/overview-metrics.ts`、`wbOverview` 词条域一并删除；
+`nav.overview` 与 `qoder.page.overview.*` 同步清理。
+
+**旧链接不失效**：`/s/{scope}/overview` 落到**同作用域**的 `/accounts`（不能走 fail-closed，
+那会跨到默认作用域）；`/overview` 落到 `/` 且**保留查询串**（`?region=global` 若被丢掉，
+区域会退回记忆值 / 国内版，打开的是另一本账号库；`/trae` → `/trae/accounts` 同样保留旧
+`?line=`），`destinationOfLegacyPath("/overview")` 返回 `accounts`。门禁 `check:scope` 钉住
+这几条与「页面文件不得回来」。
+
+**理由**：概览是 P3 新增的聚合页，但它的数据源（网关请求日志、用量台账）长期未落地，
+页面主体只剩账号库计数与跳转入口 —— 与账号页重复，却额外维护一套待处理口径与图表。
+移除后「该做什么」由账号页的状态标签与菜单直接回答。
+
+- **定了会动什么**：注册表、路由、侧栏、命令面板、词条、README 截图脚本与门禁。
+- **选反方案（保留空壳）的代价**：继续维护一个没有数据源的页面，且「概览」与「账号」
+  对同一批账号给出两套计数口径。
+
+### D53 Trae 不再显示凭据剩余天数 —— ✅ **已落地（2026-10-29）**
+
+**结论**：Trae 卡片 chips 行与表格「状态」列移除 `有效 13 天` / `临期 5.2 小时`
+（`jwtBadge` → `jwtStatusText`），抽屉「凭据」指标块同步只写状态词（有效 / 凭据已过期 /
+无法解析）—— 与 WB / Qoder 同一套词表。剩余时长不单独展示，到期时刻统一由
+「凭据到期」行 / 列（`CredentialExpiryMeta`，`MM-DD HH:mm`）与抽屉「凭据」页签给出。
+
+**理由**：三平台只有 Trae 把剩余时长做成状态标签，另两家的状态槽只回答「账号能不能用」，
+到期是数据、放在日期行。同一件事两种画法会让跨平台比较失效，且 `临期 ≤24h` 与下行日期
+重复表达同一事实。`unparsable`（解析不出 `exp`）保留单独说法：WB / Qoder 没有这一态，
+不能编「有效」。
+
+- **定了会动什么**：`trae-account-card.tsx`（chip 与状态词）、`TraeAccountsPage.tsx`
+  （抽屉指标块 / 凭据页签徽章）、`traeComponents.{zh,en}.ts`（删除 `hours.*` 与
+  `jwt.valid` / `jwt.warn` / `jwt.expired` / `jwt.validTip`）。
+- **选反方案的代价**：保留倒计时标签 ⇒ 继续与 WB / Qoder 分叉；改成「临期」无天数词
+  仍是一枚 Trae 独有的状态标签，信息与下行日期重复。
+
 ---
 
 一句话总结这 28 条的内在一致性：

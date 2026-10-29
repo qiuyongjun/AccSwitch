@@ -300,6 +300,38 @@ pub fn is_running_for(variant: super::variant::TraeVariant) -> bool {
     }
 }
 
+/// [`is_running_for`] 的**展示**版本：读共享进程快照（1 秒 TTL）。
+///
+/// 只供页面状态指示；结束进程、等待退出仍走实时 [`is_running_for`]。
+/// 探测失败沿用实时版本的「未运行」口径。
+pub fn is_running_for_display(variant: super::variant::TraeVariant) -> bool {
+    #[cfg(windows)]
+    {
+        match crate::modules::process::display_process_rows() {
+            Ok(rows) => snapshot_rows_match_names(&rows, exe_names_for(variant)),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        is_running_for(variant)
+    }
+}
+
+/// 快照行是否命中候选映像名（大小写不敏感子串匹配，与实时实现同口径）。
+#[cfg(windows)]
+fn snapshot_rows_match_names(
+    rows: &[crate::modules::process::WindowsProcessRow],
+    names: &[&str],
+) -> bool {
+    rows.iter().any(|row| {
+        let image = row.name.to_ascii_lowercase();
+        names
+            .iter()
+            .any(|name| image.contains(&name.to_ascii_lowercase()))
+    })
+}
+
 /// **全部变体**的环境状态（线上形态，数组）。
 ///
 /// ## 为什么需要它（与 [`env_status`] 的分工）
@@ -354,7 +386,7 @@ fn region_status(region: super::region::TraeRegion) -> Value {
             let write_dir = detect_data_dir_for(target);
             let (installed, running, version, path, data_dir, write_data_dir) = (
                 probe.installed,
-                is_running_for(target),
+                is_running_for_display(target),
                 probe.version,
                 probe.exe.as_ref().map(|p| p.to_string_lossy().to_string()),
                 dir.as_ref().map(|p| p.to_string_lossy().to_string()),
@@ -1203,6 +1235,23 @@ fn running_processes_for(variant: super::variant::TraeVariant) -> Vec<&'static s
     }
 }
 
+/// [`is_running`] 的**展示**版本：读共享进程快照（1 秒 TTL）。
+///
+/// 只供页面状态指示；结束进程、等待退出仍走实时 [`is_running`]。
+pub fn is_running_display() -> bool {
+    #[cfg(windows)]
+    {
+        match crate::modules::process::display_process_rows() {
+            Ok(rows) => snapshot_rows_match_names(&rows, exe_names()),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        is_running()
+    }
+}
+
 /// 客户端是否正在运行。
 ///
 /// Windows 走 `tasklist`，其余平台走 `pgrep -f`。两者都只做**只读**探测，
@@ -1284,7 +1333,16 @@ fn wait_until_gone(variant: super::variant::TraeVariant, secs: u64) -> bool {
 /// 若用 [`kill_client`]（横跨全部候选名），切换 Trae Work 会把正在用的 Trae CN 一起杀掉。
 ///
 /// 返回 `Ok(true)` 表示确实终止了进程，`Ok(false)` 表示本来就没运行。
+///
+/// 动作前后让共享展示快照失效，页面立即反映「已结束」。
 pub fn kill_client_for(variant: super::variant::TraeVariant) -> Result<bool, String> {
+    crate::modules::process::invalidate_process_snapshot();
+    let result = kill_client_inner(variant);
+    crate::modules::process::invalidate_process_snapshot();
+    result
+}
+
+fn kill_client_inner(variant: super::variant::TraeVariant) -> Result<bool, String> {
     if !is_running_for(variant) {
         return Ok(false);
     }
@@ -1395,6 +1453,17 @@ pub fn launch_client(exe: &Path, proxy_port: Option<u16>) -> Result<(), String> 
 /// `proxy_port` 为 `Some` 时注入 `--proxy-server`；注入前先按变体结束已运行实例
 /// （Electron 单实例语义会让新参数被忽略，且用全局 kill 会误杀另一条产品线）。
 pub fn launch_client_for(
+    variant: super::variant::TraeVariant,
+    exe: &Path,
+    proxy_port: Option<u16>,
+) -> Result<(), String> {
+    crate::modules::process::invalidate_process_snapshot();
+    let result = launch_client_inner(variant, exe, proxy_port);
+    crate::modules::process::invalidate_process_snapshot();
+    result
+}
+
+fn launch_client_inner(
     variant: super::variant::TraeVariant,
     exe: &Path,
     proxy_port: Option<u16>,
@@ -1558,7 +1627,7 @@ pub fn env_status() -> Value {
 
     json!({
         "installed": probe.installed,
-        "running": is_running(),
+        "running": is_running_display(),
         "version": probe.version,
         "path": probe.exe.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dataDir": data_dir.as_ref().map(|p| p.to_string_lossy().to_string()),

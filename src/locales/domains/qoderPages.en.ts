@@ -44,15 +44,18 @@ export const en = {
   "qoder.page.accounts.chip.foreignTip":
     "This account's domain does not belong to the current realm (possibly imported by mistake)",
 
-  "qoder.page.accounts.card.manageAria": "More actions for {name}",
-  "qoder.page.accounts.card.moreActions": "More actions",
+  // 2026-10-28 (parity): these now match WB / Trae's card wording — they used to read
+  // "More actions for {name}" / "Select {name}", a third phrasing across the three cards.
+  "qoder.page.accounts.card.manageAria": "Manage account {name}",
+  "qoder.page.accounts.card.moreActions": "More account actions",
   "qoder.page.accounts.card.viewDetail": "View details",
   "qoder.page.accounts.card.editRemark": "Edit remark",
   "qoder.page.accounts.card.deleteAccount": "Delete account",
-  "qoder.page.accounts.card.selectAria": "Select {name}",
+  "qoder.page.accounts.card.selectAria": "Select account {name}",
 
+  "qoder.page.accounts.toolbar.sort.priority": "Credit priority",
   "qoder.page.accounts.toolbar.sort.name": "Name",
-  "qoder.page.accounts.toolbar.sort.recent": "Recently updated",
+  "qoder.page.accounts.toolbar.sort.expiry": "Credential expiry",
   "qoder.page.accounts.toolbar.group.none": "No grouping",
   "qoder.page.accounts.toolbar.group.status": "By status",
   "qoder.page.accounts.toolbar.statusBucket.normal": "Normal",
@@ -67,14 +70,18 @@ export const en = {
   // 2026-10-27 (T05): `expiresAt` is normalized to Unix ms by core, so the list gains a
   // Credential column (same header as WB / Trae; missing values render as "—").
   "qoder.page.accounts.table.credential": "Credential",
-  "qoder.page.accounts.table.source": "Source",
-  "qoder.page.accounts.table.remark": "Remark",
+  "qoder.page.accounts.table.programs": "Programs",
+  // 2026-10-28: the Source and Remark columns are gone — source stays in the detail
+  // drawer, and the remark now lives in the Account column's identity line.
 
   // ---- Detail drawer (`drawerAccount`: account info + remark edited **inside the drawer**) ----
-  "qoder.page.accounts.drawer.subtitle": "{name} · UID {uid}",
+  // 2026-10-29: the drawer subtitle now comes from `shared.drawer.subtitleUid` — UID only —
+  // so `qoder.page.accounts.drawer.subtitle` is gone.
   "qoder.page.accounts.drawer.info": "Account info",
-  // 2026-10-27: the overview no longer repeats the UID (already in the subtitle) or the
-  // credential summary / masked token (the Credential tab carries them).
+  // 2026-10-27: the overview no longer repeats the credential summary / masked token
+  // (the Credential tab carries them).
+  // 2026-10-29: the overview gained the UID row back (user request: the overview is the
+  // canonical place for account info).
   "qoder.page.accounts.drawer.domain": "Domain",
   "qoder.page.accounts.drawer.source": "Source",
   "qoder.page.accounts.drawer.addedAt": "Added at",
@@ -111,7 +118,10 @@ export const en = {
   // ── Program slots / switching / nickname / group (added 2026-10-15) ──
   "qoder.page.accounts.program.desktop": "Qoder Desktop",
   "qoder.page.accounts.program.cli": "Qoder CLI",
+  "qoder.page.accounts.program.desktopShort": "Desktop",
+  "qoder.page.accounts.program.cliShort": "CLI",
   "qoder.page.accounts.program.current": "Signed in",
+  "qoder.page.accounts.program.currentOf": "{label} current account",
   "qoder.page.accounts.program.switchTo": "Switch to this account",
   "qoder.page.accounts.program.running": "Client is running",
   "qoder.page.accounts.program.runningHint": "Quit the client first — on exit it writes its in-memory sign-in state back, overwriting this switch.",
@@ -129,8 +139,8 @@ export const en = {
   "qoder.page.accounts.group.placeholder": "Leave empty for ungrouped",
   "qoder.page.accounts.group.saved": "Group saved",
   "qoder.page.accounts.group.missing": "This account is no longer in the library — group not saved",
-  "qoder.page.accounts.toolbar.group.group": "By group",
-  "qoder.page.accounts.toolbar.group.program": "By program slot",
+  "qoder.page.accounts.toolbar.group.group": "By custom group",
+  "qoder.page.accounts.toolbar.group.program": "By program",
   "qoder.page.accounts.toolbar.programBucket.none": "Not signed in to any program slot",
   "qoder.page.accounts.toolbar.groupBucket.ungrouped": "Ungrouped",
   "qoder.page.accounts.card.setGroup": "Set group",
@@ -188,12 +198,19 @@ export const en = {
   "qoder.page.accounts.metric.credits": "Credits",
   // 2026-10-26: `{remaining} / {total}` removed — card and table render
   // `<b>remaining</b>/total` separately (thousands via `formatCredits`), matching WB.
-  "qoder.page.accounts.metric.creditsTip": "Remaining {remaining} · Total {total} · Used {used}",
-  "qoder.page.accounts.metric.plan": "Plan",
+  // 2026-10-28: this domain's `metric.creditsTip` was dropped — the "remaining · total · used"
+  // line now comes from `creditMetricTip` in `account-card.tsx` (WB's key), one copy for all three.
+  // 2026-10-28 (user request): `metric.plan` dropped — the card's metric row no longer
+  // shows the plan name; it only labels the drawer's credit pack row (from `plan` itself).
+  "qoder.page.accounts.card.priority": "Priority",
+  "qoder.page.accounts.card.priorityTip": "Recommended priority",
   // 2026-10-27: quota expiry now appears on the drawer's credit pack row (top-level
   // `expiresAt`, Unix milliseconds per the Qoder SDK).
   "qoder.page.accounts.metric.used": "Used {n}",
   "qoder.page.accounts.metric.expiresOn": "Expires {date}",
+  // 2026-10-29: upstream sends 9999-12-31 as a "never expires" sentinel; core folds it
+  // into `expiresForever` so the UI never prints the fake date.
+  "qoder.page.accounts.metric.neverExpires": "Never expires",
   "qoder.page.accounts.metric.expired": "Expired",
   "qoder.page.accounts.credits.loading": "Loading quota…",
   "qoder.page.accounts.checkin.action": "Check in",
@@ -209,7 +226,6 @@ export const en = {
   "qoder.page.accounts.refresh.syncFailedDesc":
     "The token was renewed, but the account list could not be re-read. Reload instead of renewing again.",
 
-  "qoder.page.accounts.toolbar.sort.credits": "Credit balance",
   "qoder.page.accounts.toolbar.group.source": "By source",
   "qoder.page.accounts.toolbar.group.checkin": "By check-in",
   "qoder.page.accounts.toolbar.checkinBucket.checkedIn": "Checked in today",
@@ -218,45 +234,8 @@ export const en = {
 
   "qoder.page.pending.title": "This page is not wired for Qoder yet",
   "qoder.page.pending.description":
-    "Account management, overview and settings are available for Qoder; usage / gateway depend on gateway request logs and the usage ledger, which are not landed yet.",
+    "Accounts, usage, gateway and settings are available for Qoder; sessions depend on the client's session copies and are not landed yet.",
   "qoder.page.pending.action": "Go to accounts",
-
-  // ---- Overview ----
-  "qoder.page.overview.title": "Overview",
-  "qoder.page.overview.subtitle": "accounts and local clients; usage and gateway not landed yet",
-  "qoder.page.overview.error": "Failed to load: {error}",
-  "qoder.page.overview.kpi.aria": "Qoder overview statistics",
-  "qoder.page.overview.kpi.accounts": "Accounts",
-  "qoder.page.overview.kpi.accountsHint": "All belong to this realm",
-  "qoder.page.overview.kpi.accountsForeign": "{n} of them belong to another realm",
-  "qoder.page.overview.kpi.accountsTitle": "Number of entries in this realm's account store",
-  "qoder.page.overview.kpi.clients": "Local clients",
-  "qoder.page.overview.kpi.clientsReady": "Has an importable session",
-  "qoder.page.overview.kpi.clientsNone": "Neither location detected",
-  "qoder.page.overview.kpi.clientsHint": "Probe result for desktop / CLI",
-  "qoder.page.overview.kpi.clientsTitle":
-    "How many of the two official credential stores hold a usable account",
-  "qoder.page.overview.kpi.domain": "Realm domain",
-  "qoder.page.overview.kpi.domainHint": "Account store and requests are split by it",
-  "qoder.page.overview.kpi.domainTitle":
-    "The official domain of this realm — the two realms are separate stores",
-  "qoder.page.overview.kpi.usage": "Credits recorded today",
-  "qoder.page.overview.kpi.usageHint": "From this machine's client session records (no other devices or third-party calls)",
-  "qoder.page.overview.kpi.usageTitle":
-    "Daily tokens and credits come from gateway request logs and a local credit cache, neither of which is landed; unknown shows “—” rather than 0",
-  "qoder.page.overview.clients.title": "Local credential sources",
-  "qoder.page.overview.clients.description": "Read-only probe; nothing is persisted and no client file is modified.",
-  "qoder.page.overview.clients.action": "Go to accounts",
-  "qoder.page.overview.accounts.title": "Accounts",
-  "qoder.page.overview.accounts.description": "One of the two realm-split account stores.",
-  "qoder.page.overview.accounts.action": "Go to accounts",
-  "qoder.page.overview.accounts.more": "{n} more",
-  "qoder.page.overview.accounts.empty":
-    "No account in this realm yet — open the accounts page to import from this machine or paste a PAT.",
-  "qoder.page.overview.pending.title": "Usage and gateway are not landed yet",
-  "qoder.page.overview.pending.description":
-    "Daily tokens, credits and request logs all come from the gateway; until it is wired this page shows no placeholder KPIs.",
-  "qoder.page.overview.pending.action": "Go to accounts",
 
   // ---- Settings ----
   "qoder.page.settings.title": "Settings",

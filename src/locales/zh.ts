@@ -14,7 +14,6 @@ import { zh as qoderPages } from "./domains/qoderPages.zh";
 import { zh as qoderGateway } from "./domains/qoderGateway.zh";
 import { zh as traeStats } from "./domains/traeStats.zh";
 import { zh as wbAccounts } from "./domains/wbAccounts.zh";
-import { zh as wbOverview } from "./domains/wbOverview.zh";
 import { zh as wbSettings } from "./domains/wbSettings.zh";
 import { zh as wbStats } from "./domains/wbStats.zh";
 
@@ -44,7 +43,6 @@ export const zh = {
   ...shared,
   ...wbSettings,
   ...wbAccounts,
-  ...wbOverview,
   ...wbStats,
   ...traePages,
   ...qoderPages,

@@ -64,15 +64,11 @@ export const zh = {
   // =====================================================================
   // trae-account-card.tsx —— Trae 账号卡片
   // =====================================================================
-  // ---- 时长 / JWT 状态 ----
-  "trae.comp.card.hours.unknown": "未知",
-  "trae.comp.card.hours.expired": "已过期",
-  "trae.comp.card.hours.minutes": "{count} 分钟",
-  "trae.comp.card.hours.hours": "{count} 小时",
-  "trae.comp.card.hours.days": "{count} 天",
-  "trae.comp.card.jwt.valid": "有效 {hours}",
-  "trae.comp.card.jwt.warn": "临期 {hours}",
-  "trae.comp.card.jwt.expired": "已过期",
+  // ---- JWT 状态 ----
+  /* ★ 2026-10-29（用户要求与 WB / Qoder 统一）：`hours.unknown/expired/minutes/hours/days`
+     与 `jwt.valid` / `jwt.warn` / `jwt.expired` / `jwt.validTip` 已删 —— 状态词改用
+     `shared.stat.credentialOk` / `shared.stat.credentialExpired`，到期时刻由「凭据到期」
+     行给出，不再显示剩余天数。`unparsable` 保留：WB / Qoder 没有这一态，不能编「有效」。 */
   "trae.comp.card.jwt.unparsable": "无法解析",
 
   // ---- 到期 ----
@@ -169,6 +165,9 @@ export const zh = {
   //   临期改用共享的 `nextExpiryLabel`（「21.07 积分 10-31 09:23 到期」）。
   "trae.comp.card.currentLogin": "当前登录",
   "trae.comp.card.metric.credits": "积分",
+  // ★ 2026-10-28（用户要求）：与 WB 同口径的「优先」标记 —— 指标行末位的纯文字。
+  "trae.comp.card.priority": "优先",
+  "trae.comp.card.priorityTip": "建议优先使用",
   // ★ 2026-10-26：没有积分明细（`creditPackages` 为空）时的临期兜底 —— 只报时刻、不编金额。
   //   `creditsExpireAt` 是账号列表本来就带的，任何时刻都能给出「什么时候到期」。
   "trae.comp.card.expiryOn": "{date} 到期",
@@ -181,7 +180,8 @@ export const zh = {
 
   // ---- 详情（P4 起由共享抽屉 `account-detail-drawer.tsx` 承载）----
   // （★ 2026-10-27：菜单的「查看详情」入口已删 —— 详情走卡片本体点击，键一并移除。）
-  "trae.comp.card.detail.subtitle": "{name} · UID {uid}",
+  // ★ 2026-10-29：抽屉副标题改由共享 `shared.drawer.subtitleUid` 生成（只显示 UID）
+  //   ⇒ `trae.comp.card.detail.subtitle` 已删除。
   // ★ 2026-10-27：概览不再重复账号 ID（抽屉副标题已带 UID），「凭据到期」只在凭据页签展示。
   "trae.comp.card.detail.jwtExpiry": "凭据到期",
   "trae.comp.card.detail.jwtAutoRefresh": "自动刷新 JWT",

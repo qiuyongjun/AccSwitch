@@ -52,15 +52,18 @@ export const zh = {
   "qoder.page.accounts.chip.foreign": "归属异常",
   "qoder.page.accounts.chip.foreignTip": "这条账号的归属域名不属于当前区域（可能被错误导入）",
 
-  "qoder.page.accounts.card.manageAria": "{name} 的更多操作",
-  "qoder.page.accounts.card.moreActions": "更多操作",
+  /* ★ 2026-10-28（口径对齐）：与 WB / Trae 卡片**同名同义** —— 此前这里写「更多操作」
+     「{name} 的更多操作」「选择 {name}」，读屏在三张卡上会念出第三种说法。 */
+  "qoder.page.accounts.card.manageAria": "管理账号 {name}",
+  "qoder.page.accounts.card.moreActions": "更多账号操作",
   "qoder.page.accounts.card.viewDetail": "查看详情",
   "qoder.page.accounts.card.editRemark": "编辑备注",
   "qoder.page.accounts.card.deleteAccount": "删除账号",
-  "qoder.page.accounts.card.selectAria": "选择 {name}",
+  "qoder.page.accounts.card.selectAria": "选择账号 {name}",
 
+  "qoder.page.accounts.toolbar.sort.priority": "积分优先级",
   "qoder.page.accounts.toolbar.sort.name": "名称",
-  "qoder.page.accounts.toolbar.sort.recent": "最近更新",
+  "qoder.page.accounts.toolbar.sort.expiry": "凭据到期",
   "qoder.page.accounts.toolbar.group.none": "不分组",
   "qoder.page.accounts.toolbar.group.status": "按状态",
   "qoder.page.accounts.toolbar.statusBucket.normal": "正常",
@@ -75,14 +78,19 @@ export const zh = {
   // ★ 2026-10-27（T05）：`expiresAt` 已由 core 归一成 Unix 毫秒 ⇒ 列表补「凭据」列
   //   （与 WB / Trae 同列名；无值显示「—」）。
   "qoder.page.accounts.table.credential": "凭据",
-  "qoder.page.accounts.table.source": "来源",
-  "qoder.page.accounts.table.remark": "备注",
+  // ★ 2026-10-28（用户要求）：补「程序位」列 —— 与 WB / Trae 同名同义。
+  "qoder.page.accounts.table.programs": "程序位",
+  // ★ 2026-10-28（用户要求）：删除「来源」「备注」两列 —— 来源留在详情抽屉，
+  //   备注并入「账号」列的身份行。
 
   // ---- 详情抽屉（原型 `drawerAccount`：账号信息 + 备注**在抽屉里**编辑） ----
-  "qoder.page.accounts.drawer.subtitle": "{name} · UID {uid}",
+  // ★ 2026-10-29：抽屉副标题改由共享 `shared.drawer.subtitleUid` 生成（只显示 UID）
+  //   ⇒ `qoder.page.accounts.drawer.subtitle` 已删除。
   "qoder.page.accounts.drawer.info": "账号信息",
   // ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的凭据信息」）：
-  //   概览不再重复账号 UID（副标题已带）与凭据摘要 / 掩码令牌（「凭据」页签更完整）。
+  //   概览不再重复凭据摘要 / 掩码令牌（「凭据」页签更完整）。
+  // ★ 2026-10-29：概览重新加入 UID 行（用户要求「概览要能看到 uid」——
+  //   头部副标题虽已带 UID，但概览是账号信息的正式去处）。
   "qoder.page.accounts.drawer.domain": "域名",
   "qoder.page.accounts.drawer.source": "来源",
   "qoder.page.accounts.drawer.addedAt": "添加时间",
@@ -121,7 +129,14 @@ export const zh = {
   // ── 程序位 / 切换 / 昵称 / 分组（2026-10-15 补齐）──
   "qoder.page.accounts.program.desktop": "Qoder 桌面版",
   "qoder.page.accounts.program.cli": "Qoder CLI",
+  // ★ 2026-10-28（用户要求）：页脚程序位与 WB / Trae 一致只放短名；完整名留在 tooltip。
+  "qoder.page.accounts.program.desktopShort": "桌面",
+  "qoder.page.accounts.program.cliShort": "CLI",
   "qoder.page.accounts.program.current": "当前登录",
+  /* ★ 2026-10-28（口径对齐）：当前程序位胶囊的 tip —— 与 WB 的
+     `wbAccounts.card.currentPlugin`（「{client} 当前账号」）、Trae 的
+     `trae.comp.card.currentOf` 同义；此前 Qoder 只给程序位全名，读不出「这是当前登录的号」。 */
+  "qoder.page.accounts.program.currentOf": "{label} 当前账号",
   "qoder.page.accounts.program.switchTo": "切换到此账号",
   "qoder.page.accounts.program.running": "客户端正在运行",
   "qoder.page.accounts.program.runningHint": "请先退出该客户端再切换 —— 否则它退出时会把内存里的登录态写回，覆盖这次切换。",
@@ -139,9 +154,9 @@ export const zh = {
   "qoder.page.accounts.group.placeholder": "留空表示未分组",
   "qoder.page.accounts.group.saved": "分组已保存",
   "qoder.page.accounts.group.missing": "这条账号已不在库里 —— 分组未保存",
-  "qoder.page.accounts.toolbar.group.group": "按分组",
+  "qoder.page.accounts.toolbar.group.group": "按自定义组",
   "qoder.page.accounts.toolbar.group.program": "按程序位",
-  "qoder.page.accounts.toolbar.programBucket.none": "未登录到任何程序位",
+  "qoder.page.accounts.toolbar.programBucket.none": "未登录任何程序位",
   "qoder.page.accounts.toolbar.groupBucket.ungrouped": "未分组",
   "qoder.page.accounts.card.setGroup": "设置分组",
   "qoder.page.accounts.refresh.batchPartial": "刷新成功 {ok} 个，失败 {fail} 个",
@@ -199,12 +214,19 @@ export const zh = {
   // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
   //   `<b>剩余</b>/总额`（千分位走 `formatCredits`），斜杠两侧不带空格，与 WB 的
   //   `积分 4,678.19/4,788` 逐字同形。
-  // ★ 2026-10-26：`剩余/总额` 斜杠两侧不自明 ⇒ 补 tooltip（与 WB 卡片「积分 x/y」同口径）。
-  "qoder.page.accounts.metric.creditsTip": "剩余 {remaining} · 总额 {total} · 已用 {used}",
-  "qoder.page.accounts.metric.plan": "套餐",
+  // ★ 2026-10-28：本域的 `metric.creditsTip` 已删 —— 「剩余 · 总额 · 已用」改走 `account-card.tsx`
+  //   导出的 `creditMetricTip`（WB 词条）：三平台同一句措辞，只可能有一份。
+  // ★ 2026-10-28（用户要求）：`metric.plan` 词条已删 —— 卡片指标行不再显示套餐名，
+  //   套餐名只在抽屉积分包行（`DetailPack.name` 直接用数据里的 `plan`，无需标签）。
+  // ★ 2026-10-28（用户要求）：与 WB / Trae 同口径的「优先」标记（指标行末位纯文字）。
+  "qoder.page.accounts.card.priority": "优先",
+  "qoder.page.accounts.card.priorityTip": "建议优先使用",
   // ★ 2026-10-27：额度到期进抽屉积分包行（顶层 `expiresAt`，Unix 毫秒，Qoder SDK 口径）。
   "qoder.page.accounts.metric.used": "已用 {n}",
   "qoder.page.accounts.metric.expiresOn": "{date} 到期",
+  // ★ 2026-10-29（用户报障）：上游用 9999-12-31 当「不过期」哨兵，此前被原样渲染成
+  //   「9999-12-31 08:00 到期」。core 已把它归成 `expiresForever`，界面统一写这句。
+  "qoder.page.accounts.metric.neverExpires": "长期有效",
   "qoder.page.accounts.metric.expired": "已到期",
   "qoder.page.accounts.credits.loading": "额度查询中…",
   "qoder.page.accounts.checkin.action": "签到",
@@ -219,7 +241,6 @@ export const zh = {
   "qoder.page.accounts.refresh.syncFailed": "续期已完成，界面同步失败",
   "qoder.page.accounts.refresh.syncFailedDesc": "令牌已换新，但账号列表回读失败。请重新读取，不要重复续期。",
 
-  "qoder.page.accounts.toolbar.sort.credits": "积分余额",
   "qoder.page.accounts.toolbar.group.source": "按来源",
   "qoder.page.accounts.toolbar.group.checkin": "按签到",
   "qoder.page.accounts.toolbar.checkinBucket.checkedIn": "今日已签",
@@ -228,42 +249,8 @@ export const zh = {
 
   "qoder.page.pending.title": "这个页面尚未接入 Qoder",
   "qoder.page.pending.description":
-    "Qoder 平台的账号管理、概览与设置已经可用；用量 / 网关依赖网关请求日志与用量台账，尚未落地。",
+    "Qoder 的账号、用量、网关与设置已经可用；会话依赖客户端会话副本，尚未落地。",
   "qoder.page.pending.action": "去账号页",
-
-  // ---- 概览 ----
-  "qoder.page.overview.title": "概览",
-  "qoder.page.overview.subtitle": "账号与本机客户端；用量与网关尚未落地",
-  "qoder.page.overview.error": "读取失败：{error}",
-  "qoder.page.overview.kpi.aria": "Qoder 概览统计",
-  "qoder.page.overview.kpi.accounts": "账号",
-  "qoder.page.overview.kpi.accountsHint": "全部归属本区域",
-  "qoder.page.overview.kpi.accountsForeign": "其中 {n} 条归属不属于本区域",
-  "qoder.page.overview.kpi.accountsTitle": "本区域账号库里的条数",
-  "qoder.page.overview.kpi.clients": "本机客户端",
-  "qoder.page.overview.kpi.clientsReady": "有可导入的登录态",
-  "qoder.page.overview.kpi.clientsNone": "两处都没检测到",
-  "qoder.page.overview.kpi.clientsHint": "桌面版 / CLI 的探测结果",
-  "qoder.page.overview.kpi.clientsTitle": "两处官方凭据存储里「读到了可用账号」的来源数",
-  "qoder.page.overview.kpi.domain": "区域域名",
-  "qoder.page.overview.kpi.domainHint": "账号库与请求都按它分家",
-  "qoder.page.overview.kpi.domainTitle": "该区域的官方域名 —— 双区域是两本互不相通的库",
-  "qoder.page.overview.kpi.usage": "今日已记录积分",
-  "qoder.page.overview.kpi.usageHint": "本机客户端会话记录（不含其它设备与第三方调用）",
-  "qoder.page.overview.kpi.usageTitle":
-    "逐日 Token 与额度来自网关请求日志与本地额度缓存，两者尚未落地；未知用「—」而不是 0",
-  "qoder.page.overview.clients.title": "本机凭据来源",
-  "qoder.page.overview.clients.description": "只读探测，不落库、不改客户端里的任何文件。",
-  "qoder.page.overview.clients.action": "去账号页",
-  "qoder.page.overview.accounts.title": "账号",
-  "qoder.page.overview.accounts.description": "按区域分家的两本账号库之一。",
-  "qoder.page.overview.accounts.action": "去账号页",
-  "qoder.page.overview.accounts.more": "另有 {n} 个",
-  "qoder.page.overview.accounts.empty": "这个区域还没有账号 —— 去账号页从本机导入或粘贴 PAT。",
-  "qoder.page.overview.pending.title": "用量与网关尚未落地",
-  "qoder.page.overview.pending.description":
-    "逐日 Token、额度与请求日志都来自网关；网关未接入前这里不摆空壳 KPI。",
-  "qoder.page.overview.pending.action": "去账号页",
 
   // ---- 设置 ----
   "qoder.page.settings.title": "设置",

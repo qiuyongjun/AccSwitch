@@ -18,6 +18,9 @@
 //! 4. **领奖端点是 Web 域**：`POST www.workbuddy.cn/activity/growth/tasks/<code>/claim`
 //!    （任务码在**路径**里、无 body、带 `x-client-platform: web`）。chat 域的
 //!    `/activity/growth/tasks/<code>/claim` 只对小程序口径任务成立。
+//! 5. **企业上下文要分两类拦**：真企业版个人成长接口一律 403；企业切换会话读得到，
+//!    但行为事件上报 200 后被**静默丢弃**。见 [`ensure_not_enterprise`] 与
+//!    [`ensure_personal_session`]。
 //!
 //! ## 本模块的范围（刻意收窄）
 //!
@@ -836,11 +839,89 @@ fn ensure_supported(region: Region) -> Result<(), String> {
     }
 }
 
+/// 企业版账号无个人成长体系（上游对 `growth system is only available for personal users`
+/// 直接 403）。早失败比打一串 403 好，也避免卡片挂一张没有意义的标签。
+const ENTERPRISE_NO_GROWTH: &str = "企业版账号没有个人成长任务体系（上游仅对个人用户开放）";
+
+/// 企业切换会话：**读端点照常、行为事件静默丢弃**（上报 200 但不计分）。
+/// 执行动作必须拒绝，否则每轮都白跑（参考实现 `Auth.IsEnterpriseSession` 的口径）。
+const ENTERPRISE_SWITCH_NO_SCORE: &str = "该账号是企业切换会话：行为事件会被上游静默丢弃（上报 200 但不计分），请在浏览器退出企业空间后重新登录";
+
+/// 账号的企业 ID（两种键名都认；空白按缺失处理）。
+fn enterprise_id(account: &Value) -> Option<&str> {
+    ["enterpriseId", "enterprise_id"].iter().find_map(|key| {
+        account
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// 解 JWT payload 的 `token_source` 是否为 `enterprise_switch`。
+///
+/// 非 JWT / 解不出 / 信封凭据一律按「无此声明」处理（fail-open）—— 老 token 与
+/// 非标准签发不该被误判成企业会话。JWT 标准是 base64url 无填充，兼容带填充形态。
+fn is_enterprise_switch_token(token: &str) -> bool {
+    use base64::Engine as _;
+    let Some(payload) = token.split('.').nth(1) else {
+        return false;
+    };
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload));
+    let Ok(bytes) = decoded else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|payload| {
+            payload
+                .get("token_source")
+                .and_then(Value::as_str)
+                .map(|source| source == "enterprise_switch")
+        })
+        .unwrap_or(false)
+}
+
+/// 当前凭据是否签发自企业切换会话（JWT `token_source=enterprise_switch`）。
+fn is_enterprise_switch_session(account: &Value) -> bool {
+    account
+        .get("access_token")
+        .and_then(Value::as_str)
+        .is_some_and(is_enterprise_switch_token)
+}
+
+/// 真企业版闸门：列表 / 领奖这类读或只读奖励动作也一并拒绝（上游一律 403）。
+///
+/// 企业切换会话**放行**：任务列表读得到，已达标的手工任务也能正常领奖。
+fn ensure_not_enterprise(account: &Value) -> Result<(), String> {
+    if enterprise_id(account).is_some() {
+        return Err(ENTERPRISE_NO_GROWTH.to_string());
+    }
+    Ok(())
+}
+
+/// 执行类动作闸门（报名 / 发行为事件）：真企业版与企业切换会话都拒绝。
+///
+/// 报名本身不产生进度，但缺了报名后续事件可能不计分；对企业切换会话放行报名只会
+/// 留下「已报名未上报」的半程态，不如在入口一次说清。
+fn ensure_personal_session(account: &Value) -> Result<(), String> {
+    ensure_not_enterprise(account)?;
+    if is_enterprise_switch_session(account) {
+        return Err(ENTERPRISE_SWITCH_NO_SCORE.to_string());
+    }
+    Ok(())
+}
+
 /// 拉取任务列表（含 `autoable` 标记，前端据此决定是否显示「执行」按钮）。
 ///
 /// 返回值是**面向前端的 JSON**：桌面端与 webui 共用同一形状，避免两侧各写一份映射。
 pub async fn list_tasks_for(region: Region, account: &Value) -> Value {
     if let Err(message) = ensure_supported(region) {
+        return json!({"ok": false, "message": message, "tasks": []});
+    }
+    if let Err(message) = ensure_not_enterprise(account) {
         return json!({"ok": false, "message": message, "tasks": []});
     }
     let account = ensure_fresh_token_for(region, account.clone(), &load_checkin_config()).await;
@@ -913,6 +994,9 @@ pub async fn accept_tasks_for(region: Region, account: &Value, codes: &[String])
     if let Err(message) = ensure_supported(region) {
         return json!({"ok": false, "message": message});
     }
+    if let Err(message) = ensure_personal_session(account) {
+        return json!({"ok": false, "message": message});
+    }
     if codes.is_empty() {
         return json!({"ok": true, "message": "无可报名任务"});
     }
@@ -962,6 +1046,9 @@ pub async fn claim_task_for(
     code: &str,
 ) -> (bool, ClaimOutcome, String) {
     if let Err(message) = ensure_supported(region) {
+        return (false, ClaimOutcome::default(), message);
+    }
+    if let Err(message) = ensure_not_enterprise(account) {
         return (false, ClaimOutcome::default(), message);
     }
     let code = match validate_task_code(code) {
@@ -1263,6 +1350,9 @@ pub async fn run_auto_for(region: Region, account: &Value) -> Value {
     if let Err(message) = ensure_supported(region) {
         return json!({"ok": false, "message": message, "results": []});
     }
+    if let Err(message) = ensure_personal_session(account) {
+        return json!({"ok": false, "message": message, "results": []});
+    }
     let account = ensure_fresh_token_for(region, account.clone(), &load_checkin_config()).await;
     let display = account_display_name(&account);
 
@@ -1546,6 +1636,10 @@ pub async fn claim_all_for(region: Region, account: &Value) -> Value {
     if let Err(message) = ensure_supported(region) {
         return json!({"ok": false, "message": message, "results": []});
     }
+    // 企业切换会话放行：领奖不动行为事件，手工完成的任务仍可正常领取。
+    if let Err(message) = ensure_not_enterprise(account) {
+        return json!({"ok": false, "message": message, "results": []});
+    }
     let account = ensure_fresh_token_for(region, account.clone(), &load_checkin_config()).await;
     let (status, resp) = chat_json(region, TASKS_PATH, "GET", None, &account).await;
     if !is_ok(status, &resp) {
@@ -1722,8 +1816,19 @@ fn account_cache_key(account: &Value) -> Option<String> {
 
 /// 扫一个账号：成功返回摘要，失败返回可读原因（**不**写 `ok:true` 的假摘要）。
 async fn scan_one(region: Region, account: &Value) -> (bool, TaskSummary, Option<String>) {
+    if let Err(message) = ensure_not_enterprise(account) {
+        return (false, TaskSummary::default(), Some(message));
+    }
     match fetch_tasks(region, account).await {
-        Ok(tasks) => (true, summarize(&tasks), None),
+        Ok(tasks) => {
+            let mut summary = summarize(&tasks);
+            // 企业切换会话：列表读得到，但行为事件不计分 —— 计入「可自动」会让卡片
+            // 与批量条把用户引向一次注定被拒的执行。可领计数保留（领奖仍可用）。
+            if is_enterprise_switch_session(account) {
+                summary.autoable = 0;
+            }
+            (true, summary, None)
+        }
         Err(message) => (false, TaskSummary::default(), Some(message)),
     }
 }
@@ -2183,5 +2288,66 @@ mod tests {
             );
         }
         assert!(validate_task_code(&"a".repeat(65)).is_err(), "超长须拒绝");
+    }
+
+    /// 造一个 payload 带 `token_source` 的 JWT（签名段无所谓，本模块只解 payload）。
+    fn jwt_with_token_source(source: &str) -> String {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(format!(r#"{{"token_source":"{source}"}}"#));
+        format!("eyJhbGciOiJub25lIn0.{payload}.sig")
+    }
+
+    #[test]
+    fn enterprise_account_is_detected_by_id() {
+        assert!(enterprise_id(&json!({"enterpriseId": "e-1"})).is_some());
+        assert!(enterprise_id(&json!({"enterprise_id": "e-2"})).is_some());
+        assert!(enterprise_id(&json!({"enterpriseId": "  "})).is_none());
+        assert!(enterprise_id(&json!({})).is_none());
+    }
+
+    #[test]
+    fn enterprise_switch_session_is_detected_from_jwt() {
+        let switch = json!({"access_token": jwt_with_token_source("enterprise_switch")});
+        assert!(is_enterprise_switch_session(&switch));
+
+        let personal = json!({"access_token": jwt_with_token_source("personal")});
+        assert!(!is_enterprise_switch_session(&personal));
+
+        // 非 JWT / 信封凭据 / 解不出 payload 一律 fail-open：不把老 token 误判成企业会话。
+        assert!(!is_enterprise_switch_session(
+            &json!({"access_token": "opaque"})
+        ));
+        assert!(!is_enterprise_switch_session(
+            &json!({"access_token": {"cipher": "..."}})
+        ));
+        assert!(!is_enterprise_switch_token("a.b"));
+    }
+
+    #[test]
+    fn enterprise_gates_block_execution_but_allow_claims() {
+        let enterprise = json!({
+            "enterpriseId": "e-1",
+            "access_token": jwt_with_token_source("personal"),
+        });
+        assert!(
+            ensure_not_enterprise(&enterprise).is_err(),
+            "真企业版读也拒绝"
+        );
+        assert!(ensure_personal_session(&enterprise).is_err());
+
+        let switch = json!({"access_token": jwt_with_token_source("enterprise_switch")});
+        assert!(
+            ensure_not_enterprise(&switch).is_ok(),
+            "企业切换会话列表可读、奖励可领"
+        );
+        assert!(
+            ensure_personal_session(&switch).is_err(),
+            "企业切换会话不得执行行为事件"
+        );
+
+        let personal = json!({"access_token": jwt_with_token_source("personal")});
+        assert!(ensure_not_enterprise(&personal).is_ok());
+        assert!(ensure_personal_session(&personal).is_ok());
     }
 }

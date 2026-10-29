@@ -434,6 +434,213 @@ pub(crate) fn parse_windows_process_rows(stdout: &str) -> Vec<WindowsProcessRow>
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// 展示用进程快照（一次全量枚举 + 1 秒 TTL + 并发合并）
+// ---------------------------------------------------------------------------
+//
+// 两个入口语义必须分清（改这里之前先读）：
+// - 展示入口（[`SnapshotEngine::display`]）：页面状态专用，允许最多 1 秒陈旧，
+//   合并同时发起的探测；失败与同批等待者共享，但不写缓存。
+// - 实时入口（[`SnapshotEngine::fresh`] / 现有 `is_workbuddy_running_for` 等）：
+//   结束进程、等待退出、切换写入前守卫专用，每次真实枚举。
+//
+// 「进程真的退出了吗 / 可以开始写了吗」一律走实时入口；展示快照不得作为放行依据。
+
+/// 校验并解析一次**全量** `tasklist /FO CSV /NH` 的输出。
+///
+/// 空输出、只有 `INFO:` 行、或全部行都解析不出 PID ⇒ `Err`：**失败不得伪装成
+/// 「没有任何进程」**（否则一次抖动就会把展示状态翻成「未运行」）。
+#[cfg(any(target_os = "windows", test))]
+fn parse_tasklist_run(
+    success: bool,
+    exit_code: Option<i32>,
+    stdout: &[u8],
+) -> Result<Vec<WindowsProcessRow>, String> {
+    if !success {
+        return Err(match exit_code {
+            Some(code) => format!("tasklist 退出码 {code}"),
+            None => "tasklist 被异常终止".to_string(),
+        });
+    }
+    let rows = parse_tasklist_csv(&String::from_utf8_lossy(stdout));
+    if rows.is_empty() {
+        return Err("tasklist 输出为空或无法解析".to_string());
+    }
+    Ok(rows)
+}
+
+/// 进程快照引擎：不可变全量进程表 + 失效代数 + 请求批次。
+///
+/// 快照是**宿主的全量进程表**（PID + 映像名），不按产品或区域重复枚举；
+/// 各调用方拿到同一份后自行按区域 / 映像名过滤。
+#[cfg(any(target_os = "windows", test))]
+mod snapshot {
+    use super::*;
+    use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+
+    /// 展示快照 TTL：外部程序自行启动 / 退出后的最大可见延迟。
+    pub(crate) const DISPLAY_TTL: Duration = Duration::from_secs(1);
+
+    pub(crate) type SnapshotRows = Arc<Vec<WindowsProcessRow>>;
+    pub(crate) type SnapshotResult = Result<SnapshotRows, String>;
+
+    type Clock = Box<dyn Fn() -> Instant + Send + Sync>;
+    type Enumerator = Box<dyn Fn() -> Result<Vec<WindowsProcessRow>, String> + Send + Sync>;
+
+    struct Cached {
+        rows: SnapshotRows,
+        taken_at: Instant,
+    }
+
+    /// 一次进行中的探测。`pending` = 仍需消费本批结果的调用者数（含发起者）。
+    struct Batch {
+        generation: u64,
+        pending: usize,
+        result: Option<SnapshotResult>,
+    }
+
+    struct State {
+        /// 失效代数：`invalidate` 递增；旧代探测的结果不得回填缓存。
+        generation: u64,
+        cached: Option<Cached>,
+        batch: Option<Batch>,
+    }
+
+    pub(crate) struct SnapshotEngine {
+        state: Mutex<State>,
+        cv: Condvar,
+        clock: Clock,
+        enumerate: Enumerator,
+        ttl: Duration,
+    }
+
+    impl SnapshotEngine {
+        pub(crate) fn new(clock: Clock, enumerate: Enumerator, ttl: Duration) -> Self {
+            Self {
+                state: Mutex::new(State {
+                    generation: 0,
+                    cached: None,
+                    batch: None,
+                }),
+                cv: Condvar::new(),
+                clock,
+                enumerate,
+                ttl,
+            }
+        }
+
+        fn lock(&self) -> MutexGuard<'_, State> {
+            self.state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+
+        /// 展示入口：TTL 内复用快照；同时发起的探测合并为一批。
+        pub(crate) fn display(&self) -> SnapshotResult {
+            let mut state = self.lock();
+            loop {
+                if let Some(cached) = state.cached.as_ref() {
+                    if (self.clock)().saturating_duration_since(cached.taken_at) < self.ttl {
+                        return Ok(cached.rows.clone());
+                    }
+                }
+
+                let generation = state.generation;
+                match state.batch.as_ref().map(|batch| batch.generation) {
+                    Some(batch_generation) if batch_generation == generation => {
+                        // 加入当前批次：完成前等待，完成后共享同一个结果。
+                        if let Some(batch) = state.batch.as_mut() {
+                            batch.pending += 1;
+                        }
+                        loop {
+                            let finished = state
+                                .batch
+                                .as_ref()
+                                .and_then(|batch| batch.result.clone());
+                            if let Some(result) = finished {
+                                if let Some(batch) = state.batch.as_mut() {
+                                    batch.pending -= 1;
+                                    if batch.pending == 0 {
+                                        state.batch = None;
+                                        // 清空批次必须通知：上面 `Some(_)` 分支的旧代调用者
+                                        // 等的就是「这个批次消失」，漏通知会让它们永远睡在 cv 上。
+                                        self.cv.notify_all();
+                                    }
+                                }
+                                return result;
+                            }
+                            state = self
+                                .cv
+                                .wait(state)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
+                    }
+                    Some(_) => {
+                        // 失效前的在途探测：等它结束再按新批次重探（结果不回填缓存）。
+                        state = self
+                            .cv
+                            .wait(state)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        continue;
+                    }
+                    None => {}
+                }
+
+                // 本批发起者：持锁只做登记，枚举在锁外执行。
+                state.batch = Some(Batch {
+                    generation,
+                    pending: 1,
+                    result: None,
+                });
+                drop(state);
+
+                let result = (self.enumerate)().map(Arc::new);
+
+                let mut state = self.lock();
+                let completed = result.clone();
+                if let Some(batch) = state.batch.as_mut() {
+                    if batch.generation == generation && batch.result.is_none() {
+                        batch.result = Some(completed);
+                    }
+                }
+                // 失败不写缓存；旧代结果也不得回填（失效期间的在途请求）。
+                if let Ok(rows) = &result {
+                    if state.generation == generation {
+                        state.cached = Some(Cached {
+                            rows: rows.clone(),
+                            taken_at: (self.clock)(),
+                        });
+                    }
+                }
+                if let Some(batch) = state.batch.as_mut() {
+                    if batch.generation == generation {
+                        batch.pending -= 1;
+                        if batch.pending == 0 {
+                            state.batch = None;
+                        }
+                    }
+                }
+                // 结果就绪唤醒同批等待者；批次被移除时也唤醒等「旧批次退出」的旧代调用者。
+                self.cv.notify_all();
+                return result;
+            }
+        }
+
+        /// 实时入口：每次直接枚举，不读缓存、不复用调用前已开始的探测。
+        pub(crate) fn fresh(&self) -> SnapshotResult {
+            (self.enumerate)().map(Arc::new)
+        }
+
+        /// 使展示缓存失效；已在途的探测结束后也不会回填。
+        pub(crate) fn invalidate(&self) {
+            let mut state = self.lock();
+            state.generation = state.generation.wrapping_add(1);
+            state.cached = None;
+            self.cv.notify_all();
+        }
+    }
+}
+
 fn keep_windows_workbuddy_row_for(region: Region, row: &WindowsProcessRow) -> bool {
     let path_s = row
         .exe_path
@@ -552,34 +759,84 @@ pub(crate) fn windows_tasklist_image_rows(image: &str) -> Vec<WindowsProcessRow>
     parse_tasklist_csv(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// 精确映像名收集该 region 的 WorkBuddy/CodeBuddy PID，排除本工具、自身 PID 与 crashpad。
-/// 使用 [`region_image_stems`]（国际版无空格映像名 `WorkBuddyAI.exe`）。
+/// 收集该 region 的 WorkBuddy/CodeBuddy 进程行，排除本工具、自身 PID 与 crashpad。
+///
+/// **实时**入口：每次全量枚举一次（[`fresh_process_rows`]），再按
+/// [`region_image_stems`]（国际版无空格映像名 `WorkBuddyAI.exe`）过滤。
+/// 枚举失败 ⇒ 空集（保持本函数原有的失败口径；写前守卫另见 [`is_image_running`]）。
 #[cfg(target_os = "windows")]
 fn windows_workbuddy_process_rows_for(region: Region) -> Vec<WindowsProcessRow> {
     let self_pid = std::process::id();
-    let mut rows = Vec::new();
-    for stem in region_image_stems(region) {
-        rows.extend(windows_tasklist_image_rows(&format!("{stem}.exe")));
-    }
+    let Ok(rows) = fresh_process_rows() else {
+        return Vec::new();
+    };
     filter_windows_workbuddy_rows_for(region, &rows)
         .into_iter()
         .filter(|r| r.pid != self_pid)
         .collect()
 }
 
-/// Windows：**一次**全量枚举当前所有 PID。
+/// Windows：**一次**全量枚举当前所有进程（PID + 映像名）。
 ///
-/// 为什么是全量而不是按 PID 过滤：`tasklist` 是**子进程**，每次调用 100~200 ms。
-/// 按 PID 过滤要 N 次调用（N = 待观察 PID 数），全量只要 1 次 —— 而 `wait_windows_pids_gone`
-/// 每 500 ms 就轮一轮，N×轮数 个子进程会**直接叠加到「切换客户端要等多久」上**。
+/// 为什么是全量而不是按 PID / 映像名过滤：`tasklist` 是**子进程**，每次调用 100~200 ms。
+/// 全量只要 1 次 —— 而 `wait_windows_pids_gone` 每 500 ms 就轮一轮，
+/// N×轮数 个子进程会**直接叠加到「切换客户端要等多久」上**。
+///
+/// 超时 5 秒；执行失败、非零退出码、空输出或无法解析一律 `Err`。
+#[cfg(target_os = "windows")]
+fn enumerate_windows_process_rows() -> Result<Vec<WindowsProcessRow>, String> {
+    let out = run_cmd_timeout("tasklist", &["/FO", "CSV", "/NH"], 5)
+        .ok_or_else(|| "tasklist 执行失败或超时".to_string())?;
+    parse_tasklist_run(out.status.success(), out.status.code(), &out.stdout)
+}
+
+/// 进程快照的进程内单例（Windows）：展示读缓存，控制路径走 [`fresh_process_rows`]。
+#[cfg(target_os = "windows")]
+fn snapshot_engine() -> &'static snapshot::SnapshotEngine {
+    use std::sync::OnceLock;
+    static ENGINE: OnceLock<snapshot::SnapshotEngine> = OnceLock::new();
+    ENGINE.get_or_init(|| {
+        snapshot::SnapshotEngine::new(
+            Box::new(Instant::now),
+            Box::new(enumerate_windows_process_rows),
+            snapshot::DISPLAY_TTL,
+        )
+    })
+}
+
+/// 展示用全量进程快照（Windows）。1 秒 TTL，并发调用合并为一次探测。
+///
+/// **不是**写前守卫：拿到的是最多 1 秒前的进程表。
+#[cfg(target_os = "windows")]
+pub(crate) fn display_process_rows() -> snapshot::SnapshotResult {
+    snapshot_engine().display()
+}
+
+/// 实时全量进程快照（Windows）：每次真实枚举，不读缓存、不复用展示批次。
+#[cfg(target_os = "windows")]
+fn fresh_process_rows() -> snapshot::SnapshotResult {
+    snapshot_engine().fresh()
+}
+
+/// 让展示快照失效（本工具启动 / 结束客户端前后调用，防止旧响应回填）。
+///
+/// 非 Windows 没有展示缓存 ⇒ no-op。
+pub fn invalidate_process_snapshot() {
+    #[cfg(target_os = "windows")]
+    {
+        snapshot_engine().invalidate();
+    }
+}
+
+/// Windows：**一次**全量枚举当前所有 PID（实时，不复用展示缓存）。
 ///
 /// 失败返回 `None`（**不是**空集）：调用方据此判定「查询失败」，不得把失败当成「进程已退出」。
 #[cfg(target_os = "windows")]
 fn windows_running_pids() -> Option<std::collections::HashSet<u32>> {
-    let out = run_cmd_timeout("tasklist", &["/FO", "CSV", "/NH"], 5)?;
     Some(
-        parse_tasklist_csv(&String::from_utf8_lossy(&out.stdout))
-            .into_iter()
+        fresh_process_rows()
+            .ok()?
+            .iter()
             .map(|row| row.pid)
             .collect(),
     )
@@ -1392,6 +1649,53 @@ pub fn is_workbuddy_running_for(region: Region) -> bool {
     }
 }
 
+/// 按 region 判断 WorkBuddy 是否在运行 —— **页面展示入口**（1 秒快照）。
+///
+/// 与 [`is_workbuddy_running_for`] 的分工：本函数允许最多陈旧 1 秒，供状态展示；
+/// 结束进程、等待退出、写前守卫**必须**继续用实时版本。探测失败按「未运行」处理，
+/// 与实时版本现有的失败口径一致。
+pub fn is_workbuddy_running_display_for(region: Region) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        match display_process_rows() {
+            Ok(rows) => {
+                let self_pid = std::process::id();
+                filter_windows_workbuddy_rows_for(region, &rows)
+                    .iter()
+                    .any(|row| row.pid != self_pid)
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        is_workbuddy_running_for(region)
+    }
+}
+
+/// 通用「某个**映像名**的客户端进程是否在运行」—— **页面展示入口**（1 秒快照）。
+///
+/// 与 [`is_image_running`] 同一 fail-closed 口径（查询失败视为在运行），只是读快照；
+/// **写前守卫必须继续用 [`is_image_running`]**（每次真实探测）。
+pub(crate) fn is_image_running_display(image: &str) -> bool {
+    let image = image.trim();
+    if image.is_empty() {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match display_process_rows() {
+            Ok(rows) => windows_rows_match_image(&rows, image),
+            // 查询失败 ⇒ 保守视为在运行（展示口径与实时入口一致）。
+            Err(_) => true,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        is_image_running(image)
+    }
+}
+
 /// 通用「某个**映像名**的客户端进程是否在运行」。
 ///
 /// ## 用途
@@ -1469,7 +1773,17 @@ pub fn close_workbuddy(timeout_secs: i64) -> Result<(), String> {
 }
 
 /// 按 region 关闭 WorkBuddy。
+///
+/// 控制动作前后各让展示快照失效：动作开始前防止旧快照被展示，
+/// 结束后让「已关闭 / 已启动」立即反映到页面（外部退出仍由 1 秒 TTL 捕获）。
 pub fn close_workbuddy_for(region: Region, timeout_secs: i64) -> Result<(), String> {
+    invalidate_process_snapshot();
+    let result = close_workbuddy_inner(region, timeout_secs);
+    invalidate_process_snapshot();
+    result
+}
+
+fn close_workbuddy_inner(region: Region, timeout_secs: i64) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         close_workbuddy_windows_for(region, timeout_secs)
@@ -1541,6 +1855,13 @@ pub fn launch_workbuddy(progress: Option<&dyn Fn(&str)>) -> Result<(), String> {
 /// progress 可选：macOS 启动与存活确认阶段推送心跳（避免界面长时间静默）；
 /// Windows/Linux 分支忽略该参数。
 pub fn launch_workbuddy_for(region: Region, progress: Option<&dyn Fn(&str)>) -> Result<(), String> {
+    invalidate_process_snapshot();
+    let result = launch_workbuddy_inner(region, progress);
+    invalidate_process_snapshot();
+    result
+}
+
+fn launch_workbuddy_inner(region: Region, progress: Option<&dyn Fn(&str)>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         launch_workbuddy_macos_for(region, progress)
@@ -2385,6 +2706,450 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         assert_eq!(bundle_executable(&app), None);
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // 展示进程快照：TTL / 并发合并 / 失败不缓存 / 实时入口 / 失效代数
+    // ------------------------------------------------------------------
+
+    /// 可注入时钟：从固定基准时刻 + 可累加偏移，供 TTL 用例推进时间。
+    struct FakeClock {
+        base: Instant,
+        offset: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+
+    impl FakeClock {
+        fn new() -> Self {
+            Self {
+                base: Instant::now(),
+                offset: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            }
+        }
+
+        fn advance(&self, delta: Duration) {
+            self.offset
+                .fetch_add(delta.as_nanos() as u64, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn handle(&self) -> Box<dyn Fn() -> Instant + Send + Sync> {
+            let base = self.base;
+            let offset = self.offset.clone();
+            Box::new(move || {
+                base + Duration::from_nanos(offset.load(std::sync::atomic::Ordering::SeqCst))
+            })
+        }
+    }
+
+    fn snapshot_row(pid: u32, name: &str) -> WindowsProcessRow {
+        WindowsProcessRow {
+            pid,
+            name: name.to_string(),
+            exe_path: None,
+        }
+    }
+
+    /// 每次枚举返回 `pid = 调用序号`，便于断言「同一份快照 vs 新一次探测」。
+    fn counting_enumerator(
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Box<dyn Fn() -> Result<Vec<WindowsProcessRow>, String> + Send + Sync> {
+        Box::new(move || {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            Ok(vec![snapshot_row(n as u32, "WorkBuddy.exe")])
+        })
+    }
+
+    #[test]
+    fn display_reuses_snapshot_within_ttl_and_reprobes_after() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let clock = FakeClock::new();
+        let engine = snapshot::SnapshotEngine::new(
+            clock.handle(),
+            counting_enumerator(calls.clone()),
+            snapshot::DISPLAY_TTL,
+        );
+
+        assert_eq!(engine.display().unwrap()[0].pid, 1);
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            1,
+            "TTL 内必须复用同一份快照"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        clock.advance(Duration::from_millis(900));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "900ms 仍在 1 秒 TTL 内"
+        );
+
+        clock.advance(Duration::from_millis(200));
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            2,
+            "越过 TTL 必须重新枚举并返回新快照"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// 同时发起的展示探测只执行**一次**子进程，所有调用者共享结果。
+    ///
+    /// 可证伪性：去掉批次合并（各自枚举）⇒ 调用计数 > 1。
+    #[test]
+    fn concurrent_display_calls_share_one_probe() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(100));
+                Ok(vec![snapshot_row(42, "WorkBuddy.exe")])
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let engine = engine.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine.display()
+                })
+            })
+            .collect();
+        for handle in handles {
+            let rows = handle.join().expect("探测线程不应 panic").unwrap();
+            assert_eq!(rows[0].pid, 42);
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "并发展示探测必须合并为一次子进程"
+        );
+    }
+
+    /// 失败与同批等待者共享，且**不写缓存**：下一次调用会重新探测。
+    ///
+    /// 可证伪性：把失败也写进缓存 ⇒ 第二次调用不再枚举、状态永远停在失败上。
+    #[test]
+    fn failed_probe_is_shared_but_not_cached() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 1 {
+                    std::thread::sleep(Duration::from_millis(60));
+                    return Err("tasklist 执行失败或超时".to_string());
+                }
+                Ok(vec![snapshot_row(n as u32, "WorkBuddy.exe")])
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        assert!(engine.display().is_err(), "首次探测失败必须如实报错");
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            2,
+            "失败不得缓存：下一次必须重新枚举"
+        );
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            2,
+            "成功结果在 TTL 内复用"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// 失败批次唤醒所有等待者（全部拿到同一个错误，而不是永远挂住）。
+    #[test]
+    fn failed_probe_wakes_every_waiter() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(60));
+                Err("tasklist 退出码 1".to_string())
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let engine = engine.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine.display()
+                })
+            })
+            .collect();
+        for handle in handles {
+            let error = handle.join().expect("探测线程不应 panic").unwrap_err();
+            assert_eq!(error, "tasklist 退出码 1");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// 实时入口绕过缓存**与**在途批次：每次直接枚举。
+    ///
+    /// 可证伪性：`fresh` 改成读缓存 / 等批次 ⇒ 它拿到的会是阻塞中的旧探测结果。
+    #[test]
+    fn fresh_bypasses_cache_and_in_flight_probe() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let release = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        let release_in_engine = release.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 1 {
+                    started_tx.send(()).expect("测试通道应可用");
+                    let (lock, cv) = &*release_in_engine;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                    return Ok(vec![snapshot_row(1, "WorkBuddy.exe")]);
+                }
+                Ok(vec![snapshot_row(n as u32, "WorkBuddy.exe")])
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        let probe = {
+            let engine = engine.clone();
+            std::thread::spawn(move || engine.display())
+        };
+        started_rx.recv().expect("展示探测应已开始");
+
+        let fresh = engine.fresh().expect("实时入口应自行枚举");
+        assert_eq!(fresh[0].pid, 2, "实时入口不得复用进行中的展示探测");
+
+        let (lock, cv) = &*release;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+        assert_eq!(probe.join().unwrap().unwrap()[0].pid, 1);
+    }
+
+    /// 失效期间完成的在途探测**不得**回填缓存。
+    ///
+    /// 可证伪性：去掉代数校验 ⇒ 失效后的展示会拿到失效前开始的旧进程表。
+    #[test]
+    fn invalidate_discards_in_flight_result() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let release = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        let release_in_engine = release.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 1 {
+                    started_tx.send(()).expect("测试通道应可用");
+                    let (lock, cv) = &*release_in_engine;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+                Ok(vec![snapshot_row(n as u32, "WorkBuddy.exe")])
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        let probe = {
+            let engine = engine.clone();
+            std::thread::spawn(move || engine.display())
+        };
+        started_rx.recv().expect("展示探测应已开始");
+        engine.invalidate();
+
+        let (lock, cv) = &*release;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+        probe.join().unwrap().expect("在途探测自身仍返回结果");
+
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            2,
+            "失效后的展示必须重新枚举，不能回填失效前的旧表"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "旧探测不得写成缓存"
+        );
+    }
+
+    #[test]
+    fn invalidate_drops_cached_snapshot() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let clock = FakeClock::new();
+        let engine = snapshot::SnapshotEngine::new(
+            clock.handle(),
+            counting_enumerator(calls.clone()),
+            snapshot::DISPLAY_TTL,
+        );
+
+        assert_eq!(engine.display().unwrap()[0].pid, 1);
+        engine.invalidate();
+        assert_eq!(
+            engine.display().unwrap()[0].pid,
+            2,
+            "失效后即使 TTL 未到也必须重新枚举"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// 失效时批次仍在途：等「旧批次退出」的新代调用者必须在**最后一个消费者清空批次**时被唤醒。
+    ///
+    /// 可证伪性：清空批次处漏掉 `notify_all` ⇒ 新代调用者永远睡在 cv 上（下面 5s 超时即失败）。
+    #[test]
+    fn cleared_batch_wakes_generation_waiters() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let release = std::sync::Arc::new((
+            std::sync::Mutex::new(false),
+            std::sync::Condvar::new(),
+        ));
+        let release_in_engine = release.clone();
+        let clock = FakeClock::new();
+        let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
+            clock.handle(),
+            Box::new(move || {
+                let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if n == 1 {
+                    started_tx.send(()).expect("测试通道应可用");
+                    let (lock, cv) = &*release_in_engine;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = cv.wait(released).unwrap();
+                    }
+                }
+                Ok(vec![snapshot_row(n as u32, "WorkBuddy.exe")])
+            }),
+            snapshot::DISPLAY_TTL,
+        ));
+
+        let (tx, rx) = std::sync::mpsc::channel::<snapshot::SnapshotResult>();
+        let spawn_caller = |engine: std::sync::Arc<snapshot::SnapshotEngine>,
+                            tx: std::sync::mpsc::Sender<snapshot::SnapshotResult>| {
+            std::thread::spawn(move || {
+                tx.send(engine.display()).ok();
+            })
+        };
+
+        spawn_caller(engine.clone(), tx.clone());
+        started_rx.recv().expect("首批探测应已开始");
+
+        // 同代等待者：加入批次 ⇒ pending > 1，批次只能由它们**逐个消费**到清零。
+        for _ in 0..8 {
+            spawn_caller(engine.clone(), tx.clone());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+
+        engine.invalidate();
+
+        // 新代等待者：旧批次还在途 ⇒ 只能睡在 cv 上等「旧批次消失」。
+        for _ in 0..8 {
+            spawn_caller(engine.clone(), tx.clone());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+
+        let (lock, cv) = &*release;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+
+        for _ in 0..17 {
+            let rows = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("所有调用者都必须被唤醒（超时 = 清空批次漏通知）")
+                .expect("探测应成功");
+            assert!(
+                matches!(rows[0].pid, 1 | 2),
+                "旧批次给 1，失效后的新探测给 2"
+            );
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "新代等待者只允许触发一次重新探测"
+        );
+    }
+
+    /// 非零退出码 / 空输出 / 无法解析都必须报错，不能表示成「成功空集」。
+    #[test]
+    fn tasklist_run_rejects_failed_or_unparseable_output() {
+        assert!(
+            parse_tasklist_run(false, Some(1), b"").is_err(),
+            "非零退出码必须报错"
+        );
+        assert!(
+            parse_tasklist_run(true, Some(0), b"").is_err(),
+            "空输出必须报错（不能当成没有进程）"
+        );
+        assert!(
+            parse_tasklist_run(true, Some(0), b"INFO: No tasks are running which match the specified criteria.\n").is_err(),
+            "只有 INFO 行 ⇒ 解析不出任何进程 ⇒ 报错"
+        );
+        assert!(
+            parse_tasklist_run(true, Some(0), b"not,a,process,line\n").is_err(),
+            "无法解析的输出必须报错"
+        );
+
+        let rows = parse_tasklist_run(
+            true,
+            Some(0),
+            b"\"WorkBuddy.exe\",\"1234\",\"Console\",\"1\",\"50,123 K\"\n",
+        )
+        .expect("合法 CSV 应解析成功");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pid, 1234);
+        assert_eq!(rows[0].name, "WorkBuddy.exe");
+    }
+
+    /// 快照按区域过滤：国内 / 国际互不串味，且排除本工具自身。
+    #[test]
+    fn snapshot_rows_filter_by_region_and_exclude_self() {
+        let csv = "\
+\"WorkBuddy.exe\",\"1001\",\"Console\",\"1\",\"50,123 K\"
+\"WorkBuddyAI.exe\",\"1002\",\"Console\",\"1\",\"50,123 K\"
+\"AccSwitch.exe\",\"1003\",\"Console\",\"1\",\"12,000 K\"
+";
+        let rows = parse_tasklist_run(true, Some(0), csv.as_bytes()).unwrap();
+        let cn: Vec<u32> = filter_windows_workbuddy_rows_for(Region::Cn, &rows)
+            .iter()
+            .map(|row| row.pid)
+            .collect();
+        let global: Vec<u32> = filter_windows_workbuddy_rows_for(Region::Global, &rows)
+            .iter()
+            .map(|row| row.pid)
+            .collect();
+        assert_eq!(cn, vec![1001]);
+        assert_eq!(global, vec![1002]);
     }
 
     /// plist 中的名称含路径分隔符时，不得拼出 `Contents/MacOS` 之外的路径。

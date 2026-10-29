@@ -34,7 +34,6 @@ Un poste de travail multi-comptes **100 % local** : il rassemble les comptes de 
 |  |  |
 | --- | --- |
 | 🪪 **6 périmètres au même endroit** | Trois gammes × CN / Global, chacune avec son store de comptes. La bascule affiche sa progression et s'annule automatiquement en cas d'échec d'écriture. |
-| ✅ **La liste des choses à faire se remplit seule** | La vue d'ensemble liste « reconnexion / pointage du jour / crédits qui expirent / client non lancé », avec l'action directement dans la ligne. |
 | 📊 **Usage et limites visibles** | Jetons, crédits, limites « compte × modèle » et la copie de session qui retarde ou a divergé — sur un seul écran. |
 | 🔌 **Le quota profite aussi aux autres outils** | Exposé en endpoint compatible OpenAI / Anthropic : Cursor, Claude Code, OpenWebUI. |
 
@@ -49,18 +48,6 @@ Un poste de travail multi-comptes **100 % local** : il rassemble les comptes de 
 
 ## Captures d'écran
 
-
-<table>
-  <thead>
-    <tr><th>Vue d'ensemble (clair)</th><th>Vue d'ensemble (sombre)</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/overview-light.png" alt="Vue d'ensemble, thème clair" /></td>
-      <td><img src="docs/images/overview-dark.png" alt="Vue d'ensemble, thème sombre" /></td>
-    </tr>
-  </tbody>
-</table>
 
 <table>
   <thead>
@@ -257,13 +244,12 @@ Le sélecteur en haut à gauche détermine l'ensemble de comptes géré. Le pér
 
 Les six périmètres sont **totalement indépendants** : stores de comptes, clients, configuration et clés de passerelle séparés. Les deux anciennes lignes de programme Trae (TraeWork / TraeCode) ont été fusionnées en amont en un seul client ; les anciens identifiants ne servent qu'à la compatibilité.
 
-## 6 destinations de la barre latérale
+## 5 destinations de la barre latérale
 
-Identiques point par point sur les trois plateformes : **Vue d'ensemble · Comptes · Usage · Sessions · Passerelle · Réglages**. Les entrées sont filtrées par **capacité** (pas par branche de plateforme) : pas de capacité, pas d'entrée — et un accès direct par URL renvoie un état vide structuré.
+Identiques point par point sur les trois plateformes : **Comptes · Usage · Sessions · Passerelle · Réglages**. Les entrées sont filtrées par **capacité** (pas par branche de plateforme) : pas de capacité, pas d'entrée — et un accès direct par URL renvoie un état vide structuré.
 
 | Destination | En une ligne |
 | --- | --- |
-| **Vue d'ensemble** | Ce qui demande une action (reconnexion / pointage du jour / crédits expirant / client non lancé) + cartes de statistiques + graphique des jetons sur 14 jours + aperçu des autres périmètres |
 | **Comptes** | Vues cartes et tableau, emplacements de programme, connexion QR ou code d'appareil, import local, pointages, corbeille (30 jours), registre des limitations (WorkBuddy uniquement) |
 | **Usage** | Un seul poste, quatre vues : tendance · modèles · sessions · crédits ; une barre de paramètres unique (période + source) |
 | **Sessions** | Copies d'une même session entre comptes : qui est en retard, qui a divergé, vers qui synchroniser (**WorkBuddy uniquement**) |
@@ -379,7 +365,7 @@ Une boucle d'arrière-plan définit le compte par défaut des **prochains lancem
 
 ```mermaid
 flowchart TB
-    FE["src/ · React 19 + Vite<br/>6 destinations · api.ts double canal"] --> H["Hôtes : commandes Tauri | HTTP (axum)"]
+    FE["src/ · React 19 + Vite<br/>5 destinations · api.ts double canal"] --> H["Hôtes : commandes Tauri | HTTP (axum)"]
     H --> CORE["crates/buddy-switch-core<br/>comptes · auth · pointages · sessions · périmètres"]
     H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / unifiée"]
     CORE --> DATA[("~/.buddy-switch/")]

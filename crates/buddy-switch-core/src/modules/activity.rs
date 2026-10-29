@@ -235,7 +235,7 @@ fn makeup_balance(resp: &Value) -> i64 {
 pub fn heatmap_day_score(cells: &[Value], date: &str) -> Option<i64> {
     for cell in cells {
         if let Some(cell_date) = cell.get("date").and_then(Value::as_str) {
-            if cell_date.len() >= 10 && &cell_date[..10] == date {
+            if cell_date.get(..10) == Some(date) {
                 return cell.get("score").and_then(Value::as_i64);
             }
         }
@@ -670,6 +670,10 @@ mod tests {
         let cells = vec![
             json!({"date": "2026-09-15", "score": 0}),
             json!({"date": "2026-09-16T00:00:00", "score": 5}),
+            // 上游是可出错的外部数据源：日期字段不是 ASCII 时按字节切会 panic，
+            // 一条坏格不能让整次补签判断崩掉。
+            json!({"date": "😀😀😀😀😀😀😀😀😀😀", "score": 9}),
+            json!({"date": "无日期", "score": 9}),
         ];
         assert_eq!(heatmap_day_score(&cells, "2026-09-15"), Some(0));
         assert_eq!(heatmap_day_score(&cells, "2026-09-16"), Some(5));

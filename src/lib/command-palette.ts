@@ -115,7 +115,6 @@ export interface PaletteContext {
 
 /** 目的地 → 侧栏文案键（与 `App.tsx` 的 `DEST_META` 同键，保证面板与侧栏同名）。 */
 const DESTINATION_LABEL_KEY: Record<Destination, TranslationKey> = {
-  overview: "nav.overview",
   accounts: "nav.accounts",
   usage: "nav.usage",
   sessions: "nav.sessions",
@@ -189,7 +188,7 @@ function accountTitle(account: PaletteAccount): string {
 export function buildPaletteItems(ctx: PaletteContext): PaletteItem[] {
   const items: PaletteItem[] = [];
 
-  // ── 页面组：当前作用域的 5 个目的地 ──────────────────────────────
+  // ── 页面组：当前作用域的全部目的地（注册表顺序）──────────────────
   for (const dest of ctx.destinations) {
     const title = ctx.t(DESTINATION_LABEL_KEY[dest]);
     items.push({

@@ -194,7 +194,8 @@ fn build_app_status(region: Region) -> AppStatus {
         }))
     });
     AppStatus {
-        running: process::is_workbuddy_running_for(region),
+        // 展示口径：core 的 1 秒进程快照（与 HTTP 通道共用）。
+        running: process::is_workbuddy_running_display_for(region),
         region: region.as_str().to_string(),
         auth_file: auth_file::auth_file_path_for(region)
             .to_string_lossy()

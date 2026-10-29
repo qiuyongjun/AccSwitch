@@ -165,12 +165,12 @@ check("★ platformOfPath 映射路由（旧路由 + 新 `/s/{scope}` 两种形�
     // 反例：`/traeish` 不是 Trae 分区（前缀必须带分隔符）
     ["/traeish", "workbuddy"],
     // ★ 新路由（P2）：**不能只看 `/trae` 前缀** —— `/s/trae-cn/...` 不带它
-    ["/s/wb-cn/overview", "workbuddy"],
+    ["/s/wb-cn/usage", "workbuddy"],
     ["/s/wb-global/accounts", "workbuddy"],
-    ["/s/trae-cn/overview", "trae"],
+    ["/s/trae-cn/usage", "trae"],
     ["/s/trae-global/settings", "trae"],
     // 新路由但 scope 非法 ⇒ 回落到旧规则（不猜）
-    ["/s/nope/overview", "workbuddy"],
+    ["/s/nope/usage", "workbuddy"],
   ];
   for (const [p, want] of cases) {
     const got = registry.platformOfPath(p);
@@ -339,7 +339,7 @@ check("★ P2 路由：`/s/:scope/:dest` 已注册，且旧路由**保留**（�
   return `新路由 1 条 + 旧路由 ${legacy.length} 条并存`;
 });
 
-check("★ P2 目的地映射覆盖 3 平台 × 6 目的地（侧栏固定 6 项的依据）", () => {
+check(`★ P2 目的地映射覆盖 ${registry.PRODUCTS.length} 平台 × ${registry.DESTINATIONS.length} 目的地（侧栏固定 ${registry.DESTINATIONS.length} 项的依据）`, () => {
   const app = stripComments(fs.readFileSync(path.join(ROOT, "src/App.tsx"), "utf8"));
   const m = app.match(/const SCOPED_ROUTES[\s\S]*?\n\};/);
   if (!m) throw new Error("找不到 SCOPED_ROUTES");
@@ -448,31 +448,29 @@ check("★ P3 加载态：页面级加载不许用文字型占位（扫描 src/p
   return `扫描 ${pages.length} 个页面，无文字型加载占位；TraeSettingsPage 仍用 <Skeleton>`;
 });
 
-check("★ P3 概览页：两平台共用同一组件，且从路由推平台", () => {
-  const p = path.join(ROOT, "src/pages/OverviewPage.tsx");
-  if (!fs.existsSync(p)) throw new Error("缺少 `OverviewPage`");
-
+check("★ 概览页已移除：旧 `/overview` 书签落到账号页（不失效）", () => {
   const app = stripComments(fs.readFileSync(path.join(ROOT, "src/App.tsx"), "utf8"));
-  if (!/path="\/overview"/.test(app)) throw new Error("没有注册 `/overview` 路由");
-
-  /* **两平台共用同一个组件** —— 这是 P3「差异只剩数据与能力开关」的第一个实例。
-     如果哪天拆成两个文件，说明又走回「逐字复制」的老路。 */
-  const block = app.match(/const SCOPED_ROUTES[\s\S]*?\n\};/);
-  if (!block) throw new Error("找不到 SCOPED_ROUTES");
-  const n = (block[0].match(/\boverview: OverviewPage,/g) || []).length;
-  if (n !== 2) throw new Error(`\`overview\` 在 SCOPED_ROUTES 里出现 ${n} 次，期望 2（两平台共用）`);
-
-  const page = stripComments(fs.readFileSync(p, "utf8"));
-  if (/useScope\("workbuddy"\)/.test(page)) {
-    throw new Error('概览页写死了 `useScope("workbuddy")` —— 应从路由推平台');
+  if (!/path="\/overview"\s+element=\{<LegacyRedirect to="\/" \/>\}/.test(app)) {
+    throw new Error("`/overview` 没有重定向到账号页 —— 旧书签会落到空路由");
   }
-  if (!/platformOfPath\(/.test(page)) throw new Error("概览页没有从路由推平台");
-
-  // 状态语言（§3.6）
-  if (!/<EmptyState/.test(page)) throw new Error("概览页空态没有用 `EmptyState`");
-  if (!/<Skeleton/.test(page)) throw new Error("概览页加载占位没有用 `Skeleton`");
-
-  return "存在 · 两平台共用 · 从路由推平台 · 状态语言合规";
+  /* ★ 2026-10-29：重定向**必须保留查询串** —— 写死 `to="/"` 会把 `?region=global`
+     一起丢掉，区域退回「上次作用域」或国内版，用户看到的是另一本账号库。 */
+  if (!/to=\{\{ pathname: to, search \}\}/.test(app)) {
+    throw new Error("旧路由重定向丢掉了查询串 —— `?region=global` 会退回记忆值 / 国内版");
+  }
+  if (!/path="\/trae"\s+element=\{<LegacyRedirect to="\/trae\/accounts" \/>\}/.test(app)) {
+    throw new Error("`/trae` 没有重定向到账号页，或重定向丢掉了旧 `?line=`");
+  }
+  if (!/rawDest === "overview"/.test(app)) {
+    throw new Error("`/s/{scope}/overview` 没有同作用域重定向 —— 会跳到默认作用域");
+  }
+  if (registry.destinationOfLegacyPath("/overview") !== "accounts") {
+    throw new Error("`destinationOfLegacyPath(\"/overview\")` 应落到 accounts");
+  }
+  for (const page of ["src/pages/OverviewPage.tsx", "src/pages/QoderOverviewPage.tsx"]) {
+    if (fs.existsSync(path.join(ROOT, page))) throw new Error(`概览页又回来了：${page}`);
+  }
+  return "两平台概览页已删除 · 旧链接落账号页 · 同作用域重定向 · 查询串保留";
 });
 
 check("★ P3 片段合并：只有一份 `gatewaySnippet`，且修掉的两个缺陷不许回归", () => {
@@ -542,7 +540,7 @@ check("★ P3 用量页：Token + 积分合并为一个目的地，且旧路径�
     throw new Error("用量页没有同时承载 Token 与积分");
   }
 
-  // §3.9：目的地是「概览 / 账号 / 用量 / 网关 / 设置」—— 不应再有独立的 credits
+  // §3.9：目的地是「账号 / 用量 / 会话 / 网关 / 设置」—— 不应再有独立的 credits
   if (registry.DESTINATIONS.includes("credits")) {
     throw new Error("`credits` 仍是独立目的地 —— 应已并入 `usage`（§3.9）");
   }
@@ -907,7 +905,7 @@ check("★ 用量·积分「合并全部作用域」**真的聚合**（跨区域
   return `合计 ${merged.total} · 两区同 uid ⇒ ${merged.rows.length} 行 · 到期轴 30 天 · D+3 = ${buckets[2].value}`;
 });
 
-check("★ P3 用量页三平台共用同一组件（同概览页的模式；Qoder 于 2026-10-18 接回）", () => {
+check("★ P3 用量页三平台共用同一组件（Qoder 于 2026-10-18 接回）", () => {
   const app = stripComments(fs.readFileSync(path.join(ROOT, "src/App.tsx"), "utf8"));
   const block = app.match(/const SCOPED_ROUTES[\s\S]*?\n\};/);
   if (!block) throw new Error("找不到 SCOPED_ROUTES");
@@ -1387,8 +1385,9 @@ check("★ TraeProgram.label 不得作为裸 React 子节点（必须经 display
 /* ── P4 工具栏（搜索 / 排序 / 分组 / 卡片·表格视图）────────────────────────────
  *
  * 上面 33 条覆盖 P0–P4（账号工作台）。本段锁住 P4 工具栏最易回退的判据：
- * 共用壳接线（且壳内无平台判断）、排序/分组选项**按平台数据**（WB 有 `lastUsedAt`/`groupName`
- * ⇒ 含 `recent`/`group`；Trae 无「最近使用」⇒ 不含 `recent`）、两种空态不混用（被筛没必须有
+ * 共用壳接线（且壳内无平台判断）、排序/分组选项**按平台数据**（三平台排序键统一为
+ * priority/name/expiry，均不含 `recent`；WB 有 `groupName`、Trae 有 `groupId` ⇒ 都含 `group`）、
+ * 两种空态不混用（被筛没必须有
  * 「清除筛选」出口）、搜索框常驻（IME 约束）、表格行可点区 ≤2 且程序位列只读；外加
  * 「今日 Token」的三条新增判据（诚实边界 / 命令两端接线 / 表格列）。
  *
@@ -1890,23 +1889,34 @@ check("★ Trae「当前登录」必须**逐程序位**判定（用区域去查 
   return "逐程序位判定 · 卡片/表格/抽屉共用";
 });
 
-check("★ P4 排序选项按平台数据：WB 有 recent（有 lastUsedAt），Trae 无 recent（无「最近使用」字段）", () => {
+check("★ P4 排序选项按平台数据：三平台统一为 priority / name / expiry，均不含 recent", () => {
   /* 原规则（决策 #3）：某排序键在当前平台无数据支撑就不渲染该选项。
-     ★ 2026-10-10 变更：后端为 `AccountMeta` 记录了 `lastUsedAt`（epoch 毫秒）—— 原判据
-     「WB 无该字段」已不成立 ⇒ 「最近使用」不再是假选项，WB 的 availableSorts **必须**含 recent。
-     Trae 的 `TraeAccount` 仍无「最近使用」口径（`trae-types.ts` 的 `lastUsedAt` 属
-     `TraeApiKeyRecord`，不是账号字段）⇒ 仍然**不得**出现该选项。
-     变异：删掉 WB 的 recent（或给 Trae 塞 recent）⇒ 本条变红。 */
-  const wb = readCode(WB_PAGE).match(/availableSorts:\s*\[[^\]]*\]/);
-  const trae = readCode(TRAE_PAGE).match(/availableSorts:\s*\[[^\]]*\]/);
-  if (!wb || !trae) throw new Error("找不到 availableSorts");
-  if (!/["']recent["']/.test(wb[0])) {
-    throw new Error("WB 的 availableSorts 缺 recent —— 后端已记录 lastUsedAt，该选项有数据支撑");
+     2026-10-10 后端为 `AccountMeta` 记录了 `lastUsedAt` ⇒ WB 曾短暂提供 `recent`。
+     ★ 2026-10-28 用户要求移除 WB「最近使用」与 Qoder「最近更新」排序
+     ⇒ 三个平台统一为 `priority` / `name` / `expiry`，`recent` 不再出现在任何
+     `availableSorts` 里（`AccountSortKey` 也已删掉该键）。
+     变异：任一页把 recent 加回 availableSorts ⇒ 本条变红。 */
+  const pages = [
+    ["WB", WB_PAGE],
+    ["Trae", TRAE_PAGE],
+    ["Qoder", "src/pages/QoderAccountsPage.tsx"],
+  ];
+  const found = [];
+  for (const [name, rel] of pages) {
+    const match = readCode(rel).match(/availableSorts:\s*\[[^\]]*\]/);
+    if (!match) throw new Error(`${name} 页找不到 availableSorts`);
+    const list = match[0];
+    if (/["']recent["']/.test(list)) {
+      throw new Error(`${name} 的 availableSorts 含 recent —— 三平台排序已统一为 priority / name / expiry`);
+    }
+    for (const key of ["priority", "name", "expiry"]) {
+      if (!new RegExp(`["']${key}["']`).test(list)) {
+        throw new Error(`${name} 的 availableSorts 缺 ${key} —— 三平台排序键应一致`);
+      }
+    }
+    found.push(`${name} ${list.replace(/availableSorts:\s*/, "= ")}`);
   }
-  if (/["']recent["']/.test(trae[0])) {
-    throw new Error("Trae 的 availableSorts 含 recent —— Trae 账号无「最近使用」字段");
-  }
-  return `WB ${wb[0].replace(/availableSorts:\s*/, "= ")} · Trae ${trae[0].replace(/availableSorts:\s*/, "= ")}`;
+  return found.join(" · ");
 });
 
 check("★ P4 分组选项按平台数据：两页都有 group（WB 有 groupName，Trae 有 groupId）", () => {
@@ -1934,7 +1944,7 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量不进
      ★ 2026-10-22 用户要求卡片瘦身（腾出 chips 行的空间给成长任务标签）：
        - 「今日用量」与「最近使用」**移出卡片**（前者的正式去处是用量统计页与详情抽屉的
          「今日 Token」指标块）；2026-10-26 用户判断「最近使用」意义不大 ⇒ **抽屉里也一并移除**
-         （该字段只服务排序选项 `recent`，不再单独展示）；
+         （该字段此后只由后端记录，前端既不排序也不展示）；
        - 「临期积分」与「优先」两枚标签从 chips 行**移到指标行**，紧跟总积分。
      ⇒ 判据同步改成新契约，且仍能证伪：
        ① 指标行必须只由「积分」+ {@link expiringNote} + {@link priorityNote} 组成（且是文字）；
@@ -2022,7 +2032,7 @@ check("★ 卡片指标行口径：积分 + 临期 + 优先；今日用量不进
     throw new Error("缺少 `todayTokensBreakdown` —— 明细（客户端 / 网关分开）必须与 headline 同源");
   }
   /* ④ 「最近使用」已按用户要求移除展示（2026-10-26）：抽屉也不得再出现该行。
-     字段仍只服务排序选项 `recent`。变异：把行加回去 ⇒ 本条变红。 */
+     2026-10-28 起该字段也不再参与排序（`recent` 排序项已删除）。变异：把行加回去 ⇒ 本条变红。 */
   const page = readCode(WB_PAGE);
   for (const key of ["wbAccounts.detail.lastUsed", "wbAccounts.detail.neverUsed"]) {
     if (page.includes(key)) {
@@ -5517,11 +5527,11 @@ const TRAE_SESSIONS_PAGE = "src/pages/TraeSessionsPage.tsx";
 const SESSIONS_LOCALE_ZH = "src/locales/domains/sessions.zh.ts";
 const SESSIONS_LOCALE_EN = "src/locales/domains/sessions.en.ts";
 
-check("★ P8 第 6 目的地「会话」存在且**受能力门控**（`sessionCopy`，不是平台分支）", () => {
+check("★ P8 「会话」目的地存在且**受能力门控**（`sessionCopy`，不是平台分支）", () => {
   /* 变异①（落点 = registry.ts）：把 `DESTINATION_CAPABILITY.sessions` 去掉或改成别的能力
      ⇒ 门控失效 ⇒ 本条变红。 */
   if (!registry.DESTINATIONS.includes("sessions")) {
-    throw new Error("`DESTINATIONS` 缺 `sessions` —— 第 6 目的地没加进来");
+    throw new Error("`DESTINATIONS` 缺 `sessions`");
   }
   if (registry.DESTINATION_CAPABILITY.sessions !== "sessionCopy") {
     throw new Error(
@@ -5941,7 +5951,7 @@ check("★ P8 侧栏徽章：**只读已加载 store** + 三枚（账号/网关/
     throw new Error(`navBadge 里 \`> 0\` 门控只有 ${zeroGates} 处，应 3 处（不摆「0」徽章）`);
   }
   if (!/return null;\s*\n  \}/.test(badge[0])) {
-    throw new Error("navBadge 缺少兜底 `return null` —— 概览/用量/设置不该有徽章");
+    throw new Error("navBadge 缺少兜底 `return null` —— 用量/设置不该有徽章");
   }
   return "只读已加载 store + 三枚徽章 + 各自 >0 才渲染";
 });
@@ -6207,7 +6217,7 @@ check("★ P4-MIGRATION 三层会话树（类型 → 目录 → 会话，**跑�
   return `类型 ${tree.length} → 目录 ${tree.reduce((n, ty) => n + ty.dirs.length, 0)} → 会话 ${sessions.length}`;
 });
 
-/* ── P3 用量四视图 + 概览今日摘要（**独立验证 · T05**）──────────────────────────
+/* ── P3 用量四视图（**独立验证 · T05**）────────────────────────────────────────
  *
  * 上游：`docs/specs/P3-ARCH.md`（§1.4 适配层契约 / §1.5 图注统一出口 / §1.6 空态 / §6 决策 #1–#6）。
  *
@@ -6224,7 +6234,6 @@ const USAGE_CHARTS = "src/lib/usage-charts.ts";
 const USAGE_CAPTION = "src/lib/chart-caption.ts";
 const USAGE_COMPONENTS = "src/components/usage";
 const WB_LOCALE_EN = "src/locales/domains/wbStats.en.ts";
-const WB_OVERVIEW_ZH = "src/locales/domains/wbOverview.zh.ts";
 
 /** 造一份最小可用的 `TokenStatsSource`（只填被断言用到的字段）。 */
 function usageSource(overrides = {}) {
@@ -6569,72 +6578,6 @@ check("★ P3(独立) 决策#2/#3/#4：四项「不渲染」真的没渲染（�
   if (!/wbStats\.usage\.trend\.models/.test(page)) throw new Error("趋势视图没有「模型数」tile（替代活跃账号）");
   if (/activeAccounts/.test(page)) throw new Error("趋势视图又出现「活跃账号」tile");
   return "credit-donuts 不存在 · 无 accountShare · 无状态码环 · 无活跃账号 tile";
-});
-
-check("★ P3(独立) 概览「对比昨日」不编造（跑真组件：昨日=0 ⇒ 「昨日无数据」，无 Infinity/NaN）", () => {
-  /* 变异：去掉 `yesterdayTotal <= 0` 守卫（直接除）⇒ 昨日=0 会算出 Infinity/NaN ⇒ 本条变红。
-     硬编码 `+12%`（P0-2 禁止）也会被源码扫描抓到。 */
-  const src0 = readCode("src/components/overview/overview-stats.tsx");
-  if (/\+\s*12\s*%|Infinity|NaN/.test(src0)) throw new Error("源码出现硬编码 +12% / Infinity / NaN");
-
-  const pad = (v) => String(v).padStart(2, "0");
-  const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const dict = {
-    "wbOverview.today.up": localeValue(WB_OVERVIEW_ZH, "wbOverview.today.up"),
-    "wbOverview.today.down": localeValue(WB_OVERVIEW_ZH, "wbOverview.today.down"),
-    "wbOverview.today.flat": localeValue(WB_OVERVIEW_ZH, "wbOverview.today.flat"),
-    "wbOverview.today.noBaseline": localeValue(WB_OVERVIEW_ZH, "wbOverview.today.noBaseline"),
-  };
-  const t = (key, params) => {
-    let out = Object.prototype.hasOwnProperty.call(dict, key) ? dict[key] : `[${key}]`;
-    if (params) for (const [k, v] of Object.entries(params)) out = out.replace("{" + k + "}", String(v));
-    return out;
-  };
-  const React = require("react");
-  const run = (todayTotal, yesterdayTotal) => {
-    const today = dateKey(new Date());
-    const yesterday = dateKey(new Date(Date.now() - 86_400_000));
-    /* 统计行直吃 `useOverviewMetrics` 归一后的 `OverviewMetrics`（与页面同形状）。 */
-    const metrics = {
-      loading: false,
-      token: {
-        days: [
-          { key: yesterday, total: yesterdayTotal, records: 1 },
-          { key: today, total: todayTotal, records: 1 },
-        ],
-        today: todayTotal,
-        yesterday: yesterdayTotal,
-      },
-      credits: null,
-      gateway: null,
-    };
-    const stubs = {
-      react: {
-        ...React,
-        useState: (init) => [typeof init === "function" ? init() : init, () => {}],
-        useMemo: (fn) => fn(),
-        useEffect: () => {},
-      },
-      "lucide-react": new Proxy({}, { get: () => stubComponent("Icon") }),
-      "@/components/usage/stat-tiles": { StatTiles: stubComponent("StatTiles") },
-      "@/components/usage/format": { exactTokens: (v) => String(v), compactTokens: (v) => String(v), formatCredits: (v) => String(v) },
-      "@/lib/i18n": { useT: () => t },
-    };
-    const mod = loadUsageComponent("src/components/overview/overview-stats.tsx", stubs);
-    const tree = mod.OverviewStats({ metrics, accountCount: 1, attentionCount: 0, accountsLoading: false });
-    const el = collectElements(tree).find((e) => e.type && e.type.displayName === "StatTiles");
-    if (!el) throw new Error("Token 有量却没渲染 StatTiles（渲染出错）");
-    /* 「对比昨日」现挂在「今日 Token」tile 的 `hint`（tile 顺序：账号 / Token / 积分 / 网关）。 */
-    return el.props.tiles.map((x) => x.hint);
-  };
-  const zero = run(100, 0)[1];
-  if (/Infinity|NaN|%/.test(zero)) throw new Error(`昨日=0 却给了百分比 / 非有限值：${zero}`);
-  if (zero !== dict["wbOverview.today.noBaseline"]) throw new Error(`昨日=0 应显示「${dict["wbOverview.today.noBaseline"]}」，实得 ${zero}`);
-  const up = run(112, 100)[1];
-  if (!/\+12/.test(up)) throw new Error(`112 vs 100 应算出 +12，实得 ${up}`);
-  const down = run(50, 100)[1];
-  if (!/-50/.test(down)) throw new Error(`50 vs 100 应算出 -50，实得 ${down}`);
-  return `昨日=0 ⇒ ${zero}；112/100 ⇒ ${up}；50/100 ⇒ ${down}`;
 });
 
 check("★ P3(独立) 空数据不渲染：每个 recharts 组件空数组 ⇒ 返回 null（不是画空图）", () => {
@@ -7227,45 +7170,6 @@ check("★ P0 程序位注册表：5 个程序位全部 available + 显示名两
   return "5 个程序位全 available · 无 planned 条目 · 机制保留 · 显示名各异";
 });
 
-check("★ 概览待处理：新原型三项（凭据已过期 / 今日未签到 / 积分即将过期）+ 行内可执行动作", () => {
-  /* 依据 `docs/prototype/buddy-switch-prototype.html` 的 `viewOverview`（:2058-2069 / :2092-2098）：
-     ① 待处理要覆盖「凭据已过期」「今日未签到」「积分即将过期」三类（旧实现只有登录态到期）；
-     ② 「今日未签到」的行内动作是**可执行**的（`run: "batch-checkin"`）—— 不是一律跳转，
-        否则「概览答得出有事、却要用户自己去列表页找」； */
-  const page = readCode("src/pages/OverviewPage.tsx");
-  for (const key of ['key: "expired"', 'key: "notChecked"', 'key: "expiringCredits"']) {
-    if (!page.includes(key)) throw new Error(`概览待处理缺 ${key}（原型 :2065-2067）`);
-  }
-  if (!/wbOverview\.pending\.action\.checkin/.test(page)) {
-    throw new Error("「今日未签到」缺一键签到出口（原型 `run: batch-checkin`）");
-  }
-  if (!/function runOneClickCheckin/.test(page)) {
-    throw new Error("找不到 `runOneClickCheckin` —— 行内动作没有实现");
-  }
-  // ★ 行内动作必须**两种形态都在**（跳转 + 就地执行），且就地执行有可断言落点。
-  if (!/data-pending-run=/.test(page)) throw new Error("就地执行按钮没有可断言的落点");
-  if (!/item\.action\.to \?/.test(page) || !/item\.action\.run/.test(page)) {
-    throw new Error("行内动作只实现了跳转或只有就地执行（原型 `.srow` 两种形态都要）");
-  }
-  // 部分失败必须给「只重试失败项」出口（与账号页批量签到同一纪律）。
-  if (!/wbOverview\.toast\.checkinRetryFailed/.test(page)) {
-    throw new Error("一键签到的部分失败态没给「只重试失败项」出口");
-  }
-  for (const file of ["zh", "en"]) {
-    const loc = readCode(`src/locales/domains/wbOverview.${file}.ts`);
-    for (const key of [
-      "wbOverview.pending.expired",
-      "wbOverview.pending.notChecked",
-      "wbOverview.pending.expiringCredits",
-      "wbOverview.pending.action.checkin",
-      "wbOverview.toast.checkinSummary",
-    ]) {
-      if (!loc.includes(`"${key}"`)) throw new Error(`wbOverview.${file}.ts 缺词条 ${key}`);
-    }
-  }
-  return "三类新待处理 + 一键签成就地执行 + 部分失败可重试（zh/en 齐）";
-});
-
 check("★ B5 签到积分：抽屉里能看到「+N」+ 连签 + 日期（数据来自上游**实测**字段）", () => {
   /* 原型断言 B5（`verify-behaviors.cjs:561-572`）要求抽屉里出现 `+100`（WB）/ `+50`（Trae）。
      ⚠️ 这条**曾被我误判为「卡后端」**：依据是「代码里没有金额字段」，
@@ -7706,30 +7610,6 @@ check("★ Q1 诊断包必须过凭据闸门（与备份共用同一判据）", 
     throw new Error("诊断包疑似读取会话正文 —— 含用户真实项目路径，不得外发");
   }
   return "复用 CREDENTIAL_KEYS + 纯文本闸门 + 不含会话正文";
-});
-
-check("★ Q3 概览与账号卡的 Token 口径必须显式区分（不得同名）", () => {
-  /* 两个来源**互斥**（MEMORY-10：客户端直连上游，不流经网关）⇒ 两个数字各自都对，
-     但同名会让人默认它们该相等。故概览改名 + tooltip 说明口径。 */
-  const ovZh = fs.readFileSync(
-    path.join(ROOT, "src/locales/domains/wbOverview.zh.ts"),
-    "utf8",
-  );
-  if (!/"wbOverview\.stat\.tokens":\s*"客户端 Token（今日）"/.test(ovZh)) {
-    throw new Error("概览 Token 未改名为「客户端 Token（今日）」—— 与账号卡同名会被当成同一个数");
-  }
-  if (!/tokensHintClientOnly/.test(ovZh)) {
-    throw new Error("概览 Token 缺少口径说明词条 —— 用户仍会以为它含网关用量");
-  }
-  // tooltip 必须真的挂到 tile 上（词条存在 ≠ 渲染出来）。
-  const stats = fs.readFileSync(
-    path.join(ROOT, "src/components/overview/overview-stats.tsx"),
-    "utf8",
-  );
-  if (!/title:\s*t\("wbOverview\.stat\.tokensHintClientOnly"\)/.test(stats)) {
-    throw new Error("口径说明没有挂到概览 Token tile 的 title 上");
-  }
-  return "概览改名「客户端 Token」+ tooltip 说明口径";
 });
 
 check("★ Q5 全模型禁用时计数行仍须渲染（served=0 不是「无数据」）", () => {
@@ -8923,22 +8803,6 @@ check("★ 打包内置的版本说明必须与当前版本一致（否则离线
   const hasContent = (bundled.sections ?? []).length > 0 || (bundled.breaking ?? []).length > 0;
   if (!hasContent) throw new Error("内置说明没有任何分组 —— 离线时弹窗只会显示一句「没有附带说明」");
   return `内置说明 = v${version} · ${(bundled.sections ?? []).length} 组`;
-});
-
-check("★ §2 P1-6 待处理块上移到统计块之前", () => {
-  const page = stripComments(
-    fs.readFileSync(path.join(ROOT, "src/pages/OverviewPage.tsx"), "utf8"),
-  );
-  // 待处理块是 `<Card>` + `EmptyState`（attentionCount 驱动），统计块是 `<OverviewStats …>`。
-  const stats = page.search(/<OverviewStats/);
-  if (stats < 0) throw new Error("概览没有渲染 `<OverviewStats>`");
-  // 统计块之前必须已出现「待处理」卡（用 EmptyState/attention 的出现位置做代理锚点）。
-  const attention = page.search(/EmptyState|attentionItems|attention/i);
-  if (attention < 0) throw new Error("概览没有「待处理」块");
-  if (attention > stats) {
-    throw new Error("「待处理」块又排到统计块之后了（P1-6 要求上移）");
-  }
-  return "待处理块在统计块之前";
 });
 
 check("★ §2 环形扇区数 = 有用量的模型数（与堆叠同源）", () => {

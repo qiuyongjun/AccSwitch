@@ -20,7 +20,8 @@
 ## 1. 为什么需要新接口（而不是复用现有的）
 
 卡片「更多」的刷新组为 `积分` / `签到状态` / `凭据状态`（+ WB·CN 的 `任务`）；
-`今日 Token` 自 2026-10-26 起不再是菜单项，只由 Trae 卡片「今日 Token」指标块与用量页刷新。
+`今日 Token` 自 2026-10-26 起不再是菜单项；★ 2026-10-29 起抽屉概览的同名行也已移除 ⇒
+账号页不再展示 / 刷新它，今天用量只看用量统计页（接口本身保留）。
 WorkBuddy 全部可刷；**Trae / Qoder 曾缺「这个账号、今天」这一粒度的只读数据**，因此补了下面两条命令。
 
 现有的三个批量接口都**不能**直接当单账号今日口径用：
@@ -99,6 +100,9 @@ interface AccountTokenTodayResponse {
    `force` 在 Trae 侧**恒等**（读的是本地文件，无 TTL 缓存）—— 参数仅为契约保留。
 6. **进页面时不要全量拉签到状态**（那要逐账号打上游）。账号视图自带的 `checkedToday`
    （本地台账）足够画初值；用户点「刷新签到状态」才去问上游，那一次是真值。
+   ★ 2026-10-29：Qoder 侧补齐同一契约 —— `account_view` 下发 `lastCheckin` /
+   `lastCheckinToday`（本地盖章及其是否今天），上游读数缺席或读取失败时前端用它画
+   「今日已签 · 按本地台账」，重开页面不再回落成「—」。
 
 ---
 
@@ -108,7 +112,7 @@ interface AccountTokenTodayResponse {
 |:--|:--|
 | `src/lib/api.ts` | `ROUTES` 加 3 条（`get_trae_account_token_today` / `get_trae_checkin_status_map` / `qoder_checkin_status_map`）、`call()` 封装、`DEMO_READ_COMMANDS` 登记 |
 | `src/lib/types.ts` | `AccountTokenTodayResponse` 加 `clientSource`（边界 5） |
-| `src/pages/TraeAccountsPage.tsx` | `TRAE_REFRESH_KINDS` 加 `"tokens"` / `"checkin"`；`onRefreshPart` 两条分支接新命令；抽屉指标块从 3 块 → **4 块**（多一块「今日 Token」，副文本写明「仅经本网关的调用」） |
+| `src/pages/TraeAccountsPage.tsx` | `TRAE_REFRESH_KINDS` 加 `"tokens"` / `"checkin"`；`onRefreshPart` 两条分支接新命令；抽屉指标块从 3 块 → **4 块**（多一块「今日 Token」，副文本写明「仅经本网关的调用」）。★ 2026-10-29：上述 `tokens` 菜单项早已撤（2026-10-26），同日抽屉概览的 Token 行与页面取数一并移除 ⇒ `TRAE_REFRESH_KINDS` 现为 `credits / checkin / credential` |
 | `src/pages/QoderAccountsPage.tsx` | `QODER_REFRESH_KINDS` 加 `"checkin"`（**不加** `tokens`）；抽屉签到块接上「读不到 / 本区域未开放」两档 |
 | `scripts/check-api-contract.cjs` | 三条命令登记进 `SCOPE_PARAMETERIZED`（防「参数化只做一半」） |
 
@@ -245,3 +249,22 @@ Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `
   被策略跳过（已签到 / 凭据过期 / 冷却中）的账号**不在其中**，正常完成的一批不会出现未处理项。
 - **取消不能报成功**：前端判定顺序为「仍有未处理 ⇒ warning（已取消，N 个未处理）」
   →「全部失败 ⇒ error」→「成功」；重试名单 = 失败 + 未处理。
+
+---
+
+## 11. 2026-10-29 补充：Qoder 抽屉打开时补齐签到明细
+
+**问题**：区域签到快照（`qoder_checkin_status`）读取失败 / 缺该账号时，卡片顶部按本地台账
+显示「已签到 · 按本地台账」，但抽屉「签到」页签的「签到天数 / 累计积分」只能写「—」，
+必须手动点 ⟳（逐账号 `qoder_checkin_status_map`）才会有数字。
+
+**口径**（与 WB「打开抽屉就查一次该账号签到状态」、Trae「打开抽屉就取该账号签到记录」对齐）：
+
+- 抽屉打开后、区域快照**已尝试过**（成功 / 失败都算）时，若该账号的上游读数缺席
+  （无条目 / `ok:false` / 仅本地台账），补发**一次**只读 `qoder_checkin_status_map([uid])`；
+- 按 uid **每个页面会话只补一次**（失败不重试、不写 map，避免把「暂时读不到」固化成结论）；
+- 成功则并入 `checkinMap`（优先级高于区域快照），顶部「按本地台账」副行随之上游化；
+- 页面加载仍**不**逐账号拉取 —— 自动补取只发生在用户打开某个账号抽屉时，一次一个账号。
+
+**共享抽屉的文案**：已签到但「今日获得」未知（上游只回状态 / 台账兜底）时，签到页签的
+「今日签到」格写「已签到」，不再写「—」—— 与上方指标块同一结论，且不伪造 `+0`。

@@ -32,7 +32,6 @@
 |  |  |
 | --- | --- |
 | 🪪 **6 个作用域一屏管完** | 三条产品线 × 国内 / 国际，各有独立账号库；切号带实时进度，写失败自动回滚 |
-| ✅ **该做的事自己冒出来** | 概览把「要重新登录 / 今日未签到 / 积分将过期 / 客户端没开」列成待办，点一下处理完 |
 | 📊 **用量与限流看得见** | Token、积分、账号 × 模型限流、会话副本谁落后谁分叉，全在一屏 |
 | 🔌 **额度还能喂给别的工具** | 一键暴露成 OpenAI / Anthropic 兼容接口，直接配进 Cursor、Claude Code、OpenWebUI |
 
@@ -46,18 +45,6 @@
 
 ## 界面预览
 
-
-<table>
-  <thead>
-    <tr><th>概览（浅色）</th><th>概览（深色）</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/overview-light.png" alt="概览页（浅色）" /></td>
-      <td><img src="docs/images/overview-dark.png" alt="概览页（深色）" /></td>
-    </tr>
-  </tbody>
-</table>
 
 <table>
   <thead>
@@ -254,13 +241,12 @@ buddy-switch version      # 版本号
 
 六个作用域**彼此独立**：独立账号库、独立客户端、独立配置、独立网关 Key。Trae 的两条老程序线（TraeWork / TraeCode）已被官方合并成同一个客户端，旧标识仅作兼容。
 
-## 侧栏 6 个目的地
+## 侧栏 5 个目的地
 
-三个平台**逐条同构**：**概览 · 账号 · 用量 · 会话 · 网关 · 设置**。入口按**能力门控**（不是平台分支）：缺哪个能力就不画哪个入口，URL 直达时给结构化空态。
+三个平台**逐条同构**：**账号 · 用量 · 会话 · 网关 · 设置**。入口按**能力门控**（不是平台分支）：缺哪个能力就不画哪个入口，URL 直达时给结构化空态。
 
 | 目的地 | 一句话 |
 | --- | --- |
-| **概览** | 待处理清单（需重新登录 / 今日未签到 / 积分将过期 / 客户端未运行）+ 统计卡 + 近 14 天 Token 柱状图 + 其他作用域速览 |
 | **账号** | 卡片 / 表格双视图、程序位切换、扫码或设备码登录、本机导入、签到、回收站（30 天）、客户端限流台账（WorkBuddy 专有） |
 | **用量** | 一个工作台四个视图：趋势 · 模型 · 会话 · 积分；参数条只有一条（范围 + 数据来源） |
 | **会话** | 同一份会话在各账号的副本：谁落后、谁分叉、同步给谁（**仅 WorkBuddy**） |
@@ -377,7 +363,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    FE["src/ · React 19 + Vite<br/>6 目的地 · api.ts 双通道"] --> H["宿主：Tauri commands ｜ HTTP (axum)"]
+    FE["src/ · React 19 + Vite<br/>5 目的地 · api.ts 双通道"] --> H["宿主：Tauri commands ｜ HTTP (axum)"]
     H --> CORE["crates/buddy-switch-core<br/>账号 · 认证 · 签到 · 会话 · 作用域"]
     H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / 统一"]
     CORE --> DATA[("~/.buddy-switch/")]

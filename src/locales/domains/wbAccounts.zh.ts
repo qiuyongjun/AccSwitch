@@ -464,10 +464,8 @@ export const zh = {
   "wbAccounts.toast.travelFailed": "旅行状态读取失败",
   "wbAccounts.toast.travelPartial": "旅行状态：{ok} 个已更新，{failed} 个读取失败",
   "wbAccounts.toast.batchRefreshDesc": "已对 {n} 个所选账号执行",
-  // ★「今日 Token」是**按整版本聚合**的接口（`get_account_token_today`），没有「只算这几个
-  //   账号」的入参 ⇒ 勾了 3 个也会重算全部。此前它复用 `batchRefreshDesc`，等于把这件
-  //   事说成「按所选执行」，与批量「成长摘要」自己写下的边界自相矛盾。这里如实说明范围。
-  "wbAccounts.toast.batchRefreshTokensRegion": "已重算本版本全部账号的今日 Token（该接口按整版本聚合，无法只算所选）",
+  // ★ 2026-10-29：`wbAccounts.toast.batchRefreshTokensRegion` 已删除 ——
+  //   概览不再展示「今日 Token」后，批量条也没有 `tokens` 这一项（原句只服务那个入口）。
   // 批量的「刷新成长任务状态」（仅国内版注入）：对所选账号**逐个**强制重扫。
   "wbAccounts.toast.batchGrowthDone": "成长任务状态已刷新",
   "wbAccounts.toast.batchGrowthFail": "成长任务状态刷新失败",
@@ -515,19 +513,16 @@ export const zh = {
   // ---- P4 工具栏 / 表格（WorkBuddy 专属数据：选项标签 + 列头）----
   // =====================================================================
   // 壳的通用文案在 `shared.toolbar.*` / `shared.table.*`；这里只放 WB 的**选项与列头**。
-  // ★ 2026-10-10：后端为 `AccountMeta` 记录了 `lastUsedAt` ⇒ 「最近使用」不再是假选项
-  //   （决策 #3 的原判据是「无字段」，现已不成立）。
   "wbAccounts.toolbar.sort.priority": "积分优先级",
   "wbAccounts.toolbar.sort.name": "名称",
-  "wbAccounts.toolbar.sort.expiry": "到期时间",
-  "wbAccounts.toolbar.sort.recent": "最近使用",
+  "wbAccounts.toolbar.sort.expiry": "凭据到期",
   // 工具栏主操作（原型 `viewAccounts` :2428）：打开「添加账号」三选抽屉（原型 `drawerAdd()`）。
   "wbAccounts.toolbar.addAccount": "添加账号",
   "wbAccounts.toolbar.group.none": "不分组",
   "wbAccounts.toolbar.group.program": "按程序位",
   "wbAccounts.toolbar.group.status": "按状态",
   // ★ 2026-10-10：后端为 `AccountMeta` 记录了 `groupName`（自由文本）⇒ 支持「自定义组」分组。
-  "wbAccounts.toolbar.group.custom": "自定义组",
+  "wbAccounts.toolbar.group.custom": "按自定义组",
   // 「自定义组」分桶里，空 / 缺省 `groupName` 落入的显式桶名。
   "wbAccounts.toolbar.groupBucket.ungrouped": "未分组",
   // 「按状态」分桶的状态集由本平台自备（决策 #8）。
@@ -536,7 +531,7 @@ export const zh = {
   "wbAccounts.toolbar.statusBucket.expired": "凭据已过期",
   "wbAccounts.toolbar.statusBucket.needsRelogin": "需重新登录",
   // 该账号未挂在任何程序位上时的桶名。
-  "wbAccounts.toolbar.programBucket.unbound": "未绑定程序位",
+  "wbAccounts.toolbar.programBucket.unbound": "未登录任何程序位",
   "wbAccounts.table.account": "账号",
   "wbAccounts.table.status": "状态",
   "wbAccounts.table.credits": "积分",

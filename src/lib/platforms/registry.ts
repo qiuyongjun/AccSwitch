@@ -202,10 +202,13 @@ export const PRODUCTS: readonly Product[] = ["workbuddy", "trae", "qoder"];
 /**
  * 目的地（Destination）—— 侧栏的一级页面（VOCABULARY 第 1 节的 L4）。
  *
- * ⚠️ **6 个固定项，不随平台变化**（§3.1 / §3.9）。这正是 P2/P3 要收敛的目标：
+ * ⚠️ **5 个固定项，不随平台变化**（§3.1 / §3.9）。这正是 P2/P3 要收敛的目标：
  * 现状两个平台各有若干项但**路径不同**（`/token-stats` vs `/trae/token-stats`），
- * 且 Trae 侧少了「概览 / 一键签到 / 登录态快照 / 系统日志」4 个独立项 ——
+ * 且 Trae 侧少了「一键签到 / 登录态快照 / 系统日志」等独立项 ——
  * 那些能力下沉进了页面内部，于是**同一件事在两个产品上出现在不同位置**。
+ *
+ * ★ 2026-10-28：**「概览」目的地已移除**（所有作用域）。侧栏从 6 项降为 5 项；
+ *   旧 `/overview` 链接由 `destinationOfLegacyPath` 落到账号页，不失效。
  *
  * ⚠️ **`dest` 是平台无关的标识**：`usage` 在 WB 与 Trae 都是「用量统计」，
  * 具体渲染哪个组件由宿主的路由表决定（见 `App.tsx` 的 `SCOPED_ROUTES`）。
@@ -213,11 +216,10 @@ export const PRODUCTS: readonly Product[] = ["workbuddy", "trae", "qoder"];
  * ⚠️ **入口是否渲染由 `DESTINATION_CAPABILITY` 决定**（能力门控），**不是**平台分支 ——
  * 例如「会话」（`sessions`）需要 `sessionCopy`，而它只有 WorkBuddy 有 ⇒ Trae 侧不渲染该入口。
  */
-export type Destination = "overview" | "accounts" | "usage" | "sessions" | "gateway" | "settings";
+export type Destination = "accounts" | "usage" | "sessions" | "gateway" | "settings";
 
-/** 全部目的地，**顺序即侧栏展示顺序**（§3.9：概览 / 账号 / 用量 / 会话 / 网关 / 设置）。 */
+/** 全部目的地，**顺序即侧栏展示顺序**（§3.9：账号 / 用量 / 会话 / 网关 / 设置）。 */
 export const DESTINATIONS: readonly Destination[] = [
-  "overview",
   "accounts",
   "usage",
   "sessions",
@@ -242,9 +244,9 @@ export function destinationOfLegacyPath(pathname: string): Destination | null {
   switch (bare) {
     case "/":
     case "/accounts":
-      return "accounts";
+    /* 概览页已移除（2026-10-28）⇒ 旧 `/overview` 书签落到账号页，不失效。 */
     case "/overview":
-      return "overview";
+      return "accounts";
     case "/token-stats":
     case "/usage":
       return "usage";

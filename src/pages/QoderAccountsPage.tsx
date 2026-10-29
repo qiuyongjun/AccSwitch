@@ -111,6 +111,7 @@ import {
   type AccountViewMode,
 } from "@/lib/account-list-view";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
+import { formatDate } from "@/lib/format";
 import {
   QuickActionButton,
   QuickRefreshAction,
@@ -120,9 +121,18 @@ import {
 import { CheckinIcon } from "@/lib/semantic-icons";
 import { displayText } from "@/lib/display-text";
 import { demoModeEnabled } from "@/lib/demo-mode";
-import { ACCOUNT_CHIP_CLASS, CredentialExpiryMeta, formatCreditExpiry, formatCredits, nextExpiryLabel } from "@/components/account-card";
+import {
+  ACCOUNT_CHIP_CLASS,
+  CredentialExpiryMeta,
+  ProgramSlotChip,
+  creditMetricTip,
+  drawerTabOpenAria,
+  expiryTooltipLines,
+  formatCreditExpiry,
+  formatCredits,
+  nextExpiryLabel,
+} from "@/components/account-card";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { REFRESH_DONE_LABEL, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
 import { mapWithConcurrency } from "@/lib/concurrency";
@@ -133,6 +143,7 @@ import type { Region } from "@/lib/types";
 import { useScope } from "@/lib/use-scope";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useRefreshAction } from "@/lib/use-refresh-action";
+import { useCachedResource } from "@/lib/use-cached-resource";
 
 /** ISO-8601 → 毫秒时间戳（解析不了给 `null` ⇒ 调用方**省掉那一行**，不显示 1970）。 */
 const stampToMs = (iso: string | null | undefined): number | null => {
@@ -140,6 +151,20 @@ const stampToMs = (iso: string | null | undefined): number | null => {
   const ts = Date.parse(iso);
   return Number.isNaN(ts) ? null : ts;
 };
+
+/**
+ * 本地签到台账的**初值条目**（上游读数缺席 / 读取失败时用）。
+ *
+ * 与 Trae 的 `account.checkedToday` 同一口径：本地盖章就是今天 ⇒ 敢断言「已签到」；
+ * 更早的盖章**不能**说明今天签没签 ⇒ 返回 `undefined`，保持「未知」（不伪装成未签到）。
+ *
+ * ⚠️ 条目标 `source: "ledger"`：指标块据此写「按本地台账（刷新签到状态可向上游确认）」，
+ * 绝不把它说成上游答案。
+ */
+function ledgerCheckinEntry(account: QoderAccountView | undefined): CheckinStatusEntry | undefined {
+  if (!account?.lastCheckinToday) return undefined;
+  return { ok: true, todayCheckedIn: true, source: "ledger" };
+}
 
 /** 批量签到 / 批量刷新的失败项（`uid` 用于只重试失败项，`name` 用于展示）。 */
 interface FailedItem {
@@ -163,6 +188,7 @@ export default function QoderAccountsPage() {
   return <QoderAccountsPanel key={scope} product={product} region={region} scope={scope} />;
 }
 
+/** 作用域内复用只读列表快照，交互状态随面板卸载清理。 */
 function QoderAccountsPanel({
   product,
   region,
@@ -174,14 +200,24 @@ function QoderAccountsPanel({
 }) {
   const t = useT();
 
-  const [accounts, setAccounts] = useState<QoderAccountView[] | null>(null);
-  const [sources, setSources] = useState<QoderLocalSourcesView | null>(null);
-  const [error, setError] = useState("");
+  // 来源探测不阻塞本地列表；缓存按完整作用域隔离，返回页面时直接复用快照。
+  const accountResource = useCachedResource(`qoder:accounts:${scope}`, () => api.getQoderAccounts(scope));
+  const sourceResource = useCachedResource(`qoder:local-sources:${scope}`, () => api.getQoderLocalSources(scope));
+  const accounts = useMemo(
+    () => accountResource.data?.accounts ?? (accountResource.loading ? null : []),
+    [accountResource.data, accountResource.loading],
+  );
+  const sources = sourceResource.data ?? null;
+  const error = accountResource.error ?? sourceResource.error ?? "";
+  const refreshAccounts = accountResource.refreshWithResult;
+  const refreshSources = sourceResource.refreshWithResult;
   const [importing, setImporting] = useState(false);
 
   /* ── 额度 / 签到（**上游调用**，与账号列表分开加载；见文件头「加载策略」） ── */
   const [credits, setCredits] = useState<Record<string, QoderCreditsRow>>({});
   const [checkinRows, setCheckinRows] = useState<Record<string, QoderCheckinRow>>({});
+  /** 区域签到快照是否**已经尝试过**（成功 / 失败都算）—— 抽屉的按需补取要等它落地，避免重复请求。 */
+  const [checkinLoaded, setCheckinLoaded] = useState(false);
   /** 本区域签到通道是否未开放（`qoder_checkin_status.unavailable`）—— 菜单要如实说「未开放」。 */
   const [checkinUnavailable, setCheckinUnavailable] = useState(false);
   /* 程序位状态（只读）：决定页脚程序位行、「当前登录」徽章与「切换到此账号」的可用性。 */
@@ -189,7 +225,7 @@ function QoderAccountsPanel({
 
   /* ── 视图参数（页内 state，不进 URL、不进全局 store —— `account-list-view.ts` 的纪律） ── */
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<AccountSortKey>("name");
+  const [sort, setSort] = useState<AccountSortKey>("priority");
   const [group, setGroup] = useState<AccountGroupKey>("none");
   const [view, setView] = useState<AccountViewMode>("card");
   const tableEnabled = useMediaQuery("(min-width: 900px)");
@@ -248,10 +284,8 @@ function QoderAccountsPanel({
   const { busy: refreshBusy, run } = useRefreshAction();
 
   /**
-   * 读取请求的序号：同一作用域内可能重叠（页头一键 + 用户点刷新 + 写操作回读），
-   * **旧响应不得覆盖更新的结果**。作用域之间的隔离由外层 `key` 重挂载承担。
+   * 辅助读取可能重叠，旧响应不得覆盖更新的结果；账号列表由资源缓存处理同类竞态。
    */
-  const reloadSeq = useRef(0);
   const enrichmentSeq = useRef(0);
 
   /**
@@ -273,29 +307,11 @@ function QoderAccountsPanel({
   /** 同 uid 续期的在途 Promise（菜单 / 详情 / 批量共用，避免重复消耗续期材料）。 */
   const renewInFlightRef = useRef(new Map<string, Promise<void>>());
 
+  /** 写操作后强制回读两份资源，任一失败或被取代均不回报成功。 */
   const reload = useCallback(async () => {
-    const request = ++reloadSeq.current;
-    setError("");
-    try {
-      const [accountsView, localSources] = await Promise.all([
-        api.getQoderAccounts(scope),
-        api.getQoderLocalSources(scope),
-      ]);
-      if (request !== reloadSeq.current) return false;
-      setAccounts(accountsView.accounts ?? []);
-      setSources(localSources);
-      return true;
-    } catch (e) {
-      if (request !== reloadSeq.current) return false;
-      setError(api.asError(e));
-      setAccounts((prev) => prev ?? []);
-      return false;
-    }
-  }, [scope]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+    const results = await Promise.all([refreshAccounts(), refreshSources()]);
+    return results.every((result) => result.ok);
+  }, [refreshAccounts, refreshSources]);
 
   /**
    * 拉额度与签到状态。
@@ -312,6 +328,7 @@ function QoderAccountsPanel({
     ]);
     /* 被更新的读取取代 ⇒ 丢弃整批（三份同批写入，保持同一时刻的快照）。 */
     if (request !== enrichmentSeq.current) return;
+    setCheckinLoaded(true);
     if (programView.status === "fulfilled") {
       setPrograms(programView.value.programs ?? []);
     }
@@ -384,14 +401,14 @@ function QoderAccountsPanel({
   /**
    * 列表配置 —— 差异**全部以数据表达**（共享组件里不写平台判断）。
    *
-   * 排序键三个，各有数据支撑：
-   * - `priority`（复用共享的排序键名，语义 = **积分余额降序**，与 WB 的「优先级」同义）：
-   *   额度来自 `qoder_credits`；**未取到额度的账号排最后**（`-1`），不是排最前
-   *   —— 把「不知道」当成「最高」会让用户去用一个可能没余额的号。
-   * - `name` / `recent`（`updatedAt`，记录最后一次被导入 / 改备注的时刻）。
+   * 排序键与 WB / Trae **同一套口径**：
+   * - `priority` = **积分优先级**：额度到期最近的先用，同到期按剩余积分降序；无额度数据 /
+   *   已全部过期 ⇒ 沉底（把「不知道」当成「最高」会让用户去用一个可能没余额的号）。
+   * - `name`（名称）。
+   * - `expiry` = **凭据到期**（`expiresAt`，core 已归一成 Unix 毫秒；缺值沉底），
+   *   与抽屉 / 表格的「凭据」列同口径。
    *
-   * **不提供**「按到期」：排序键与 WB 对齐（优先级 / 名称 / 最近）——
-   * 凭据到期已归一成 Unix 毫秒并可展示（见抽屉「凭据」页签），但不因此新增第四种排序。
+   * 积分到期与凭据到期是两根不同的轴：前者回答「先用哪个号」，后者回答「哪个号快失效」。
    */
   const listConfig = useMemo<AccountListConfig<QoderAccountView>>(() => {
     const nameComparator: AccountComparator<QoderAccountView> = (left, right) =>
@@ -399,10 +416,45 @@ function QoderAccountsPanel({
         numeric: true,
         sensitivity: "base",
       });
-    const recentComparator: AccountComparator<QoderAccountView> = (left, right) =>
-      (stampToMs(right.updatedAt) ?? -Infinity) - (stampToMs(left.updatedAt) ?? -Infinity);
-    const creditComparator: AccountComparator<QoderAccountView> = (left, right) =>
-      (credits[right.uid]?.remaining ?? -1) - (credits[left.uid]?.remaining ?? -1);
+    /* 积分优先级：**额度到期最近的先用**，同到期按剩余积分降序；无额度 / 已过期沉底。
+       与 WB / Trae 同义（「该先用谁」），不是「余额最多的排前面」。 */
+    const creditComparator: AccountComparator<QoderAccountView> = (left, right) => {
+      const now = Date.now();
+      const expiryOf = (account: QoderAccountView): number | null => {
+        const row = credits[account.uid];
+        if (!row?.ok || row.expiresAt == null || row.expiresAt <= now) return null;
+        if ((row.remaining ?? 0) <= 0) return null;
+        return row.expiresAt;
+      };
+      const leftExpiry = expiryOf(left);
+      const rightExpiry = expiryOf(right);
+      if (leftExpiry == null || rightExpiry == null) {
+        return leftExpiry == null ? (rightExpiry == null ? 0 : 1) : -1;
+      }
+      if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
+      return (credits[right.uid]?.remaining ?? 0) - (credits[left.uid]?.remaining ?? 0);
+    };
+    /* 凭据到期升序；缺值沉底（显式判相等，避免 `Infinity - Infinity = NaN`）。 */
+    const expiryComparator: AccountComparator<QoderAccountView> = (left, right) => {
+      const leftExpiry = left.expiresAt ?? Number.POSITIVE_INFINITY;
+      const rightExpiry = right.expiresAt ?? Number.POSITIVE_INFINITY;
+      if (leftExpiry === rightExpiry) return 0;
+      return leftExpiry - rightExpiry;
+    };
+    /* 桶的固定顺序 —— 与当前排序键解耦（见 `AccountListConfig.bucketCompare`）。
+       状态集仍按平台自备（决策 #8）：Qoder 的三桶是凭据态，不是签到态。 */
+    const statusOrder = [
+      t("qoder.page.accounts.toolbar.statusBucket.noCredential"),
+      t("qoder.page.accounts.toolbar.statusBucket.unrecognized"),
+      t("qoder.page.accounts.toolbar.statusBucket.normal"),
+    ];
+    const programOrder = (programs ?? []).map((program) => program.label);
+    const unboundProgram = t("qoder.page.accounts.toolbar.programBucket.none");
+    const ungrouped = t("qoder.page.accounts.toolbar.groupBucket.ungrouped");
+    const rank = (order: readonly string[], value: string) => {
+      const index = order.indexOf(value);
+      return index < 0 ? order.length : index;
+    };
     return {
       searchText: (account) =>
         accountSearchText({
@@ -410,7 +462,11 @@ function QoderAccountsPanel({
           uid: displayText(account.uid),
           remark: displayText(account.remark),
         }),
-      comparators: { priority: creditComparator, name: nameComparator, recent: recentComparator },
+      comparators: {
+        priority: creditComparator,
+        name: nameComparator,
+        expiry: expiryComparator,
+      },
       bucketKey: (account, key) => {
         if (key === "status") {
           if (!account.hasCredential) return t("qoder.page.accounts.toolbar.statusBucket.noCredential");
@@ -432,7 +488,23 @@ function QoderAccountsPanel({
         }
         return null;
       },
-      availableSorts: ["priority", "name", "recent"],
+      bucketCompare: (left, right, key) => {
+        if (key === "status") return rank(statusOrder, left) - rank(statusOrder, right);
+        if (key === "program") {
+          /* 程序位桶名可能是「A + B」组合 ⇒ 取第一个程序位的次序；未登录任何程序位排最后。 */
+          const programRank = (value: string) =>
+            value === unboundProgram ? programOrder.length : rank(programOrder, value.split(" + ")[0]);
+          return programRank(left) - programRank(right);
+        }
+        if (key === "group") {
+          if (left === ungrouped || right === ungrouped) {
+            return left === right ? 0 : left === ungrouped ? 1 : -1;
+          }
+          return left.localeCompare(right, "zh-Hans-CN");
+        }
+        return 0;
+      },
+      availableSorts: ["priority", "name", "expiry"],
       availableGroups: ["none", "program", "status", "group"],
     };
   }, [t, credits, programs]);
@@ -441,9 +513,9 @@ function QoderAccountsPanel({
     () =>
       (
         [
-          ["priority", t("qoder.page.accounts.toolbar.sort.credits")],
+          ["priority", t("qoder.page.accounts.toolbar.sort.priority")],
           ["name", t("qoder.page.accounts.toolbar.sort.name")],
-          ["recent", t("qoder.page.accounts.toolbar.sort.recent")],
+          ["expiry", t("qoder.page.accounts.toolbar.sort.expiry")],
         ] as const
       ).map(([value, label]) => ({ value, label })),
     [t],
@@ -466,6 +538,18 @@ function QoderAccountsPanel({
   const buckets = useMemo(() => groupAccounts(sorted, group, listConfig), [sorted, group, listConfig]);
 
   /**
+   * 只服务「优先」标记（与 WB / Trae 同义）：按积分优先级排一遍，
+   * 取第一个**有未来到期额度且仍有剩余**的账号；与当前 `sort` 无关。
+   */
+  const priorityAccountId = (() => {
+    const now = Date.now();
+    return sortAccounts(rows, "priority", listConfig).find((account) => {
+      const row = credits[account.uid];
+      return row?.ok && row.expiresAt != null && row.expiresAt > now && (row.remaining ?? 0) > 0;
+    })?.uid;
+  })();
+
+  /**
    * 逐账号签到状态（`qoder_checkin_status_map`）——**只覆盖被刷新过的账号**。
    *
    * 刻意不在进页面时全量拉：那要逐账号打上游（N 个账号 = N 次请求），
@@ -473,10 +557,29 @@ function QoderAccountsPanel({
    */
   const [checkinMap, setCheckinMap] = useState<Record<string, CheckinStatusEntry>>({});
 
-  /** 今日签到状态的**唯一来源**：单账号刷新的上游读数优先，其次区域快照。 */
+  /**
+   * 今日签到状态的**唯一来源**，三档优先级：
+   *
+   * 1. 单账号刷新的上游读数（`checkinMap`，可信）；
+   * 2. 区域快照（`checkinRows`，页面打开时那一批上游读数，**`ok:false` 不算数**）；
+   * 3. 本地盖章今天（`lastCheckinToday`，标 `source: "ledger"`）。
+   *
+   * ★ 2026-10-29（用户报障「签到状态总是无，刷新后下次打开还是无」）：此前只有前两档，
+   * 上游读数缺席 / 失败时界面只能写「—」；而刷新结果只是页面内存态，重开页面即丢。
+   * 本地盖章**落盘在账号库里** ⇒ 重开后仍画得出「今日已签」（并注明按台账），
+   * 与 Trae / WB 的初值口径一致。
+   *
+   * ⚠️ 上游**明确**答了（`ok:true`）就以上游为准 —— 哪怕它是「未签到」。
+   * 只有读不到 / 还没查时才让台账兜底，且台账**只会**给出「已签到」（盖章就是今天）；
+   * 更早的盖章不构成任何结论，状态仍是「未知」。
+   */
   const checkinEntryOf = useCallback(
-    (uid: string): CheckinStatusEntry | undefined => checkinMap[uid] ?? checkinRows[uid],
-    [checkinMap, checkinRows],
+    (uid: string): CheckinStatusEntry | undefined => {
+      const upstream = checkinMap[uid] ?? checkinRows[uid];
+      if (upstream?.ok) return upstream;
+      return ledgerCheckinEntry(accounts?.find((account) => account.uid === uid)) ?? upstream;
+    },
+    [checkinMap, checkinRows, accounts],
   );
 
   /** 今日签到三态（`null` = 未知，**不伪装成未签**）。
@@ -492,6 +595,54 @@ function QoderAccountsPanel({
     },
     [checkinEntryOf],
   );
+
+  /**
+   * 每个账号签到读数的**写入序号**：手动刷新 / 签到成功都算「已有更新的事实」，
+   * 让仍在途的自动补取作废 —— 旧响应晚到不得把「已签到」覆盖回「未签到」。
+   */
+  const checkinWriteSeq = useRef<Record<string, number>>({});
+  function markCheckinWrite(uid: string) {
+    checkinWriteSeq.current[uid] = (checkinWriteSeq.current[uid] ?? 0) + 1;
+  }
+
+  /**
+   * 抽屉打开时**补齐该账号的签到明细**（一次只读请求，按 uid 只发一次）。
+   *
+   * ★ 2026-10-29（用户报障「详情卡显示已签到（按本地台账），签到页签三格全是 —，每次都要手动刷新」）：
+   * 本地台账只能证明「今天签过」，没有今日积分 / 连签天数 / 累计积分 —— 那些只有上游知道；
+   * 区域快照（`checkinRows`）读取失败时也不会为账号留下 `ok` 行。WB 打开抽屉就查一次
+   * 该账号的签到状态，Qoder 此前没有这一拍 ⇒ 页签只能等用户点 ⟳。
+   *
+   * ⚠️ 只在**上游读数缺席**（台账兜底 / 读取失败 / 没有条目）时才发；失败**不写** map、
+   * 也**不记账** —— 「暂时读不到」不能被固化成结论，下次打开抽屉再试。
+   * ⚠️ 在途期间用户手动刷新 / 签到成功 ⇒ 写入序号已前进，这份旧响应必须丢弃。
+   */
+  const checkinAutoFetched = useRef<Set<string>>(new Set());
+  const checkinAutoFetching = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!detail || !checkinLoaded) return;
+    const uid = detail.uid;
+    const entry = checkinEntryOf(uid);
+    if (entry?.ok && entry.source !== "ledger") return;
+    if (checkinAutoFetched.current.has(uid) || checkinAutoFetching.current.has(uid)) return;
+    checkinAutoFetching.current.add(uid);
+    const seq = checkinWriteSeq.current[uid] ?? 0;
+    void api
+      .qoderCheckinStatusMap(scope, [uid])
+      .then((map) => {
+        const row = map[uid];
+        if (!aliveRef.current || !row?.ok) return;
+        checkinAutoFetched.current.add(uid);
+        if ((checkinWriteSeq.current[uid] ?? 0) !== seq) return;
+        setCheckinMap((prev) => ({ ...prev, [uid]: row }));
+      })
+      .catch(() => {
+        /* 后台补取失败不打扰：页签仍写「未知」并保留 ⟳；下次打开抽屉重试。 */
+      })
+      .finally(() => {
+        checkinAutoFetching.current.delete(uid);
+      });
+  }, [detail, checkinLoaded, checkinEntryOf, scope]);
 
   /* ── 选择（照 Trae：全选只作用于**当前可见**的行） ── */
 
@@ -696,6 +847,7 @@ function QoderAccountsPanel({
             const current = map[account.uid];
             if (!current) throw new Error(t("shared.refreshPart.fail"));
             if (!current.ok) throw new Error(current.error ?? t("shared.refreshPart.fail"));
+            markCheckinWrite(account.uid);
             setCheckinMap((prev) => ({ ...prev, ...map }));
           } else if (!(await reload())) {
             throw new Error(t("shared.refreshPart.fail"));
@@ -859,22 +1011,25 @@ function QoderAccountsPanel({
         } else if (outcome.disabled) disabled.push(item);
         else failed.push(item);
       });
+      for (const uid of checkedUids) markCheckinWrite(uid);
       setCheckinMap((prev) => {
         const next = { ...prev };
         for (const uid of checkedUids) {
           const entry = next[uid];
-          if (entry?.ok && !entry.todayCheckedIn) {
-            next[uid] = { ...entry, todayCheckedIn: true, source: "ledger" };
-          } else if (entry && !entry.ok) {
-            /* ★ 旧条目是「读取失败」：签到成功是**更新的事实**，必须整体替换 ——
-               否则这条 `ok:false` 优先级高于区域快照，卡片 / 详情仍显示「读取失败」。
-               失败条目没有可信统计字段，只保留「已签到 + ledger」。 */
+          if (entry?.ok) {
+            if (!entry.todayCheckedIn) next[uid] = { ...entry, todayCheckedIn: true, source: "ledger" };
+          } else {
+            /* ★ 没有条目（区域快照也没覆盖到）或旧条目是「读取失败」：签到成功是**更新的事实**，
+               必须整体写入 —— 否则 `ok:false` / 缺条目会让卡片与详情继续显示「读不到 / 未知」。 */
             next[uid] = { ok: true, todayCheckedIn: true, source: "ledger" };
           }
         }
         return next;
       });
       setCheckinResult({ okCount: ok, earned, disabled, failed, unprocessed });
+      /* 回读账号库：`lastCheckinToday` 是签到状态的**落盘初值**（重开页面时唯一的依据），
+         签到成功后必须让它跟上，否则下次打开又变回「未知」。 */
+      await reload();
       await loadEnrichment();
     } finally {
       setBusy(false);
@@ -950,6 +1105,7 @@ function QoderAccountsPanel({
         }
       } else if (kind === "checkin") {
         const map = await api.qoderCheckinStatusMap(scope, ids);
+        for (const uid of Object.keys(map)) markCheckinWrite(uid);
         setCheckinMap((prev) => ({ ...prev, ...map }));
         const failed = ids.filter((uid) => !map[uid]?.ok);
         if (!aliveRef.current) return;
@@ -987,6 +1143,7 @@ function QoderAccountsPanel({
         setCredits(Object.fromEntries(creditsResult.value.accounts.map((row) => [row.uid, row])));
       }
       if (checkinResult.status === "fulfilled") {
+        for (const uid of Object.keys(checkinResult.value)) markCheckinWrite(uid);
         setCheckinMap((prev) => ({ ...prev, ...checkinResult.value }));
       }
       const failed =
@@ -1083,8 +1240,8 @@ function QoderAccountsPanel({
         refreshingToken={renewingUids.has(account.uid)}
         checkinState={checkinStateOf(account)}
         onCheckin={() => void runCheckin([account])}
-        /* 「切换账号」：打开**当前账号详情**并定位到程序位选择区（不另造切换向导）。 */
-        onSwitch={() => openDetail(account)}
+        /* ★ 2026-10-29（用户要求）：Qoder 菜单**不提供**「切换账号」——
+           切换走卡片程序位胶囊 / 详情程序位区，不需要先跳详情再切。 */
         onExport={() => {
           /* 单账号导出必须只含这一条，与勾选 / 全量导出隔离。 */
           setExportTargets([account]);
@@ -1208,8 +1365,10 @@ function QoderAccountsPanel({
    *
    * ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的凭据信息」）：
    * 「凭据」「访问令牌」两行与「凭据」页签逐字段重复（那边还带令牌有无与续期入口）
-   * ⇒ 从概览移除；访问令牌掩码在卡片底部仍然可见。
-   * UID 不再重复：抽屉副标题已经是 `{name} · UID {uid}`。
+   * ⇒ 从概览移除。
+   * ★ 2026-10-28：卡片底部的凭据摘要与掩码令牌也已移除（用户要求）⇒ 令牌类信息
+   * **只在「凭据」页签**展示。
+   * ★ 2026-10-29：UID 只在头部副标题（`shared.drawer.subtitleUid`）展示，概览不再成行。
    */
   const detailRows = useMemo(() => {
     if (!detail) return [];
@@ -1274,13 +1433,17 @@ function QoderAccountsPanel({
             ? `${formatCredits(row.remaining ?? 0)}/${formatCredits(row.total ?? 0)}`
             : "—",
         /* 额度没取到、或取到了但上游没给到期 ⇒ 不写「无临期积分」
-           （那是「确实没有」，不是「不知道」）—— 宁可少一行，不编一个结论。 */
+           （那是「确实没有」，不是「不知道」）—— 宁可少一行，不编一个结论。
+           ★ 2026-10-29：「9999-12-31」哨兵已在 core 识别为 `expiresForever`
+           ⇒ 写「长期有效」，不是「到期未知」也不是一个假日期。 */
         subText: row?.ok
-          ? nextBatch
-            ? nextExpiryLabel(expiry, t, now)
-            : row.expiresAt != null
-              ? t("shared.stat.noExpiring")
-              : undefined
+          ? row.expiresForever
+            ? t("qoder.page.accounts.metric.neverExpires")
+            : nextBatch
+              ? nextExpiryLabel(expiry, t, now)
+              : row.expiresAt != null
+                ? t("shared.stat.noExpiring")
+                : undefined
           : undefined,
         tone: nextBatch && isExpiryUrgent(nextBatch.expireAt, now) ? "warn" : undefined,
         refreshKind: "credits",
@@ -1291,9 +1454,10 @@ function QoderAccountsPanel({
         // 三档必须分开（issue #47）：文案与概览行共用 `detailCheckinText`
         // （上游读数优先 → 读不到 / 未开放 / 未签到，没刷新过回落本地台账）。
         valueText: detailCheckinText,
+        /* 只有**真的**取自台账才注明来源；一条数据都没有时值就是「—」，不写一句
+           看似有结论的副行（⟳ 就在块右上角）。 */
         subText:
-          checkinEntryOf(detailLive.uid)?.source === "ledger" ||
-          !checkinEntryOf(detailLive.uid)
+          checkinEntryOf(detailLive.uid)?.source === "ledger"
             ? t("shared.stat.checkinFromLedger")
             : undefined,
         refreshKind: "checkin",
@@ -1306,9 +1470,16 @@ function QoderAccountsPanel({
             ? t("shared.stat.credentialExpired")
             : t("shared.stat.credentialRelogin")
           : t("shared.stat.credentialOk"),
-        /* ⚠️ 2026-10-27：凭据到期已由 core **归一成 Unix 毫秒**（`normalize_expiry_ms`），
-           因此可以在「凭据」页签如实展示（缺失 ⇒ 不写该行）。副行仍只写语气，不重复日期。 */
-        subText: credBad ? t("shared.stat.credentialBadSub") : t("shared.stat.credentialOkSub"),
+        /* ★ 2026-10-29（用户要求，与 WB / Trae 同口径）：「可正常使用」不携带信息，
+           副行改为**具体到期时刻**（`formatDate` = `MM-DD HH:mm`，与 WB 的
+           `credentialHintOf` 同一格式）。`expiresAt` 已由 core 归一成 Unix 毫秒；
+           缺值 / 无法识别 ⇒ **不写副行** —— Qoder 没有可靠依据说「长期有效」，
+           不编结论（Trae 同处理）。 */
+        subText: credBad
+          ? t("shared.stat.credentialBadSub")
+          : detailLive.expiresAt != null
+            ? t("shared.stat.credentialValidUntil", { date: formatDate(detailLive.expiresAt) })
+            : undefined,
         tone: credBad ? "bad" : undefined,
         refreshKind: "credential",
       },
@@ -1393,8 +1564,9 @@ function QoderAccountsPanel({
         remainingText: formatCredits(remaining),
         totalText: formatCredits(total),
         usedText: t("qoder.page.accounts.metric.used", { n: formatCredits(used) }),
-        expiryText:
-          expiresAt == null
+        expiryText: row.expiresForever
+          ? t("qoder.page.accounts.metric.neverExpires")
+          : expiresAt == null
             ? "—"
             : expiresAt <= now
               ? t("qoder.page.accounts.metric.expired")
@@ -1463,8 +1635,11 @@ function QoderAccountsPanel({
         /* 「当前登录」与卡片头部**同一判据、同一枚徽章**（任一程序位登着这条账号）。
            2026-10-27 补：此前 Qoder 表格只有整行底色，没有徽章 —— 与 WB / Trae 的首列不同形。 */
         const isCurrent = (programs ?? []).some((program) => program.currentUid === account.uid);
+        /* ★ 2026-10-28（用户要求）：身份行不再显示 UID，改为备注；没有备注时保留空行位。
+           原先表格另有一列「备注」，身份行改用备注后该列重复，已随来源列一并删除。 */
+        const remark = displayText(account.remark);
         return (
-          /* 与 WB / Trae 表格同一结构：头像 + 名称（含「当前登录」徽章）+ 身份行。 */
+          /* 与 WB / Trae 表格同一结构：头像 + 名称（含「当前登录」徽章）+ 身份行（备注）。 */
           <div className="flex min-w-0 items-center gap-2.5">
             <AccountsTableAvatar name={qoderAccountName(account)} />
             <div className="min-w-0">
@@ -1478,8 +1653,9 @@ function QoderAccountsPanel({
                   </Badge>
                 ) : null}
               </div>
-              <div className="truncate font-mono text-xs text-muted-foreground">
-                UID · {displayText(account.uid) ?? "—"}
+              {/* 无备注也保留这一行（空占位），避免名称在头像旁垂直居中。 */}
+              <div className="truncate text-xs text-muted-foreground" title={remark ?? undefined}>
+                {remark || "\u00A0"}
               </div>
             </div>
           </div>
@@ -1491,7 +1667,14 @@ function QoderAccountsPanel({
       header: t("qoder.page.accounts.table.status"),
       render: (account) => (
         <div className="flex flex-wrap items-center gap-1">
-          <QoderStatusChips account={account} checkinToday={checkinTodayOf(account)} />
+          {/* ★ 2026-10-28（口径对齐）：注入 `onOpenTab` —— 此前列表把与卡片同一枚的标签
+              渲染成**不可点的死文字**（光标也不变手型）。共享组件自带
+              `data-no-account-open`，点标签跳页签不会被行点击覆盖成「打开概览」。 */}
+          <QoderStatusChips
+            account={account}
+            checkinToday={checkinTodayOf(account)}
+            onOpenTab={(tab) => openDetail(account, tab)}
+          />
           <QoderForeignBadge account={account} />
         </div>
       ),
@@ -1501,36 +1684,82 @@ function QoderAccountsPanel({
       header: t("qoder.page.accounts.metric.credits"),
       align: "right",
       render: (account) => {
-        const row = credits[account.uid];
-        if (!row || !row.ok) return <span className="text-muted-foreground">—</span>;
         /* ★ 2026-10-26（与 WB 表格同形）：`<b>剩余</b>/总额`，千分位走共享 `formatCredits`。
            此前是 `String()` 拼 `"558 / 700"`（无千分位、斜杠两侧带空格），与卡片那一行也不一致。
            ★ 2026-10-27（用户要求两种视图一致）：补**副行**「X 积分 MM-DD HH:mm 到期」——
            与卡片指标行同一份 `summarizeExpiry` + `nextExpiryLabel`，3 天内转警示色。
-           `expiresAt` 是顶层额度到期（Unix 毫秒，Qoder SDK 口径），缺值就不编到期日。 */
+           `expiresAt` 是顶层额度到期（Unix 毫秒，Qoder SDK 口径），缺值就不编到期日。
+           ★ 2026-10-28（对齐 WB / Trae 表格）：整格是**一个真按钮** → 抽屉「积分」，
+           取不到额度快照时也给 `—` 且**仍可点**（点进去正是「为什么没有」）；
+           主行补「剩余 · 总额 · 已用」（`creditMetricTip`），副行补逐批明细（`expiryTooltipLines`），
+           都用原生 `title` —— 表格里不用 Radix 浮层，与 WB 同一纪律。 */
+        const row = credits[account.uid];
+        const hasCredits = Boolean(row?.ok);
         const now = Date.now();
         const expiry =
-          row.expiresAt != null
+          hasCredits && row?.expiresAt != null
             ? summarizeExpiry([{ remaining: row.remaining ?? 0, expireAt: row.expiresAt }], { now })
             : null;
         const next = expiry?.batches[0] ?? null;
+        /* ★ 2026-10-29：「9999-12-31」哨兵 ⇒ core 标记 `expiresForever`（`expiresAt` 为 null）。
+           副行写「长期有效」，不渲染成日期。 */
+        const forever = hasCredits && row?.expiresForever === true;
+        const expiryTip = expiry ? expiryTooltipLines(expiry, t) : null;
+        const priority = account.uid === priorityAccountId;
+        const creditTip = creditMetricTip(
+          {
+            current: hasCredits ? row?.remaining ?? 0 : null,
+            total: hasCredits ? row?.total ?? 0 : null,
+            expiry,
+          },
+          t,
+        );
         return (
-          <div className="flex w-full flex-col items-end gap-0.5 text-right tabular-nums">
-            <span className="whitespace-nowrap">
-              <b className="font-semibold text-foreground">{formatCredits(row.remaining ?? 0)}</b>
-              <span className="text-muted-foreground">/{formatCredits(row.total ?? 0)}</span>
+          <button
+            type="button"
+            data-no-account-open
+            onClick={() => openDetail(account, "credits")}
+            aria-label={drawerTabOpenAria("credits", qoderAccountName(account), t)}
+            className="flex w-full cursor-pointer flex-col items-end gap-0.5 text-right tabular-nums transition-opacity hover:opacity-85"
+          >
+            <span className="whitespace-nowrap" title={creditTip ?? undefined}>
+              {hasCredits ? (
+                <>
+                  <b className="font-semibold text-foreground">{formatCredits(row?.remaining ?? 0)}</b>
+                  <span className="text-muted-foreground">/{formatCredits(row?.total ?? 0)}</span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
             </span>
-            {next ? (
-              <span
-                className={cn(
-                  "whitespace-nowrap text-[11px]",
-                  isExpiryUrgent(next.expireAt, now) ? "text-warning" : "text-muted-foreground",
-                )}
-              >
-                {nextExpiryLabel(expiry, t, now)}
+            {(next || forever || priority) && (
+              <span className="flex flex-wrap items-center justify-end gap-x-1.5 whitespace-nowrap text-[11px]">
+                {next ? (
+                  <span
+                    className={
+                      isExpiryUrgent(next.expireAt, now) ? "text-warning" : "text-muted-foreground"
+                    }
+                    title={
+                      expiryTip
+                        ? [expiryTip.title, ...expiryTip.lines, expiryTip.more ?? ""].filter(Boolean).join("\n")
+                        : undefined
+                    }
+                  >
+                    {nextExpiryLabel(expiry, t, now)}
+                  </span>
+                ) : forever ? (
+                  <span className="text-muted-foreground">
+                    {t("qoder.page.accounts.metric.neverExpires")}
+                  </span>
+                ) : null}
+                {priority ? (
+                  <span className="text-primary" title={t("qoder.page.accounts.card.priorityTip")}>
+                    {t("qoder.page.accounts.card.priority")}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
-          </div>
+            )}
+          </button>
         );
       },
     },
@@ -1549,19 +1778,27 @@ function QoderAccountsPanel({
         />
       ),
     },
+    /* ★ 2026-10-28（用户要求）：删除「来源」与「备注」两列 —— 来源只保留在详情抽屉
+       （同一信息在列表里是重复列）；备注已上移到「账号」列的身份行。 */
+    /* ★ 2026-10-28（用户要求）：补「程序位」列 —— 此前只有账号列的「当前登录」徽章，
+       看不到这条账号登在桌面版还是 CLI 上；与 WB / Trae 同列、同一枚只读胶囊。 */
     {
-      key: "source",
-      header: t("qoder.page.accounts.table.source"),
-      render: (account) => (
-        <span className="text-muted-foreground">{qoderSourceLabel(t, account.source) ?? "—"}</span>
-      ),
-    },
-    {
-      key: "remark",
-      header: t("qoder.page.accounts.table.remark"),
-      render: (account) => (
-        <span className="text-muted-foreground">{displayText(account.remark) ?? "—"}</span>
-      ),
+      key: "programs",
+      header: t("qoder.page.accounts.table.programs"),
+      render: (account) => {
+        const active = (programs ?? []).filter((program) => program.currentUid === account.uid);
+        return active.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {active.map((program) => (
+              <ProgramSlotChip key={program.id} title={program.label}>
+                {program.label}
+              </ProgramSlotChip>
+            ))}
+          </div>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        );
+      },
     },
   ];
 
@@ -1822,11 +2059,12 @@ function QoderAccountsPanel({
                       remaining: row.remaining ?? 0,
                       total: row.total ?? 0,
                       expiresAt: row.expiresAt ?? null,
-                      plan: row.plan ?? null,
+                      expiresForever: row.expiresForever === true,
                     }
                   : null
               }
               checkinToday={checkinTodayOf(account)}
+              creditPriority={account.uid === priorityAccountId}
               programs={programs}
               onSwitch={(program) => setSwitchTarget({ account, program })}
             />
@@ -1975,12 +2213,11 @@ function QoderAccountsPanel({
           }
         }}
         name={detail ? qoderAccountName(detail) : ""}
+        /* ★ 2026-10-29（用户要求）：头部名称下**只显示 UID** —— 名称已经在标题里，
+           副标题再写第二遍身份没有信息量。 */
         subtitle={
           detail
-            ? t("qoder.page.accounts.drawer.subtitle", {
-                name: qoderAccountName(detail),
-                uid: displayText(detail.uid) ?? "—",
-              })
+            ? t("shared.drawer.subtitleUid", { uid: displayText(detail.uid) ?? "—" })
             : ""
         }
         avatarSeed={detail ? qoderAccountName(detail) : ""}

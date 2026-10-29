@@ -34,7 +34,6 @@ Uma estação de trabalho multicuenta **totalmente local**: reúne as contas de 
 |  |  |
 | --- | --- |
 | 🪪 **6 escopos num só lugar** | Três linhas de produto × CN / Global, cada uma com sua base de contas. A troca mostra progresso e reverte sozinha se a gravação falhar. |
-| ✅ **A lista de pendências se monta sozinha** | A visão geral lista «relogin / check-in de hoje / créditos expirando / cliente não iniciado», com a ação na própria linha. |
 | 📊 **Uso e limites à vista** | Tokens, créditos, limites «conta × modelo» e qual cópia de sessão atrasou ou divergiu — tudo numa tela. |
 | 🔌 **A cota também alimenta outras ferramentas** | Exposta como endpoint compatível com OpenAI / Anthropic: Cursor, Claude Code, OpenWebUI. |
 
@@ -49,18 +48,6 @@ Uma estação de trabalho multicuenta **totalmente local**: reúne as contas de 
 
 ## Capturas de tela
 
-
-<table>
-  <thead>
-    <tr><th>Visão geral (claro)</th><th>Visão geral (escuro)</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/overview-light.png" alt="Visão geral, tema claro" /></td>
-      <td><img src="docs/images/overview-dark.png" alt="Visão geral, tema escuro" /></td>
-    </tr>
-  </tbody>
-</table>
 
 <table>
   <thead>
@@ -257,13 +244,12 @@ O seletor no canto superior esquerdo define qual conjunto de contas você gerenc
 
 Os seis escopos são **totalmente independentes**: bases de contas, clientes, configuração e chaves de gateway separados. As duas linhas antigas do Trae (TraeWork / TraeCode) foram fundidas upstream em um único cliente; os identificadores antigos permanecem apenas por compatibilidade.
 
-## 6 destinos da barra lateral
+## 5 destinos da barra lateral
 
-Idênticos ponto a ponto nas três plataformas: **Visão geral · Contas · Uso · Sessões · Gateway · Configurações**. As entradas são filtradas por **capacidade** (não por ramificação de plataforma): sem capacidade, sem entrada — e o acesso direto por URL devolve um estado vazio estruturado.
+Idênticos ponto a ponto nas três plataformas: **Contas · Uso · Sessões · Gateway · Configurações**. As entradas são filtradas por **capacidade** (não por ramificação de plataforma): sem capacidade, sem entrada — e o acesso direto por URL devolve um estado vazio estruturado.
 
 | Destino | Em uma linha |
 | --- | --- |
-| **Visão geral** | O que precisa de ação (relogin / check-in de hoje / créditos expirando / cliente não iniciado) + cartões de estatística + gráfico de tokens de 14 dias + resumo dos outros escopos |
 | **Contas** | Visões de cartões e tabela, slots de programa, login por QR ou código de dispositivo, importação local, check-in, lixeira (30 dias), registro de limites (somente WorkBuddy) |
 | **Uso** | Uma estação com quatro visões: tendência · modelos · sessões · créditos; uma única barra de parâmetros (período + fonte de dados) |
 | **Sessões** | Cópias de uma mesma sessão entre contas: quem está atrás, quem divergiu, para quem sincronizar (**somente WorkBuddy**) |
@@ -379,7 +365,7 @@ Um laço em segundo plano define a conta padrão das **próximas inicializaçõe
 
 ```mermaid
 flowchart TB
-    FE["src/ · React 19 + Vite<br/>6 destinos · api.ts canal duplo"] --> H["Hospedeiros: comandos Tauri | HTTP (axum)"]
+    FE["src/ · React 19 + Vite<br/>5 destinos · api.ts canal duplo"] --> H["Hospedeiros: comandos Tauri | HTTP (axum)"]
     H --> CORE["crates/buddy-switch-core<br/>contas · auth · check-in · sessões · escopos"]
     H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / unificado"]
     CORE --> DATA[("~/.buddy-switch/")]

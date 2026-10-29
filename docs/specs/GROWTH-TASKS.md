@@ -121,6 +121,28 @@ list_tasks ──► 批量 accept（未报名的 autoable 任务；失败写进
 - **`claim_all` 与 `auto` 分开**：领奖无副作用，点亮有（发事件、调主题 API）。
   用户只想收奖励时不该被迫再发一遍事件。
 
+### 企业版 / 企业切换会话门控（2026-10-29）
+
+参考实现区分两类「企业上下文」，上游表现不同，不能按同一个闸门处理：
+
+| 类型 | 判据 | 任务列表 | 行为事件 | 本模块处理 |
+|:--|:--|:--|:--|:--|
+| 真企业版 | `enterpriseId` / `enterprise_id` 非空 | 403 `growth system is only available for personal users` | — | 列表 / 报名 / 领奖 / 执行**全部早失败**，文案「企业版账号没有个人成长任务体系」 |
+| 企业切换会话 | JWT payload `token_source=enterprise_switch`（企业空间状态下扫码授权签发） | 正常可读 | **上报 200 但静默丢弃** | 列表可读；报名 / 执行拒绝，文案要求退出企业空间后重新登录；**领奖放行**（不动行为事件，手工完成的任务仍可领） |
+
+实现落点：
+
+- 判定 [`enterprise_id`](../../crates/buddy-switch-core/src/modules/growth_tasks.rs) + [`is_enterprise_switch_token`](../../crates/buddy-switch-core/src/modules/growth_tasks.rs)；
+  闸门 [`ensure_not_enterprise`](../../crates/buddy-switch-core/src/modules/growth_tasks.rs)（读 / 领奖）与
+  [`ensure_personal_session`](../../crates/buddy-switch-core/src/modules/growth_tasks.rs)（报名 / 执行）。
+- **JWT 解不开一律 fail-open**（信封凭据、老 token、非标准签发按「无此声明」处理）：
+  误把个人号拦成企业会话，比漏拦一个企业会话更伤。
+- 摘要扫描：真企业版返回 `ok:false`（不挂标签，也不白打上游）；企业切换会话照常扫描，
+  但把 `autoable` 清零 —— 否则卡片挂「可自动」、批量条把它选进去，最后只换回一次注定被拒的执行。
+  `claimable` 保留，因为领奖确实可用。
+- 与 Global 闸门（[`ensure_supported`](../../crates/buddy-switch-core/src/modules/growth_tasks.rs)）并列：
+  国际版是「没有这套体系」，企业版是「个人接口不可用」，两者都必须早失败。
+
 ---
 
 ## 5. 幂等

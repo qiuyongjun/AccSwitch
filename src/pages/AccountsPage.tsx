@@ -10,15 +10,15 @@ import {
   ACCOUNT_CHIP_CLASS,
   CredentialExpiryMeta,
   GrowthHintBadge,
+  ProgramSlotChip,
   TravelStatusBadge,
-  accountIdentity,
+  accountSubtitle,
   accountDisplayName,
   creditMetricValues,
   creditMetricTip,
   expiryTooltipLines,
   formatCredits,
   formatCreditExpiry,
-  formatTodayTokens,
   nextExpiryLabel,
   type GuideTarget,
 } from "@/components/account-card";
@@ -90,7 +90,6 @@ import { scopeOf } from "@/lib/scope";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import type {
   AccountMeta,
-  AccountTokenTodayEntry,
   AppStatus,
   CheckinConfig,
   CheckinLog,
@@ -415,15 +414,6 @@ function RegionPanel({ region }: { region: Region }) {
    * 「点了看得见」由这唯一的忙态承担，两个入口同时转圈 / 同时禁点。
    */
   const [growthRefreshBusyId, setGrowthRefreshBusyId] = useState<string | null>(null);
-  /**
-   * 「今日 Token」按账号聚合（`get_account_token_today`）：`uid -> 明细`。
-   *
-   * ⚠️ 用 **Map** 而非缺省对象是刻意的：`accounts` 里**缺席**某 uid = 「今日无记录 / 未知」，
-   * 与「有一行值全 0（真实 0）」是两件事（诚实边界）。`map.get(uid)` 为 `undefined` 即缺席。
-   */
-  const [tokenTodayMap, setTokenTodayMap] = useState<Map<string, AccountTokenTodayEntry>>(new Map());
-  /** 网关日志已到保留上限 ⇒ 网关部分为下界（「今日 Token」渲染 `≥N`）。 */
-  const [tokenTodayTruncated, setTokenTodayTruncated] = useState(false);
   const [codebuddyCli, setCodebuddyCli] = useState<CodeBuddyCliStatus | null>(null);
   const [codebuddyCliSwitchingId, setCodebuddyCliSwitchingId] = useState<string | null>(null);
   const [codebuddyCnIde, setCodebuddyCnIde] = useState<CodeBuddyCnIdeStatus | null>(null);
@@ -855,8 +845,8 @@ function RegionPanel({ region }: { region: Region }) {
    * 不提交签到。拆成多项而不是合成一个「刷新」：各类数据来源不同（上游 / 本机签到 /
    * 本机凭据），合成后失败原因分不清，慢的还会拖住快的。
    *
-   * ⚠️ `tokens` 分支**已无入口**（2026-10-26 起「刷新今日 Token」不在任何菜单里），
-   * 保留它只为让 `AccountRefreshKind` 的四值语义完整（Trae 抽屉 / 用量页仍在用它）。
+   * ⚠️ `tokens` 分支已于 2026-10-29 删除：概览不再展示「今日 Token」后，
+   * 账号页没有任何入口会刷新它（用量以用量统计页为准）。
    */
   async function batchRefreshPart(kind: AccountRefreshKind) {
     if (batchBusy || quickActionBusy) return;
@@ -868,18 +858,6 @@ function RegionPanel({ region }: { region: Region }) {
     try {
       if (kind === "credits") {
         await refreshCredits(ids, { region });
-      } else if (kind === "tokens") {
-        /* 显式点刷新 ⇒ 强制重算「今日 Token」（绕过后端 TTL 闸门）。
-           ⚠️ `get_account_token_today` 是**按整版本聚合**的接口，没有「只算这几个账号」
-           的入参 ⇒ 选了 3 个也会重算全部。此前用同一句「已对 {n} 个所选账号执行」把这件
-           事说成按所选执行，与批量「成长摘要」自己写下的边界（越界更新未勾选账号是越权）
-           自相矛盾。这里如实换一句文案：范围是整版本，不能让用户以为只动了勾选的。 */
-        await loadTokenToday(true);
-        toast.success(t(REFRESH_DONE_LABEL[kind]), {
-          description: t("wbAccounts.toast.batchRefreshTokensRegion"),
-        });
-        setBatchRefreshDoneKind(kind);
-        return;
       } else if (kind === "checkin") {
         const next = await fetchTodayCheckinMap(ids, region);
         if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
@@ -921,7 +899,7 @@ function RegionPanel({ region }: { region: Region }) {
    *
    * 这是四项只读刷新之外唯一的写操作，与单账号抽屉的「续期凭据」同一路径；
    * 没有 refresh_token 的账号回 `needsRelogin`，计入「需重新登录」而不是失败。
-   * 续期成功后按单账号口径补齐卡片读数（积分 / 旅行 / 签到状态 / 今日 Token），
+   * 续期成功后按单账号口径补齐卡片读数（积分 / 旅行 / 签到状态），
    * 否则用户只看到「已续期」而卡片数字一个没变。
    */
   async function batchRefreshToken() {
@@ -970,7 +948,6 @@ function RegionPanel({ region }: { region: Region }) {
         } catch {
           /* 签到状态属辅助信息：失败不影响续期结论。 */
         }
-        void loadTokenToday(true);
       }
 
       const parts: string[] = [];
@@ -1068,7 +1045,7 @@ function RegionPanel({ region }: { region: Region }) {
    * | 签到状态 `checkin` | ✅ | 本机签到记录，1 次批量 |
    * | 凭据状态 `credential` | ✅ | `reconcileAccounts`（重取账号库：昵称 / 到期 / 需重登） |
    * | 任务摘要 `growth` | ✅ 仅国区 | 全量强制重扫（本来就覆盖全部账号） |
-   * | 今日 Token | ❌ **不在范围内** | 归批量条 / 抽屉的单项刷新；卡片已不展示它 |
+   * | 今日 Token | ❌ **不在范围内** | 2026-10-29 起账号页（卡片 / 表格 / 抽屉）都不展示它；用量看用量统计页 |
    *
    * ## ★ 「凭据状态」为什么留在这里（2026-10-26 用户拍板）
    *
@@ -1765,46 +1742,6 @@ function RegionPanel({ region }: { region: Region }) {
     void ensureCredits(accounts.map((account) => account.id), region);
   }, [accounts, ensureCredits, region]);
 
-  /**
-   * 「今日 Token」按账号聚合（只读）—— 卡片指标行 / 表格列的数据源。
-   *
-   * ⚠️ 读不到时**清空为「今日无记录」**（卡片 / 表格渲染「—」），**绝不**沿用上一次的数字：
-   * 换 region 后旧数字会张冠李戴（本仓踩过字段张冠李戴的坑）。取数失败不弹错、不打扰用户。
-   *
-   * ## ★ `force` 的边界（2026-10-12）
-   *
-   * 后端 `force` 会**绕过**「距上次扫描不足 TTL」的闸门、立刻重扫客户端会话日志；
-   * 默认路径**不给** —— 由后端按 TTL 自己决定（否则每次进页面都全量重扫）。
-   * 只有**用户显式点刷新**才给 `true`。
-   *
-   * 重扫本身不贵：后端带 mtime 预筛，只读「当天动过的文件」（实测 40GB → 当天那几 MB）。
-   */
-  const tokenTodayGenRef = useRef(0);
-  const loadTokenToday = useCallback(
-    async (force: boolean) => {
-      /* 代次：region 变化后晚到的旧响应**不得**覆盖新结果（否则又变成张冠李戴）。 */
-      const gen = (tokenTodayGenRef.current += 1);
-      const current = () => gen === tokenTodayGenRef.current;
-      try {
-        const res = await api.getAccountTokenToday(region, force);
-        if (!current()) return;
-        const map = new Map<string, AccountTokenTodayEntry>();
-        for (const entry of res.accounts ?? []) map.set(entry.uid, entry);
-        setTokenTodayMap(map);
-        setTokenTodayTruncated(Boolean(res.gatewayTruncated));
-      } catch {
-        if (!current()) return;
-        setTokenTodayMap(new Map());
-        setTokenTodayTruncated(false);
-      }
-    },
-    [region],
-  );
-
-  useEffect(() => {
-    void loadTokenToday(false);
-  }, [loadTokenToday, accounts.length]);
-
   async function onRecheck() {
     await Promise.all([refreshRegionStatus(region), reconcileAccounts(region)]);
   }
@@ -1890,15 +1827,17 @@ function RegionPanel({ region }: { region: Region }) {
    * 卡片菜单 /详情抽屉的「续期凭据」（**单账号**）。
    *
    * ★ 2026-10-16 修复：原先只刷 token + `reconcileAccounts`，卡片上的**其余数据源一个都没动**
-   * —— 积分（`creditMap`）、今日 Token（`tokenTodayMap`）、旅行（`travelMap`）、
-   * 今日签到（`checkinMap`）全都停在旧值。用户点完只看到一句「凭据已续期」，
-   * 而卡片上真正会变的数字一个都没变 ⇒ 「点了刷新没反应」（本条报障）。
+   * —— 积分（`creditMap`）、旅行（`travelMap`）、今日签到（`checkinMap`）全都停在旧值。
+   * 用户点完只看到一句「凭据已续期」，而卡片上真正会变的数字一个都没变 ⇒
+   * 「点了刷新没反应」（本条报障）。
    *
    * `reconcileAccounts` 只换`accounts` 数组（账号元信息：昵称/到期/需重登），
-   * **上面四张 map 是页面本地的 state，与它无关** —— 这是「刷新了却看不到变化」的结构性原因。
+   * **上面这几张 map 是页面本地的 state，与它无关** —— 这是「刷新了却看不到变化」的结构性原因。
    *
    * 现在按「用户在点这个账号的刷新 ⇒ 想看这个账号此刻的真实数据」的口径，
-   * 成功后把这四路一并重拉（失败各自吞掉，不影响已成功的 token 刷新提示）。
+   * 成功后把这几个数据源一并重拉（失败各自吞掉，不影响已成功的 token 刷新提示）。
+   *
+   * ★ 2026-10-29：「今日 Token」随概览行一起移除，不再参与续期后的补读。
    */
   const refreshBusy = useAccountRefreshBusy();
 
@@ -1919,9 +1858,6 @@ function RegionPanel({ region }: { region: Region }) {
         await refreshBusy.run(a.id, kind, async () => {
           if (kind === "credits") {
             await refreshCredits([a.id], { region });
-          } else if (kind === "tokens") {
-            /* `force=true`：用户显式点了刷新，就绕过后端「距上次扫描不足 TTL」的闸门。 */
-            await loadTokenToday(true);
           } else if (kind === "checkin") {
             const next = await fetchTodayCheckinMap([a.id], region);
             if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
@@ -1946,7 +1882,7 @@ function RegionPanel({ region }: { region: Region }) {
         toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
       }
     },
-    [refreshBusy, refreshCredits, region, loadTokenToday, reconcileAccounts, t],
+    [refreshBusy, refreshCredits, region, reconcileAccounts, t],
   );
 
   async function onRefresh(a: AccountMeta) {
@@ -1982,8 +1918,6 @@ function RegionPanel({ region }: { region: Region }) {
       } catch {
         /* ignore */
       }
-      /* 显式刷新 ⇒ 强制重算「今日 Token」（绕过后端 TTL 闸门）。 */
-      void loadTokenToday(true);
     } catch (e) {
       toast.error(t("wbAccounts.toast.tokenRefreshFail"), { description: api.asError(e) });
     } finally {
@@ -2328,10 +2262,7 @@ function RegionPanel({ region }: { region: Region }) {
    * 共享组件不写平台判断，只按本配置渲染。排序比较器与置顶的语义与改造前逐条对齐：
    * - `priority` = 「该先用谁」：最急一批的到期时刻升序 → 该批金额降序；`creditOrderingReady`
    *   为假时返回 0 ⇒ 稳定排序保持原序（与旧实现的 `: accounts` 分支等价）；
-   * - `name` / `expiry` 是新增键；
-   * - `recent` = 按 `AccountMeta.lastUsedAt`（epoch 毫秒）**倒序**；从未使用的账号（缺该字段）
-   *   排到最后。⚠️ 2026-10-10 起后端为 `AccountMeta` 记录 `lastUsedAt`，故「最近使用」不再是
-   *   假选项（决策 #3 的原判据「无字段」已不成立 —— 见 `check-scope-registry.cjs` 对应断言）。
+   * - `name` / `expiry`（凭据到期）是新增键；`lastUsedAt` 仍由后端记录，但不参与排序。
    */
   const listConfig = useMemo<AccountListConfig<AccountMeta>>(() => {
     /* 没有任何未来到期批次（凭据失败 / 积分已用完 / 全部过期）的账号一律沉底 ——
@@ -2345,12 +2276,34 @@ function RegionPanel({ region }: { region: Region }) {
     };
     const nameComparator: AccountComparator<AccountMeta> = (left, right) =>
       wbAccountName(left).localeCompare(wbAccountName(right), undefined, { numeric: true, sensitivity: "base" });
-    const expiryComparator: AccountComparator<AccountMeta> = (left, right) =>
-      (left.expiresAt ?? Number.POSITIVE_INFINITY) - (right.expiresAt ?? Number.POSITIVE_INFINITY);
-    /* 「最近使用」：按 `lastUsedAt` **倒序**（新的在前）；缺席（从未使用）用 `-Infinity`
-       兜底 ⇒ 一律排到最后，而不是被当成「很久以前」（0 会混进中间去）。 */
-    const recentComparator: AccountComparator<AccountMeta> = (left, right) =>
-      (right.lastUsedAt ?? Number.NEGATIVE_INFINITY) - (left.lastUsedAt ?? Number.NEGATIVE_INFINITY);
+    /* 凭据到期升序；缺值沉底（显式判相等，避免 `Infinity - Infinity = NaN`）。 */
+    const expiryComparator: AccountComparator<AccountMeta> = (left, right) => {
+      const leftExpiry = left.expiresAt ?? Number.POSITIVE_INFINITY;
+      const rightExpiry = right.expiresAt ?? Number.POSITIVE_INFINITY;
+      if (leftExpiry === rightExpiry) return 0;
+      return leftExpiry - rightExpiry;
+    };
+    /* 桶的固定顺序 —— 与当前排序键解耦（见 `AccountListConfig.bucketCompare`）。
+       「问题桶在前、正常最后」是三个平台同一口径，具体状态集仍各平台自备（决策 #8）。 */
+    const statusOrder = [
+      t("wbAccounts.toolbar.statusBucket.needsRelogin"),
+      t("wbAccounts.toolbar.statusBucket.expired"),
+      t("wbAccounts.toolbar.statusBucket.notCheckedIn"),
+      t("wbAccounts.toolbar.statusBucket.normal"),
+    ];
+    const programOrder = [
+      "WorkBuddy",
+      t("wbAccounts.program.codebuddyCnIde"),
+      t("wbAccounts.program.codebuddyCli"),
+      t("wbAccounts.program.vscodeCodebuddyPlugin"),
+      t("wbAccounts.program.jetbrainsCodebuddyPlugin"),
+    ];
+    const unboundProgram = t("wbAccounts.toolbar.programBucket.unbound");
+    const ungrouped = t("wbAccounts.toolbar.groupBucket.ungrouped");
+    const rank = (order: readonly string[], value: string) => {
+      const index = order.indexOf(value);
+      return index < 0 ? order.length : index;
+    };
     return {
       searchText: (account) =>
         accountSearchText({
@@ -2363,7 +2316,6 @@ function RegionPanel({ region }: { region: Region }) {
         priority: creditOrderingReady ? priorityComparator : () => 0,
         name: nameComparator,
         expiry: expiryComparator,
-        recent: recentComparator,
       },
       /**
        * `pin_current_account` 打开时把当前登录账号整体提到第一位。
@@ -2402,7 +2354,23 @@ function RegionPanel({ region }: { region: Region }) {
         }
         return null;
       },
-      availableSorts: ["priority", "name", "expiry", "recent"],
+      bucketCompare: (left, right, key) => {
+        if (key === "status") return rank(statusOrder, left) - rank(statusOrder, right);
+        if (key === "program") {
+          /* 程序位桶名可能是「A + B」组合 ⇒ 取第一个程序位的次序；未登录任何程序位排最后。 */
+          const programRank = (value: string) =>
+            value === unboundProgram ? programOrder.length : rank(programOrder, value.split(" + ")[0]);
+          return programRank(left) - programRank(right);
+        }
+        if (key === "group") {
+          if (left === ungrouped || right === ungrouped) {
+            return left === right ? 0 : left === ungrouped ? 1 : -1;
+          }
+          return left.localeCompare(right, "zh-Hans-CN");
+        }
+        return 0;
+      },
+      availableSorts: ["priority", "name", "expiry"],
       availableGroups: ["none", "program", "status", "group"],
     };
   }, [creditOrderingReady, creditMap, nextBatchById, switchConfig, current, cnIdeCurrentAccountId, cliCurrentAccountId, vscodePluginCurrentAccountId, jetbrainsPluginCurrentAccountId, checkinMap, t]);
@@ -2423,7 +2391,6 @@ function RegionPanel({ region }: { region: Region }) {
     priority: t("wbAccounts.toolbar.sort.priority"),
     name: t("wbAccounts.toolbar.sort.name"),
     expiry: t("wbAccounts.toolbar.sort.expiry"),
-    recent: t("wbAccounts.toolbar.sort.recent"),
   };
   const groupLabels: Partial<Record<AccountGroupKey, string>> = {
     none: t("wbAccounts.toolbar.group.none"),
@@ -2536,6 +2503,7 @@ function RegionPanel({ region }: { region: Region }) {
       header: t("wbAccounts.table.account"),
       render: (account) => {
         const { activeCount } = accountProgramSlots(account);
+        const subtitle = accountSubtitle(account);
         return (
           <div className="flex min-w-0 items-center gap-2.5">
             {/* 表格头像走共享件（原型 `.avatar`：26px / 圆角 8px / 2 字）——
@@ -2554,8 +2522,10 @@ function RegionPanel({ region }: { region: Region }) {
                   </Badge>
                 )}
               </div>
-              <div className="truncate text-xs text-muted-foreground" title={accountIdentity(account)}>
-                {accountIdentity(account)}
+              {/* ★ 2026-10-28（用户要求）：身份行改显示备注（其次脱敏邮箱），不再显示 UID；
+                  空值也保留这一行，避免名称在头像旁垂直居中。 */}
+              <div className="truncate text-xs text-muted-foreground" title={subtitle || undefined}>
+                {subtitle || "\u00A0"}
               </div>
             </div>
           </div>
@@ -2584,7 +2554,7 @@ function RegionPanel({ region }: { region: Region }) {
     {
       /* ★ 2026-10-23：与卡片指标行**同一份**取数与形态（`creditMetricValues`）——
          第一行「当前/总额」，第二行「最近到期 · 优先」（纯文字，只用字色分级）。
-         卡片上已经删掉的「今日 Token」不再单独成列（其正式界面是用量统计页与抽屉）。 */
+         「今日 Token」不单独成列（2026-10-29 起抽屉概览也已移除；用量看用量统计页）。 */
       key: "credits",
       header: t("wbAccounts.table.credits"),
       align: "right",
@@ -2659,10 +2629,9 @@ function RegionPanel({ region }: { region: Region }) {
         const labels = accountProgramLabels(account);
         return labels.length > 0 ? (
           <div className="flex flex-wrap gap-1">
+            {/* 与 Trae / Qoder 程序位列**同一枚**只读胶囊（`ProgramSlotChip`）。 */}
             {labels.map((label) => (
-              <Badge key={label} variant="info" className={ACCOUNT_CHIP_CLASS}>
-                {label}
-              </Badge>
+              <ProgramSlotChip key={label}>{label}</ProgramSlotChip>
             ))}
           </div>
         ) : (
@@ -2703,6 +2672,7 @@ function RegionPanel({ region }: { region: Region }) {
   const detailName = detail
     ? displayText(detail.nickname) || displayText(detail.uid) || t("wbAccounts.card.unnamed")
     : "";
+  const detailUid = displayText(detail?.uid);
   const detailCredit = detail ? creditMap[detail.id] : undefined;
   const detailLoading = detail ? Boolean(creditLoadingMap[detail.id]) : false;
   const detailSections: DetailSection[] = detail
@@ -2732,17 +2702,6 @@ function RegionPanel({ region }: { region: Region }) {
                     ? t("wbAccounts.card.notCheckedIn")
                     : "—",
             },
-            /* ★ 2026-10-23：指标块换掉「今日 Token」后，这个数字**不能就此消失** ——
-               它下沉到「概览」：用量页虽然也有，但「这个号今天用了多少」属于账号身份的一部分。
-               诚实边界与卡片同源（`formatTodayTokens`：缺失 ⇒ 「—」，网关截断 ⇒ `≥N`）。 */
-            {
-              label: t("shared.stat.tokens"),
-              value: formatTodayTokens(
-                detail.uid ? tokenTodayMap.get(detail.uid) : undefined,
-                tokenTodayTruncated,
-                t,
-              ),
-            },
           ],
         },
       ]
@@ -2762,9 +2721,10 @@ function RegionPanel({ region }: { region: Region }) {
    * `refreshKind` 让每块带上就地 ⟳ —— 与卡片「更多」的四项**同一个回调**。
    *
    * ★ 2026-10-23（用户要求）：四块改成与下面页签**一一对应**（概览 / 积分 / 签到 / 任务 / 凭证）。
-   * 「今日 Token」块被「任务」块替换 —— Token 是「回顾用量」，读它的地方是用量统计页与
-   * `用量` 页签，摆在最上面反而挤掉了「有没有奖励可领」这个**决策**项。
-   * Token 数字没有丢：下沉到「概览」的信息行。
+   * 「今日 Token」块被「任务」块替换 —— Token 是「回顾用量」，摆在最上面反而挤掉了
+   * 「有没有奖励可领」这个**决策**项。
+   * ★ 2026-10-29（用户要求）：当年下沉到「概览」的「今日 Token」行也一并移除；
+   * 用量只在用量统计页查看（账号抽屉只回答「这个号什么状态」）。
    *
    * ★ 同一轮修掉**积分临期表述不一致**：旧文案是「314.86 积分 1 天内到期」（后端 7 天窗口的
    * 合计 + 最晚一批天数），卡片上是 `120 积分今天 14:30 到期`（最急一批的金额 + 时分）。
@@ -3814,7 +3774,9 @@ function RegionPanel({ region }: { region: Region }) {
         // 页签记忆的身份键：`scope:id`（同一 id 在国内版 / 国际版是两个账号）。
         accountKey={detail ? `${scope}:${detail.id}` : ""}
         name={detailName}
-        subtitle={detail ? accountIdentity(detail) : ""}
+        /* ★ 2026-10-29（用户要求）：头部名称下**只显示 UID**（此前是脱敏邮箱）——
+           名称已经在标题里，副标题再写第二遍身份没有信息量。 */
+        subtitle={detailUid ? t("shared.drawer.subtitleUid", { uid: detailUid }) : ""}
         avatarSeed={detailName}
         loading={detailLoading}
         packs={detailPacks}

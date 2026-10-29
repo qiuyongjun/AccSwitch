@@ -18,8 +18,10 @@ import { AccountsTableAvatar } from "@/components/account-list-parts";
 import {
   ACCOUNT_CHIP_CLASS,
   CredentialExpiryMeta,
+  ProgramSlotChip,
+  creditMetricTip,
+  drawerTabOpenAria,
   expiryTooltipLines,
-  formatTodayTokens,
   nextExpiryLabel,
 } from "@/components/account-card";
 import {
@@ -53,10 +55,9 @@ import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
 import {
   TraeAccountCard,
-  TraeCurrentProgramChip,
   TraeStatusChips,
   formatCredits,
-  jwtBadge,
+  jwtStatusText,
   shortTime,
   traeCreditPackages,
   traeCreditTotal,
@@ -89,7 +90,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import * as api from "@/lib/api";
 import type { CheckinStatusEntry } from "@/lib/api";
-import type { AccountTokenTodayEntry } from "@/lib/types";
 import { accountSearchText } from "@/lib/account-search";
 import { lastSevenDays } from "@/lib/checkin-history";
 import {
@@ -133,7 +133,6 @@ import type {
   TraeVariantStatus,
   TraeRegionId,
 } from "@/lib/trae-types";
-import { cn } from "@/lib/utils";
 import { scopeOf } from "@/lib/scope";
 import { useCachedResource } from "@/lib/use-cached-resource";
 import { useRefreshAction } from "@/lib/use-refresh-action";
@@ -179,15 +178,10 @@ class SupersededRefreshError extends Error {
 }
 
 /**
- * 账号页的快照。
- *
- * 这些数据**必须一起**缓存：卡片上的程序切换按钮要同时用到账号、程序位与各区域
- * 登录态，分开缓存会让「账号已是新的、按钮还是旧的」这种不一致有缝可钻。
- *
- * 缓存键里带 `variant`（产品线），所以切到另一条线绝不会渲染出上一条线的数据。
+ * 账号页的辅助快照。程序位与登录态成对发布，避免「当前账号」标记取自不同批次。
+ * 本地账号列表单独缓存，不等待客户端探测；两份缓存均按区域隔离。
  */
 interface AccountsSnapshot {
-  overview: TraeAccountsOverview;
   env: TraeEnvStatus;
   credits: TraeCreditsOverview;
   checkin: TraeCheckinStatus;
@@ -238,34 +232,32 @@ export default function TraeAccountsPage() {
   return <TraeAccountsPanel key={scope} variant={variant} />;
 }
 
+/** 本地列表先显示，辅助快照随后补齐；写操作仍等待全部回读完成。 */
 function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const t = useT();
-  /**
-   * 一次取齐本页快照。四份分家数据全部按**当前选中的产品线**读取，与侧栏分区同源。
-   * `env` 仍然单独取：它是「单一视角」的环境快照，用于展示该线的安装/运行状态。
-   *
-   * `statuses` 与「各线当前账号」则是**跨产品线**的：卡片上的程序切换按钮条
-   * （对应 WorkBuddy 卡片的 WorkBuddy / CodeBuddy IDE / CLI 三枚按钮）必须知道
-   * 「本机装了哪几条线、每条线当前挂的是哪个账号」，缺一条就渲染不出那一枚按钮。
-   */
+  const accountResource = useCachedResource<TraeAccountsOverview>(
+    `trae:account-list:${variant}`,
+    () => api.getTraeAccounts(variant),
+  );
+
+  /** 登录态仅依赖程序清单，立即接续读取，与积分和环境读取并行。 */
   const loadSnapshot = useCallback(async (): Promise<AccountsSnapshot> => {
-    const [accountData, envData, creditData, checkinData, statuses] = await Promise.all([
-      api.getTraeAccounts(variant),
+    const programs = loadTraeVariantStatuses().then(async (statuses) => ({
+      statuses,
+      logins: await loadTraeVariantLogins(statuses),
+    }));
+    const [envData, creditData, checkinData, programData] = await Promise.all([
       api.getTraeEnv(),
       api.getTraeCredits(variant),
       api.getTraeCheckinStatus(variant),
-      loadTraeVariantStatuses(),
+      programs,
     ]);
-    // 登录态读取依赖刚拿到的产品线清单（要遍历它逐条读），故串在探测之后。
-    // 它自己逐条容错：某条线读不到只记 `null`，不会把整页拖成错误态。
-    const currentLogins = await loadTraeVariantLogins(statuses);
     return {
-      overview: accountData,
       env: envData,
       credits: creditData,
       checkin: checkinData,
-      variantStatuses: statuses,
-      logins: currentLogins,
+      variantStatuses: programData.statuses,
+      logins: programData.logins,
     };
   }, [variant]);
 
@@ -276,13 +268,28 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 页面组件会卸载重建，数据留在 store 里 ⇒ 重挂载立刻渲染真数据、不再闪骨架。
    * `loadAll` 是「强制重取并等待」，变更操作（签到 / 切换 / 删除 / 导入）之后必须调它。
    */
-  const {
-    data: snapshot,
-    loading,
-    error,
-    refresh: loadAll,
-    refreshWithResult: loadAllWithResult,
-  } = useCachedResource<AccountsSnapshot>(`trae:accounts:${variant}`, loadSnapshot);
+  const snapshotResource = useCachedResource<AccountsSnapshot>(`trae:accounts:${variant}`, loadSnapshot);
+  const snapshot = snapshotResource.data;
+  const loading = accountResource.loading ||
+    ((accountResource.data?.accounts.length ?? 0) === 0 && snapshotResource.loading);
+  const error = accountResource.error ?? snapshotResource.error;
+  const refreshAccounts = accountResource.refreshWithResult;
+  const refreshSnapshot = snapshotResource.refreshWithResult;
+
+  /** 汇总两份快照的结果，避免辅助读取失败时仍显示「已更新」。 */
+  const loadAllWithResult = useCallback(async () => {
+    const results = await Promise.all([refreshAccounts(), refreshSnapshot()]);
+    return {
+      ok: results.every((result) => result.ok),
+      superseded: results.some((result) => result.superseded),
+      error: results.find((result) => result.error != null)?.error ?? null,
+    };
+  }, [refreshAccounts, refreshSnapshot]);
+
+  /** 写操作与手动刷新保持等待完整回读的原有契约。 */
+  const loadAll = useCallback(async () => {
+    await loadAllWithResult();
+  }, [loadAllWithResult]);
 
   /**
    * 自动签到的**排程**（何时跑），与 Trae 设置页共用同一把键（`SCHEDULE_CONFIG_KEY`）。
@@ -308,7 +315,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 用占位起步、加载完成后替换，形态与 WorkBuddy 的 region Tabs 一致
    * （后者也是先渲染两枚 Tab，再逐区填状态）。
    */
-  const overview = snapshot?.overview ?? null;
+  const overview = accountResource.data ?? null;
   const credits = snapshot?.credits ?? null;
   const checkin = snapshot?.checkin ?? null;
   const variantStatuses = snapshot?.variantStatuses ?? TRAE_VARIANT_FALLBACK;
@@ -966,11 +973,10 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   /**
    * 本平台**真的能刷**的项 → 刷新菜单里能出现的项。
    *
-   * ★ 2026-10-26（用户要求）：**`tokens` 不再进菜单**（与 WB 同步 —— 刷新菜单只放
-   * 积分 / 签到状态 / 凭证状态 / 任务）。Trae 卡片上的「今日 Token」指标块仍带自己的
-   * 刷新按钮，走的是同一个 `onRefreshPart(account, "tokens")`，所以 `tokens` 这个
-   * kind 与其数据来源（`get_trae_account_token_today`，**只读**网关日志）都保留 ——
-   * 只是不再作为菜单项出现。
+   * ★ 2026-10-26（用户要求）：**`tokens` 不进菜单**（与 WB 同步 —— 刷新菜单只放
+   * 积分 / 签到状态 / 凭证状态 / 任务）。
+   * ★ 2026-10-29：`tokens` 的最后一处入口（抽屉概览「今日 Token」行）也已移除 ⇒
+   * 页面不再有该 kind 的取数分支（见下方说明）。
    *
    * 其余两项的诚实边界：
    * - `checkin` → `get_trae_checkin_status_map`（**只读**上游状态端点）。本地台账只记
@@ -980,14 +986,10 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const TRAE_REFRESH_KINDS = ["credits", "checkin", "credential"] as const;
   const refreshBusy = useAccountRefreshBusy();
 
-  /**
-   * 「今日 Token」按账号（`get_trae_account_token_today`）—— 抽屉概览信息行的数据源
-   * （打开抽屉时静默补一次，见 `loadDetailTokens`）。
-   *
-   * **缺席即「—」**：只存后端真的返回的账号，不给缺席的账号补 0。
-   */
-  const [todayTokens, setTodayTokens] = useState<Record<string, AccountTokenTodayEntry>>({});
-  const [todayTokensTruncated, setTodayTokensTruncated] = useState(false);
+  /* ★ 2026-10-29（用户要求）：抽屉概览的「今日 Token」行已移除，页面对
+     `get_trae_account_token_today` 的两处取数（抽屉打开时静默补一次 / 单项刷新）
+     随之删除 —— 不再为没人看的读数付出「扫网关日志」的成本。接口与
+     `AccountTokenTodayEntry` 类型保留（用量统计页仍在用）。 */
   /**
    * 逐账号签到状态（`get_trae_checkin_status_map`）——**只覆盖被刷新过的账号**。
    *
@@ -1055,13 +1057,6 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
             const synced = await loadAllWithResult();
             if (synced.superseded) throw new SupersededRefreshError();
             if (!synced.ok) throw synced.error;
-          } else if (kind === "tokens") {
-            /* 一次调用取全部账号（网关日志是区域共用的），按 uid 落到 state。 */
-            const today = await api.getTraeAccountTokenToday(variant, true);
-            setTodayTokens(
-              Object.fromEntries(today.accounts.map((entry) => [entry.uid, entry])),
-            );
-            setTodayTokensTruncated(today.gatewayTruncated);
           } else if (kind === "checkin") {
             /* 只问这一个账号（批量接口传 1 个 id 即可，不新增「单账号」变体）。 */
             const map = await api.getTraeCheckinStatusMap(variant, [account.userId]);
@@ -1148,33 +1143,11 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       });
   }
 
-  /**
-   * 概览「今日 Token」行：打开抽屉时静默补一次（`force=false`，后端按 TTL 决定是否重扫）。
-   *
-   * 每个区域每轮会话最多拉一次（卡片不展示 Token，页面快照里也没有这份数据）；
-   * 失败不打扰，下次打开抽屉再试 —— 读不到就保持「—」，绝不补 0。
-   */
-  const detailTokensLoadedFor = useRef<string | null>(null);
-  function loadDetailTokens() {
-    if (detailTokensLoadedFor.current === variant) return;
-    detailTokensLoadedFor.current = variant;
-    void api
-      .getTraeAccountTokenToday(variant, false)
-      .then((res) => {
-        setTodayTokens(Object.fromEntries((res.accounts ?? []).map((entry) => [entry.uid, entry])));
-        setTodayTokensTruncated(Boolean(res.gatewayTruncated));
-      })
-      .catch(() => {
-        detailTokensLoadedFor.current = null;
-      });
-  }
-
   /** 点卡片 / 表格行：打开抽屉。`tab` 非空 ⇒ 直达该页签（R10）。 */
   function openDetail(account: TraeAccount, tab: DrawerTab | null = null) {
     setDetailTab(tab);
     setDetailAccount(account);
     loadDetailCheckinLogs(account);
-    loadDetailTokens();
   }
 
   /**
@@ -1440,7 +1413,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         refreshingToken={busy === `jwt-${account.userId}`}
         checkinState={checkinStateOf(account)}
         onCheckin={() => checkinOne(account)}
-        onSwitch={() => openDetail(account)}
+        /* ★ 2026-10-29（用户要求）：Trae 菜单**不提供**「切换账号」——
+           切换走卡片程序位按钮，不需要「跳详情页再切」这个多余入口。 */
         onExport={() => {
           setExportTargets([account]);
           setExportOpen(true);
@@ -1786,7 +1760,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 候选表首项 ⇒ 把一个**不存在**的路径说成「已探测的登录态目录」。
    * 按区域取的是后端 `platform::select_data_dir_for(variant)`，不存在就是 `null`。
    */
-  const regionStatus = variantStatuses.find((item) => item.variant === variant);
+  const regionStatus = snapshot?.variantStatuses.find((item) => item.variant === variant);
 
   /**
    * 「客户端环境」那一行要用的**本区域**客户端状态。
@@ -1827,10 +1801,32 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 「最近使用」口径。按决策 #3 自己的规则（**无数据不渲染**），Trae 的排序键与 WB 一致为 3 项。
    */
   const listConfig = useMemo<AccountListConfig<TraeAccount>>(() => {
+    /* 「积分优先级」= 三个平台同一口径：**到期最近先用**，同到期按剩余积分降序；
+       已用完 / 已过期沉底 —— 已过期的积分不能再被消耗，排在最前只会挡住能用的账号
+       （与 WB 2026-10-23 同一条规则）。有积分但缺到期时刻的账号仍可用，排在已知到期之后。
+       ★ 2026-10-29（用户报障）：到期时刻**先取仍然有效的积分包**（与卡面 / 表格同一份
+       `summarizeExpiry`），没有可用批次时才回落账号快照的 `creditsExpireAt`。只看快照会把
+       「最早一包已过期、后面还有有效包」的账号当过期沉底 —— 卡面写着「明天到期」，排序却
+       排在 7 天后到期的账号之后。 */
     const priorityComparator: AccountComparator<TraeAccount> = (left, right) => {
-      // 「积分优先级」：**快过期先用**（到期近的靠前），同到期再按剩余积分多的靠前。
-      const leftExpiry = left.creditsExpireAt ?? Number.POSITIVE_INFINITY;
-      const rightExpiry = right.creditsExpireAt ?? Number.POSITIVE_INFINITY;
+      const now = Date.now();
+      const expiryOf = (account: TraeAccount): number | null => {
+        const summary = summarizeExpiry(traeCreditPackages(account, credits?.packages), {
+          unit: "s",
+          now,
+        });
+        if (summary?.batches[0]) return summary.batches[0].expireAt;
+        if (traeCredits(account) <= 0) return null;
+        if (account.creditsExpireAt == null) return Number.POSITIVE_INFINITY;
+        /* 快照字段是**秒**；`summarizeExpiry` 返回毫秒，统一换成毫秒再比较。 */
+        const snapshotExpiry = account.creditsExpireAt * 1000;
+        return snapshotExpiry > now ? snapshotExpiry : null;
+      };
+      const leftExpiry = expiryOf(left);
+      const rightExpiry = expiryOf(right);
+      if (leftExpiry == null || rightExpiry == null) {
+        return leftExpiry == null ? (rightExpiry == null ? 0 : 1) : -1;
+      }
       if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
       return traeCredits(right) - traeCredits(left);
     };
@@ -1839,8 +1835,30 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         numeric: true,
         sensitivity: "base",
       });
-    const expiryComparator: AccountComparator<TraeAccount> = (left, right) =>
-      (left.creditsExpireAt ?? Number.POSITIVE_INFINITY) - (right.creditsExpireAt ?? Number.POSITIVE_INFINITY);
+    /* `expiry` = **凭据到期**（与三页「凭据」列同口径）；积分到期由 `priority` 承担。
+       缺值沉底（显式判相等，避免 `Infinity - Infinity = NaN`）。 */
+    const expiryComparator: AccountComparator<TraeAccount> = (left, right) => {
+      const leftExpiry = traeJwtExpiryMs(left) ?? Number.POSITIVE_INFINITY;
+      const rightExpiry = traeJwtExpiryMs(right) ?? Number.POSITIVE_INFINITY;
+      if (leftExpiry === rightExpiry) return 0;
+      return leftExpiry - rightExpiry;
+    };
+    /* 桶的固定顺序 —— 与当前排序键解耦（见 `AccountListConfig.bucketCompare`）。 */
+    const statusOrder = [
+      t("trae.page.accounts.toolbar.statusBucket.cooling"),
+      t("trae.page.accounts.toolbar.statusBucket.expired"),
+      t("trae.page.accounts.toolbar.statusBucket.notCheckedIn"),
+      t("trae.page.accounts.toolbar.statusBucket.normal"),
+    ];
+    const programOrder = variantStatuses
+      .filter((status) => status.variant === variant)
+      .flatMap((status) => status.programs.map((program) => program.label));
+    const unboundProgram = t("trae.page.accounts.toolbar.programBucket.unbound");
+    const ungrouped = t("trae.page.accounts.toolbar.groupBucket.default");
+    const rank = (order: readonly string[], value: string) => {
+      const index = order.indexOf(value);
+      return index < 0 ? order.length : index;
+    };
     return {
       searchText: (account) =>
         accountSearchText({
@@ -1869,17 +1887,53 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         if (key === "group") return groupNameOf(account) ?? t("trae.page.accounts.toolbar.groupBucket.default");
         return null;
       },
+      bucketCompare: (left, right, key) => {
+        if (key === "status") return rank(statusOrder, left) - rank(statusOrder, right);
+        if (key === "program") {
+          /* 程序位桶名可能是「A + B」组合 ⇒ 取第一个程序位的次序；未登录任何程序位排最后。 */
+          const programRank = (value: string) =>
+            value === unboundProgram ? programOrder.length : rank(programOrder, value.split(" + ")[0]);
+          return programRank(left) - programRank(right);
+        }
+        if (key === "group") {
+          if (left === ungrouped || right === ungrouped) {
+            return left === right ? 0 : left === ungrouped ? 1 : -1;
+          }
+          return left.localeCompare(right, "zh-Hans-CN");
+        }
+        return 0;
+      },
       availableSorts: ["priority", "name", "expiry"],
       availableGroups: ["none", "program", "status", "group"],
     };
     // `programsFor` / `groupNameOf` / `checkinTodayOf` 读 `variantStatuses` / `logins` / `groups`
-    // / `checkinMap`，故一并入依赖。
-  }, [t, groups, variantStatuses, logins, checkinMap]);
+    // / `checkinMap`，`priorityComparator` 还读 `credits.packages`，故一并入依赖。
+  }, [t, groups, variantStatuses, variant, logins, checkinMap, credits?.packages]);
 
   /** 筛选（搜索）→ 排序 → 分桶；视图参数全部留在页内。 */
   const filtered = filterAccounts(accounts, listConfig, query);
   const sorted = sortAccounts(filtered, sort, listConfig);
   const buckets = groupAccounts(sorted, group, listConfig);
+
+  /**
+   * 只服务「优先」标记（与 WB 同义）：按积分优先级排一遍，取第一个**有未来到期数据**的账号。
+   * 与当前 `sort` 无关 —— 徽章回答的是「该先用谁」，不是「此刻怎么排」。
+   */
+  const priorityAccountId = (() => {
+    const now = Date.now();
+    return sortAccounts(accounts, "priority", listConfig).find((account) => {
+      const expiry = summarizeExpiry(traeCreditPackages(account, credits?.packages), {
+        unit: "s",
+        now,
+      });
+      if (expiry?.batches[0]) return true;
+      return (
+        traeCredits(account) > 0 &&
+        account.creditsExpireAt != null &&
+        account.creditsExpireAt > now / 1000
+      );
+    })?.userId;
+  })();
 
   /** 排序 / 分组下拉选项 —— 由 `availableSorts` / `availableGroups`（数据）驱动，无假选项。 */
   const sortLabels: Partial<Record<AccountSortKey, string>> = {
@@ -1959,11 +2013,19 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    *
    * `checkinTodayOf`：用户点过「刷新签到状态」后，上游 `checkinMap` 优先于列表快照 ——
    * 只读快照会让列表停在刷新前的签到态，而卡片已经变了。
+   *
+   * ★ 2026-10-28（口径对齐）：`onOpenTab` 一并注入 —— 此前只有卡片能点（列表把同一枚
+   * 标签渲染成**不可点的死文字**，光标也不变手型）。共享组件里已经带了
+   * `data-no-account-open`，所以点标签跳页签不会被行点击覆盖成「打开概览」。
    */
   function renderStatusBadges(account: TraeAccount) {
     return (
       <div className="flex flex-wrap items-center gap-1">
-        <TraeStatusChips account={account} checkedToday={checkinTodayOf(account)} />
+        <TraeStatusChips
+          account={account}
+          checkedToday={checkinTodayOf(account)}
+          onOpenTab={(tab) => openDetail(account, tab)}
+        />
       </div>
     );
   }
@@ -1977,29 +2039,36 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     {
       key: "account",
       header: t("trae.page.accounts.table.account"),
-      render: (account) => (
-        /* ★ 与 WorkBuddy 表格**同一结构**（原型 `tableView` `:2551`）：头像 + 名称行（含「当前」徽章）
-           + 身份行。此前 Trae 侧没有头像 ⇒ 两个分区的表格首列不同形。 */
-        <div className="flex min-w-0 items-center gap-2.5">
-          <AccountsTableAvatar name={traeAccountName(account)} />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="truncate font-medium" title={traeAccountName(account)}>
-                {traeAccountName(account)}
-              </span>
-              {/* ★ 2026-10-27（用户要求）：与卡片头部**同一枚**徽章 —— 同一文案
-                  （`trae.comp.card.currentLogin`）与同一变体（`info` = primary 16% 底）。
-                  此前列表写「当前」+ secondary（几乎无底色），看起来像另一种状态。 */}
-              {isCurrentAccount(account) && (
-                <Badge variant="info" className={ACCOUNT_CHIP_CLASS}>
-                  {t("trae.comp.card.currentLogin")}
-                </Badge>
-              )}
+      render: (account) => {
+        /* ★ 2026-10-28（用户要求）：身份行不再显示 UID，改为备注；没有备注时保留空行位。 */
+        const remark = displayText(account.remark);
+        return (
+          /* ★ 与 WorkBuddy 表格**同一结构**（原型 `tableView` `:2551`）：头像 + 名称行（含「当前」徽章）
+             + 身份行。此前 Trae 侧没有头像 ⇒ 两个分区的表格首列不同形。 */
+          <div className="flex min-w-0 items-center gap-2.5">
+            <AccountsTableAvatar name={traeAccountName(account)} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate font-medium" title={traeAccountName(account)}>
+                  {traeAccountName(account)}
+                </span>
+                {/* ★ 2026-10-27（用户要求）：与卡片头部**同一枚**徽章 —— 同一文案
+                    （`trae.comp.card.currentLogin`）与同一变体（`info` = primary 16% 底）。
+                    此前列表写「当前」+ secondary（几乎无底色），看起来像另一种状态。 */}
+                {isCurrentAccount(account) && (
+                  <Badge variant="info" className={ACCOUNT_CHIP_CLASS}>
+                    {t("trae.comp.card.currentLogin")}
+                  </Badge>
+                )}
+              </div>
+              {/* 无备注也保留这一行（空占位），避免名称在头像旁垂直居中。 */}
+              <div className="truncate text-xs text-muted-foreground" title={remark ?? undefined}>
+                {remark || "\u00A0"}
+              </div>
             </div>
-            <div className="truncate font-mono text-xs text-muted-foreground">UID · {displayText(account.userId) ?? "—"}</div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       key: "status",
@@ -2023,9 +2092,24 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         const label = nextExpiryLabel(expiry, t);
         const tip = expiry ? expiryTooltipLines(expiry, t) : null;
         const total = traeCreditTotal({ creditPackages: packages });
+        const priority = account.userId === priorityAccountId;
+        /* 「剩余 · 总额 · 已用」走共享的 `creditMetricTip`（与卡片、WB 表格同一句措辞）。 */
+        const creditTip = creditMetricTip({ current: account.remainingCredits, total, expiry }, t);
         return (
-          <div className="flex w-full flex-col items-end gap-0.5 text-right tabular-nums">
-            <span className="whitespace-nowrap">
+          /* ★ 2026-10-28（对齐 WB 表格）：整格是**一个真按钮** → 抽屉「积分」，
+             `data-no-account-open` 让行点击让位（行的 onClick 只排除
+             `[data-row-actions]` / `[data-no-account-open]`），`cursor-pointer` + 悬停降透明
+             让人看得出它可点 —— 此前这里是一块 `div`：数据能看不能点，与卡片两种说法。
+             ⚠️ 单元格内仍用原生 `title`（多行 `\n`）而不是 Radix `Tooltip`：与 WB 表格一致，
+             逐行的浮层不该各挂一个 portal。 */
+          <button
+            type="button"
+            data-no-account-open
+            onClick={() => openDetail(account, "credits")}
+            aria-label={drawerTabOpenAria("credits", traeAccountName(account), t)}
+            className="flex w-full cursor-pointer flex-col items-end gap-0.5 text-right tabular-nums transition-opacity hover:opacity-85"
+          >
+            <span className="whitespace-nowrap" title={creditTip ?? undefined}>
               {account.remainingCredits == null ? (
                 <span className="text-muted-foreground">—</span>
               ) : (
@@ -2037,32 +2121,39 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
                 </>
               )}
             </span>
-            {next ? (
-              <span
-                className={cn(
-                  "whitespace-nowrap text-[11px]",
-                  isExpiryUrgent(next.expireAt) ? "text-warning" : "text-muted-foreground",
-                )}
-                title={
-                  tip ? [tip.title, ...tip.lines, tip.more ?? ""].filter(Boolean).join("\n") : undefined
-                }
-              >
-                {label}
+            {(next || account.creditsExpireAt || priority) && (
+              <span className="flex flex-wrap items-center justify-end gap-x-1.5 whitespace-nowrap text-[11px]">
+                {next ? (
+                  <span
+                    className={
+                      isExpiryUrgent(next.expireAt) ? "text-warning" : "text-muted-foreground"
+                    }
+                    title={
+                      tip ? [tip.title, ...tip.lines, tip.more ?? ""].filter(Boolean).join("\n") : undefined
+                    }
+                  >
+                    {label}
+                  </span>
+                ) : account.creditsExpireAt ? (
+                  /* ★ 与卡片同一兜底：没有包明细（`creditPackages` 为空）也要给出到期时刻，
+                     否则「这个号会不会过期」在表格里根本看不出来。`creditsExpireAt` 是**秒**。 */
+                  <span
+                    className={
+                      isExpiryUrgent(account.creditsExpireAt * 1000) ? "text-warning" : "text-muted-foreground"
+                    }
+                    title={t("trae.comp.card.expiryOnTip")}
+                  >
+                    {t("trae.comp.card.expiryOn", { date: shortTime(account.creditsExpireAt) })}
+                  </span>
+                ) : null}
+                {priority ? (
+                  <span className="text-primary" title={t("trae.comp.card.priorityTip")}>
+                    {t("trae.comp.card.priority")}
+                  </span>
+                ) : null}
               </span>
-            ) : account.creditsExpireAt ? (
-              /* ★ 与卡片同一兜底：没有包明细（`creditPackages` 为空）也要给出到期时刻，
-                 否则「这个号会不会过期」在表格里根本看不出来。`creditsExpireAt` 是**秒**。 */
-              <span
-                className={cn(
-                  "whitespace-nowrap text-[11px]",
-                  isExpiryUrgent(account.creditsExpireAt * 1000) ? "text-warning" : "text-muted-foreground",
-                )}
-                title={t("trae.comp.card.expiryOnTip")}
-              >
-                {t("trae.comp.card.expiryOn", { date: shortTime(account.creditsExpireAt) })}
-              </span>
-            ) : null}
-          </div>
+            )}
+          </button>
         );
       },
     },
@@ -2089,14 +2180,14 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         return active.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {/* ★ 2026-10-27（用户要求）：与卡片页脚的当前程序位**同一枚胶囊**
-                （`TraeCurrentProgramChip`：primary 18% 底 + primary 40% 描边 + ✓）。
+                （`ProgramSlotChip`：primary 18% 底 + primary 40% 描边 + ✓，三平台共用）。
                 此前这里是 secondary 徽章，主题下几乎看不到底色。 */}
             {active.map((program) => {
               const label = displayText(program.label) ?? traeVariantLabel(program.variant);
               return (
-                <TraeCurrentProgramChip key={`${program.region}:${program.variant}`} title={label}>
+                <ProgramSlotChip key={`${program.region}:${program.variant}`} title={label}>
                   {label}
-                </TraeCurrentProgramChip>
+                </ProgramSlotChip>
               );
             })}
           </div>
@@ -2184,7 +2275,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     : "—";
 
   /**
-   * 概览只留「账号信息」一块，字段对齐 WorkBuddy 的概览（凭据到期 / 今日签到 / 今日 Token）。
+   * 概览只留「账号信息」一块，字段对齐 WorkBuddy 的概览（UID / 凭据到期 / 今日签到）。
    *
    * ★ 2026-10-27（用户要求「参考 WorkBuddy，去掉概览里重复的积分 / 凭据区块」）：
    * 此前概览把「积分」「凭据」各摆成一整块，逐字段重复上方的指标块与下方同名页签 ——
@@ -2192,7 +2283,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * - 积分明细去「积分」页签看；
    * - JWT 自动刷新 / 设备标识去「凭据」页签看（那里还有续期动作）；
    * - 概览只答「这是哪个号、现在什么状态」。
-   * 账号 ID 不再重复：抽屉副标题已经是 `{name} · UID {uid}`。
+   * ★ 2026-10-29：UID 只在头部副标题（`shared.drawer.subtitleUid`）展示，概览不再成行；
+   * 「今日 Token」行移除（其正式界面是用量统计页）。
    */
   const detailSections: DetailSection[] = detail
     ? [
@@ -2214,11 +2306,6 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
               mono: true,
             },
             { label: t("shared.stat.checkin"), value: detailCheckinText },
-            /* 与 WB 概览同一行：只给 headline，客户端 / 网关拆分在用量统计页。 */
-            {
-              label: t("shared.stat.tokens"),
-              value: formatTodayTokens(todayTokens[detail.userId], todayTokensTruncated, t),
-            },
           ],
         },
       ]
@@ -2236,13 +2323,10 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    */
   const detailCredential: DetailCredential | null = detail
     ? {
-        statusText: jwtBadge(detail.jwtStatus, detail.jwtExpHours, t).text,
-        tone:
-          detail.jwtStatus === "expired"
-            ? "bad"
-            : detail.jwtStatus === "warn" || detail.jwtStatus === "unknown"
-              ? "warn"
-              : "ok",
+        /* ★ 2026-10-29（用户要求与 WB / Qoder 统一）：状态词不再带剩余天数；
+           `warn`（≤24h）与 `ok` 同词「有效」，具体到期时刻在下面「凭据到期」行。 */
+        statusText: jwtStatusText(detail.jwtStatus, t),
+        tone: detail.jwtStatus === "expired" ? "bad" : detail.jwtStatus === "unknown" ? "warn" : "ok",
         /* 第一行「凭据到期」是主时间；后两行是 Trae 有、WB 没有的字段。
            ⚠️ 不写 hint：WB 的 hint 是「可正常使用 / 建议续期」这类语气说明，
            Trae 的凭据状态已由徽章 + 到期行说清，再加一句就是同一件事说三遍。 */
@@ -2288,12 +2372,13 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * `Date.now()` 是毫秒 ⇒ 差值恒为巨大负数 ⇒ `soon` 永远为真，于是**再远的到期日也是黄色**
    * （用户看到的正是这个）。现在与卡片同一判据：`isExpiryUrgent(秒 * 1000)` = 3 天内。
    *
-   * ★ 2026-10-27：指标块**只留这三块**；「今日 Token」不作块，而是像 WB 一样
-   * 放进概览的信息行（见 `detailSections`），完整拆分仍在用量统计页。
+   * ★ 2026-10-27：指标块**只留这三块**。
+   * ★ 2026-10-29（用户要求）：概览里的「今日 Token」行也已移除 ⇒ 抽屉不再展示
+   * 今日 Token；完整拆分在用量统计页。
    */
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detail) return [];
-    const badge = jwtBadge(detail.jwtStatus, detail.jwtExpHours, t);
+    const credStatusText = jwtStatusText(detail.jwtStatus, t);
     /* 与卡片 / 表格同一份汇总：有包明细就报最急一批，没有就回落账号自带的到期时刻。 */
     const expiryForDetail = summarizeExpiry(detailPackages, { unit: "s", now });
     const totalForDetail = traeCreditTotal({ creditPackages: detailPackages });
@@ -2355,7 +2440,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       {
         key: "credential",
         label: t("shared.stat.credential"),
-        valueText: badge.text,
+        /* ★ 2026-10-29（用户要求与 WB / Qoder 统一）：主值只写状态词（有效 / 凭据已过期 /
+           无法解析），不再写「有效 13 天」；剩余时长一律由副行的具体到期时刻表达。 */
+        valueText: credStatusText,
         /* ★ 2026-10-26（与 WorkBuddy 同口径）：状态词不带信息，副行给**具体到期时刻**。
            三分支与 WB 一致，第三支不同：Trae 的 JWT **不存在「长期有效」** ——
            `jwtExpTimestamp` 缺值意味着读不到（`unparsable`），此时不写副行，而不是编一个
@@ -2968,6 +3055,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
                                 creditPackages: traeCreditPackages(account, credits?.packages),
                               }}
                               current={isCurrentAccount(account)}
+                              creditPriority={account.userId === priorityAccountId}
                               programs={programsFor(account)}
                               busy={busy}
                               switchBusy={switchBusy}
@@ -2998,8 +3086,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
                               doneKinds={refreshBusy.doneKindsOf(account.userId)}
                               refreshingKinds={refreshBusy.kindsOf(account.userId)}
                               refreshKinds={TRAE_REFRESH_KINDS}
-                              /* ★ 2026-10-26：卡片不再收 `todayTokens` —— 今日 Token 只在
-                                 抽屉概览的信息行展示（与 WorkBuddy 同口径）。 */
+                              /* ★ 2026-10-26：卡片不再收 `todayTokens` —— 今日 Token 不在
+                                 卡片上展示（与 WorkBuddy 同口径）。 */
                               checkedTodayOverride={
                                 checkinMap[account.userId]?.ok
                                   ? checkinMap[account.userId].todayCheckedIn
@@ -3236,12 +3324,11 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         accountKey={detail ? `${scope}:${displayText(detail.userId) ?? ""}` : ""}
         initialTab={detailTab}
         name={detailName}
+        /* ★ 2026-10-29（用户要求）：头部名称下**只显示 UID** —— 名称已经在标题里，
+           副标题再写第二遍身份没有信息量。 */
         subtitle={
           detail
-            ? t("trae.comp.card.detail.subtitle", {
-                name: detailName,
-                uid: displayText(detail.userId) ?? "—",
-              })
+            ? t("shared.drawer.subtitleUid", { uid: displayText(detail.userId) ?? "—" })
             : ""
         }
         avatarSeed={detailName}

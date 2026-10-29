@@ -144,7 +144,9 @@ export function AccountTable<T>({
                     onOpen(row);
                   }}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") onOpen(row);
+                    /* 只在**焦点就是行本身**时响应 Enter：格内按钮（积分格 / 状态标签 /
+                       行尾菜单）自己处理 Enter，冒泡上来的那一次不该再开一遍详情。 */
+                    if (event.key === "Enter" && event.target === event.currentTarget) onOpen(row);
                   }}
                   className={cn(
                     "cursor-pointer border-b border-border/60 last:border-0 hover:bg-card-2 focus-visible:bg-card-2 focus-visible:outline-none",

@@ -1260,8 +1260,23 @@ pub struct QuotaView {
     /// 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）。
     /// 缺失或不可信 ⇒ `None` —— 不编到期日。
     pub expires_at: Option<i64>,
+    /// 上游用「9999-12-31」（哨兵时刻）表示**不过期**。
+    ///
+    /// 不能把它当真实日期渲染 —— 界面上会出现「9999-12-31 08:00 到期」（2026-10-29 用户报障）。
+    /// 此时 `expires_at` 为 `None`，本标记让前端写「长期有效」而不是「到期未知」。
+    pub expires_forever: bool,
     /// 原始响应透传（页面上「资源包明细」等展示字段的来源）。
     pub raw: Value,
+}
+
+/// 「不过期」哨兵的下界：9999-12-31T00:00:00Z（Unix 毫秒）。
+///
+/// 上游实际下发的就是这一天（本机实测显示为本地 `9999-12-31 08:00`，即 UTC+8）。
+/// 用下界而不是等值：同一哨兵可能带当天时分秒（`…T23:59:59Z`），都该按「不过期」处理。
+const FOREVER_EXPIRY_MS: i64 = 253_402_214_400_000;
+
+fn is_forever_expiry(value: i64) -> bool {
+    value >= FOREVER_EXPIRY_MS
 }
 
 /// 解析额度响应。
@@ -1297,17 +1312,22 @@ pub fn parse_quota(payload: &Value) -> Result<QuotaView, String> {
     Unix **毫秒**时间戳）；`userQuota` / `addOnQuota` 自身没有到期时间 ⇒ 聚合后的
     `remaining` 与这同一个时刻到期。
     ⚠️ 只收**像毫秒**的值：小于 1e12 的不可能是当代毫秒时刻（若是秒，按毫秒渲染会变成
-    1970）。宁可把到期写成「未知」，也不谎报。 */
-    let expires_at = payload
+    1970）。宁可把到期写成「未知」，也不谎报。
+    ⚠️ 「9999-12-31」是**不过期**哨兵（[`FOREVER_EXPIRY_MS`]）：不能把它当真实日期，
+    否则界面显示「9999-12-31 08:00 到期」（2026-10-29 用户报障）。 */
+    let raw_expires = payload
         .get("expiresAt")
         .and_then(as_num)
         .filter(|value| *value >= 1_000_000_000_000);
+    let expires_forever = raw_expires.is_some_and(is_forever_expiry);
+    let expires_at = raw_expires.filter(|value| !is_forever_expiry(*value));
     Ok(QuotaView {
         remaining,
         used,
         total,
         is_exceeded,
         expires_at,
+        expires_forever,
         raw: payload.clone(),
     })
 }
@@ -1361,14 +1381,32 @@ pub fn shared_client() -> Result<&'static Client, String> {
         .map_err(|error| error.clone())
 }
 
+/// 把一组 `(name, value)` 头**替换式**地合进请求。
+///
+/// ⚠️ 不能用 `RequestBuilder::header` —— 它底层是 `HeaderMap::append`。`.json()` 已经
+/// 写过一次 `Content-Type`，再 append 一次会让上游收到**两个** `Content-Type`：Qoder
+/// 网关对重复的媒体类型头直接回 `HTTP 400`（`rawMessage: code=415, Unsupported Media
+/// Type`），**令牌刷新与签到领取因此必然失败**（2026-10-29 真机对照：同一个非法令牌，
+/// 单头 → 401，双头 → 415）。
 fn apply_headers(
-    mut request: reqwest::RequestBuilder,
+    request: reqwest::RequestBuilder,
     headers: &[(String, String)],
 ) -> reqwest::RequestBuilder {
+    let mut merged = reqwest::header::HeaderMap::new();
     for (name, value) in headers {
-        request = request.header(name, value);
+        match (
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            (Ok(name), Ok(value)) => {
+                merged.insert(name, value);
+            }
+            // 非法头名 / 头值：交回 reqwest 产出 builder 错误（与原先 `.header()` 同行为），
+            // 不能静默丢掉 —— 丢掉鉴权头会变成「请求发出去了但没有凭据」。
+            _ => return request.header(name.as_str(), value.as_str()),
+        }
     }
-    request
+    request.headers(merged)
 }
 
 /// 刷新令牌：按 `kind` 路由到 device / job 刷新端点（普通 JSON POST，不签名）。
@@ -2068,6 +2106,62 @@ mod tests {
         assert_eq!(refresh.expires_at, 1_893_553_445);
     }
 
+    /// ★ 回归（2026-10-29 真机）：`.json()` 已经写过 `Content-Type`，`apply_headers` 若
+    /// 再 append 一个，上游收到**两个** `Content-Type` 就回 `400 / code=415` ——
+    /// 令牌刷新与签到领取全线失败，而请求体与令牌本身都是对的。
+    ///
+    /// 可证伪：把 `apply_headers` 改回 `request.header(name, value)` ⇒ 本用例红。
+    #[test]
+    fn json_body_carries_exactly_one_content_type() {
+        let client = reqwest::Client::new();
+        let request = apply_headers(
+            client
+                .post("https://openapi.qoder.com.cn/api/v1/deviceToken/refresh")
+                .json(&serde_json::json!({ "refresh_token": "drt-x" })),
+            &[
+                ("Content-Type".into(), "application/json".into()),
+                ("Accept".into(), "application/json".into()),
+            ],
+        )
+        .build()
+        .expect("构造请求");
+        let content_types: Vec<_> = request
+            .headers()
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .collect();
+        assert_eq!(
+            content_types.len(),
+            1,
+            "Content-Type 必须唯一：{content_types:?}"
+        );
+        assert_eq!(
+            request.headers().get(reqwest::header::ACCEPT).unwrap(),
+            "application/json"
+        );
+
+        // 头表里自己重复同一个名字同样只留一份（替换语义，不是追加）。
+        let request = apply_headers(
+            client
+                .post("https://openapi.qoder.com.cn/api/v1/jobToken/refresh")
+                .json(&serde_json::json!({})),
+            &[
+                ("Content-Type".into(), "application/json".into()),
+                ("Content-Type".into(), "application/json".into()),
+            ],
+        )
+        .build()
+        .expect("构造请求");
+        assert_eq!(
+            request
+                .headers()
+                .get_all(reqwest::header::CONTENT_TYPE)
+                .iter()
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn checkin_status_parsing() {
         let payload = serde_json::json!({
@@ -2136,6 +2230,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(view.expires_at, Some(1_790_000_000_000));
+        assert!(!view.expires_forever);
 
         // 秒级值会被当成毫秒渲染成 1970 ⇒ 一律按「到期未知」处理，宁可少一条也不谎报。
         let seconds = parse_quota(&serde_json::json!({
@@ -2151,6 +2246,18 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(nested.expires_at, None);
+
+        // 「9999-12-31」= 不过期的哨兵（2026-10-29 用户报障：界面显示「9999-12-31 08:00 到期」）。
+        // 不能当真实日期，也不能当「到期未知」⇒ 单独标记，前端写「长期有效」。
+        for sentinel in [253_402_214_400_000i64, 253_402_300_799_000i64] {
+            let forever = parse_quota(&serde_json::json!({
+                "expiresAt": sentinel,
+                "userQuota": {"remaining": 700, "used": 300, "total": 1000},
+            }))
+            .unwrap();
+            assert_eq!(forever.expires_at, None);
+            assert!(forever.expires_forever);
+        }
     }
 
     /// ★★ 上游把额度写成**浮点** ⇒ 必须解析成真实数值，不能变成 0。

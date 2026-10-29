@@ -104,26 +104,13 @@ export function gatewayTrendCaption(
 }
 
 /**
- * 概览 · 近 14 天逐日 Token 柱状图的图注：`合计 + 单日峰值`。
- *
- * 与累计曲线同口径（写**峰值**而不是「峰值 = 末值」这类废话）：概览的柱子是**逐日**的，
- * 读者最想知道的就是「这半个月一共多少、最忙的一天多少」。
- */
-/**
  * Qoder 用量 · 逐日 **credits** 柱状图的图注：`合计 + 单日峰值`。
  *
- * 与 `tokenTrendCaption` **同口径、不同单位** —— Qoder 按 credits 计费，token 计数恒 0
+ * 与其它趋势图注**同口径、不同单位** —— Qoder 按 credits 计费，token 计数恒 0
  * （见 `pages/QoderUsagePage.tsx` 文件头）。单位不能含糊：同一句文案里换个单位就是谎报。
  */
 export function creditTrendCaption(t: CaptionTranslate, total: number, peak: number): string {
   return t("qoder.page.usage.caption", {
-    total: compactNumber(total),
-    peak: compactNumber(peak),
-  });
-}
-
-export function tokenTrendCaption(t: CaptionTranslate, total: number, peak: number): string {
-  return t("wbOverview.trend.caption", {
     total: compactNumber(total),
     peak: compactNumber(peak),
   });
