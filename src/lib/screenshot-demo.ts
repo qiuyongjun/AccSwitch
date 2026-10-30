@@ -1564,6 +1564,8 @@ function demoTraeVariants(): TraeVariantsStatus {
     path: installed ? path : null,
     dataDir: installed ? dataDir : null,
     dataDirExists: installed,
+    // 登录态文件是否存在（issue #136）：演示数据里「装了」就等于「写得出 storage.json」。
+    storageJsonExists: installed,
     // 演示数据里两个目录取同一个值（真实机器上它们可能分叉，见
     // `TraeProgramStatus.writeDataDir` 的说明）—— 截图场景不需要复现那个分叉。
     writeDataDir: installed ? dataDir : null,
@@ -1583,6 +1585,8 @@ function demoTraeVariants(): TraeVariantsStatus {
         path: "D:\\Programs\\Trae CN\\Trae CN.exe",
         dataDir: "C:\\Users\\demo\\AppData\\Roaming\\Trae CN",
         dataDirExists: true,
+        // 登录态文件是否存在（issue #136）：演示里国内区已登录 ⇒ 文件存在。
+        storageJsonExists: true,
         writeDataDir: "C:\\Users\\demo\\AppData\\Roaming\\Trae CN",
         writeDataDirExists: true,
         programs: [
@@ -1610,6 +1614,7 @@ function demoTraeVariants(): TraeVariantsStatus {
         path: null,
         dataDir: null,
         dataDirExists: false,
+        storageJsonExists: false,
         writeDataDir: null,
         writeDataDirExists: false,
         programs: [
