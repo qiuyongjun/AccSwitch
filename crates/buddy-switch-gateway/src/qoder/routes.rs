@@ -535,6 +535,12 @@ pub async fn chat_for_region(
                     responses_custom.clone(),
                     inflight,
                     key.clone(),
+                    // ★ issue #139：Anthropic 出口 `message_start` 的输入 token 占位（上游真实值要到末帧）。
+                    if protocol == Protocol::Anthropic {
+                        crate::protocol::anthropic::estimate_input_tokens(&openai_payload)
+                    } else {
+                        0
+                    },
                 )
                 .await
             } else {
@@ -755,6 +761,8 @@ async fn stream_relay(
     inflight: super::pool::InflightGuard,
     // ★ issue #76：本密钥（流结束时按 token 记账）。
     key: Option<std::sync::Arc<crate::apikey::KeyActor>>,
+    // ★ issue #139：Anthropic 出口 `message_start` 的输入 token 估算（0 = 不估）。
+    estimated_input: u64,
 ) -> Response {
     let upstream = response.bytes_stream();
     let stream_model = model.to_string();
@@ -787,10 +795,10 @@ async fn stream_relay(
         Box<dyn futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send>,
     > = match protocol {
         Protocol::OpenAi => Box::pin(tapped),
-        Protocol::Anthropic => Box::pin(crate::protocol::anthropic::AnthropicSseStream::new(
-            tapped,
-            stream_model.clone(),
-        )),
+        Protocol::Anthropic => Box::pin(
+            crate::protocol::anthropic::AnthropicSseStream::new(tapped, stream_model.clone())
+                .with_estimated_input(estimated_input),
+        ),
         // Responses 事件流：`response.created` … `response.completed`（**不补 `[DONE]`**，
         // 上游那一条会被本层吞掉 —— 见 `protocol::responses::ResponsesSseStream`）。
         Protocol::Responses => Box::pin(crate::protocol::responses::ResponsesSseStream::new(

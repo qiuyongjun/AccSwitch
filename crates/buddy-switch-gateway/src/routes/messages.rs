@@ -240,15 +240,24 @@ pub async fn messages_for_region(
                     // ★ issue #76：按密钥的 token 记账（流结束才写）。
                     key.as_deref(),
                 );
-                sse_response(AnthropicSseStream::new(
-                    crate::protocol::usage_tap::UsageTap::new(
-                        relay::prefix_stream(prefix, response),
-                        sinks,
+                sse_response(
+                    AnthropicSseStream::new(
+                        crate::protocol::usage_tap::UsageTap::new(
+                            relay::prefix_stream(prefix, response),
+                            sinks,
+                        )
+                        // ★ 流内信封错误：与 chat 路由同一判据，只是错误体形状不同。
+                        .with_error_sink(relay::envelope_error_sink(&state, &uid, &model)),
+                        model,
                     )
-                    // ★ 流内信封错误：与 chat 路由同一判据，只是错误体形状不同。
-                    .with_error_sink(relay::envelope_error_sink(&state, &uid, &model)),
-                    model,
-                ))
+                    // ★ issue #139：`message_start` 必须当场给 `input_tokens`，而上游
+                    //   的真实 `prompt_tokens` 要到末帧 —— 先用请求侧估算占位，
+                    //   否则客户端（dsh / Claude Code）的「上下文占用」恒为 0%。
+                    //   （#129 的 `with_failover` 未取：本分支无 failover 模块。）
+                    .with_estimated_input(crate::protocol::anthropic::estimate_input_tokens(
+                        &parsed,
+                    )),
+                )
             } else {
                 let text = relay::body_text_with_prefix(prefix, response).await;
                 // ★ 200 信封错误（P0-3）：与 chat 路由同一判据、同一治理副作用，
