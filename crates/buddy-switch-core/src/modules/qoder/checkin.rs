@@ -164,7 +164,16 @@ pub fn summarize_campaigns(items: &[campaign::CampaignItem]) -> CampaignSummary 
 /// - `todayCheckedIn` 只认上游 `claimStatus`（本地盖章只给 `stampedToday` 作提示）；
 /// - `dailyCredit` = 现在能领的合计，没有可领时退回已领合计（否则「已签」会显示成 0）；
 /// - `todayCredit` 只在**今天确实领到**时才有值（`0` 会被读成「签了但没给分」）。
-fn campaign_entry(snapshot: &campaign::CampaignsSnapshot, stamped_today: bool) -> Value {
+///
+/// ★ `uid` / `name` 是**行身份**，不是可选项：`status_for` 的 `accounts` 是逐账号数组，
+/// 前端按 `row.uid` 建索引；缺了它结果会全部落进 `undefined` 键（2026-10-31 用户报障：
+/// 账号页打开时卡片不显示签到态、点刷新才出现 —— 刷新走的是以 uid 为键的 `status_map_for`）。
+fn campaign_entry(
+    uid: &str,
+    name: &str,
+    snapshot: &campaign::CampaignsSnapshot,
+    stamped_today: bool,
+) -> Value {
     let summary = summarize_campaigns(&snapshot.items);
     let daily = if summary.claimable_amount > 0 {
         summary.claimable_amount
@@ -181,6 +190,8 @@ fn campaign_entry(snapshot: &campaign::CampaignsSnapshot, stamped_today: bool) -
         "NONE"
     };
     json!({
+        "uid": uid,
+        "name": name,
         "ok": true,
         "todayCheckedIn": summary.claimed,
         "dailyCredit": daily,
@@ -223,7 +234,12 @@ pub async fn status_for(region: QoderRegion) -> Value {
         let stamped_today = account::checkin_stamp_day(account) == Some(store::today().as_str());
         let snapshot = campaign::fetch_campaigns(region, &account.uid, access).await;
         if snapshot.ok {
-            rows.push(campaign_entry(&snapshot, stamped_today));
+            rows.push(campaign_entry(
+                &account.uid,
+                &name,
+                &snapshot,
+                stamped_today,
+            ));
             continue;
         }
         if snapshot.available {
@@ -477,6 +493,10 @@ pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
             .get(uid.as_str())
             .and_then(|account| account::checkin_stamp_day(account))
             .is_some_and(|day| day == today);
+        let name = by_uid
+            .get(uid.as_str())
+            .map(|account| account::display_name(account))
+            .unwrap_or_default();
         let permit = semaphore.clone();
         tasks.push(tokio::spawn(async move {
             let Ok(_permit) = permit.acquire_owned().await else {
@@ -493,7 +513,8 @@ pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
             // 「卡片上的今日状态」给出不同答案。
             let snapshot = campaign::fetch_campaigns(region, &uid, &access).await;
             if snapshot.ok {
-                return (uid, campaign_entry(&snapshot, stamped));
+                let entry = campaign_entry(&uid, &name, &snapshot, stamped);
+                return (uid, entry);
             }
             if snapshot.available {
                 return (
@@ -763,18 +784,32 @@ mod tests {
     }
 
     /// 状态投影：`todayCheckedIn` 只认上游 `claimStatus`；没签时 `todayCredit` 是 null。
+    ///
+    /// ★ 每条投影都必须带 `uid` / `name`：`status_for` 的 `accounts` 是逐账号数组，
+    /// 前端按 `row.uid` 建索引。缺了它，成功行会被挂到 `undefined` 键上、卡片显示
+    /// 「凭据可用」（2026-10-31 报障的实际形态）。可证伪：删掉 `campaign_entry` 里的
+    /// `"uid"` ⇒ 第一条断言红。
     #[test]
     fn campaign_entry_reports_checked_in_from_upstream_status_only() {
         let claimed = campaign_entry(
+            "uid-1",
+            "账号甲",
             &snapshot(vec![campaign_item("CLAIMED", 100, "CREDITS")]),
             false,
         );
+        assert_eq!(
+            claimed["uid"], "uid-1",
+            "成功行必须带 uid（前端按它建索引）"
+        );
+        assert_eq!(claimed["name"], "账号甲", "行要能自己说清是哪个账号");
         assert_eq!(claimed["todayCheckedIn"], Value::Bool(true));
         assert_eq!(claimed["todayCredit"], 100);
         assert_eq!(claimed["dailyCredit"], 100, "已签时今日可得退回已领额度");
         assert_eq!(claimed["status"], "CLAIMED");
 
         let pending = campaign_entry(
+            "uid-1",
+            "账号甲",
             &snapshot(vec![campaign_item("CLAIMABLE", 100, "CREDITS")]),
             false,
         );
@@ -790,6 +825,8 @@ mod tests {
 
         // 本地盖章**不是**判据：盖章了但上游没 CLAIMED ⇒ 仍然算没签。
         let stamped_only = campaign_entry(
+            "uid-1",
+            "账号甲",
             &snapshot(vec![campaign_item("CLAIMABLE", 100, "CREDITS")]),
             true,
         );
