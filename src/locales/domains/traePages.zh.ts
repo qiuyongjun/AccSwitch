@@ -23,6 +23,9 @@ export const zh = {
   "trae.page.accounts.actionDone": "{label}完成",
   "trae.page.accounts.actionFailed": "{label}失败",
   "trae.page.accounts.actionSwitch": "切换{line}账号",
+  "trae.page.accounts.switchLoading": "正在切换{line}账号…",
+  "trae.page.accounts.switchLoadingAuto": "写完后会重新打开 {line}（运行中的会先关闭）",
+  "trae.page.accounts.switchLoadingManual": "{line} 不会被重启",
   "trae.page.accounts.actionSaveLogin": "保存登录态",
   // 保存的目标只能是「该账号此刻登录着的程序位」；一个都没有时如实报错，不静默跳过。
   "trae.page.accounts.saveLoginNoProgram": "该账号当前没有登录在任何 Trae 客户端上，无法保存登录态",

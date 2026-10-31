@@ -157,7 +157,10 @@ fn component_file_names() -> &'static [&'static str] {
 ///
 /// ⚠️ 这是 **best-effort 探测**：探测不到就返回 `None`（不猜、不回落），
 /// 上层据此走「不发机器头」的派生分支 —— 与官方「没有原生身份时不冒充」一致。
-fn desktop_install_dir(region: QoderRegion) -> Option<PathBuf> {
+///
+/// ★ 2026-10-31：改为 `pub(crate)`，供 [`desktop_exe`]（切换账号后自动重开客户端）复用。
+/// 两条用途共用**同一份**安装目录探测，避免「身份桥找得到、重开却找不到」这种分裂。
+pub(crate) fn desktop_install_dir(region: QoderRegion) -> Option<PathBuf> {
     let base = local_appdata()?;
     for name in launcher_dir_names(region) {
         for launcher in [format!("{name} Launcher"), "Launcher".to_string()] {

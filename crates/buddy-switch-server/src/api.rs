@@ -7098,7 +7098,8 @@ async fn api_qoder_program_status(RawQuery(query): RawQuery) -> Response {
 
 /// POST /api/qoder/accounts/switch —— 切换账号（把凭据写回指定程序位的登录态）。
 ///
-/// ⚠️ 写客户端文件（与 `switch_account` 同级）：客户端在跑时被守卫拒绝，失败自动还原备份。
+/// ⚠️ 写客户端文件（与 `switch_account` 同级）：`restart` 为假时客户端在跑会被守卫拒绝，
+/// 失败自动还原备份；为真时先关客户端、写完再重开（webui 无进度事件，靠请求返回说话）。
 async fn api_qoder_switch_account(Json(body): Json<Value>) -> Response {
     let region = match qoder_region_from_body(&body) {
         Ok(region) => region,
@@ -7120,8 +7121,14 @@ async fn api_qoder_switch_account(Json(body): Json<Value>) -> Response {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let options = qoder::switch::SwitchOptions {
+        restart: body
+            .get("restart")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    };
     match tokio::task::spawn_blocking(move || {
-        qoder::switch::switch_account_for(region, program, &uid)
+        qoder::switch::switch_account_with(region, program, &uid, options, None)
     })
     .await
     {

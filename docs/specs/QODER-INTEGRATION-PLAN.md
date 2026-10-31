@@ -271,3 +271,34 @@ demo 拦截为预期）/ Esc 关抽屉 / **添加抽屉**（本机导入 + PAT�
 - **真实账号端到端**：本机无 Qoder 账号 ⇒ 上游链路（COSY 签名 / 信封 SSE）只有协议级单测 + mock 上游 e2e，**首次真机跑通前不要把「网关可用」当作已有事实**（`api.rs` 里两条 `#[ignore]` 探针位）。
 - 用量 / 会话两个目的地仍是诚实空态（数据源不存在）。
 - `open_data_dir` 对 Qoder 作用域仍**可诊断拒绝**（未实现该平台的数据目录定位）⇒ 网关页刻意不渲染该按钮。
+
+---
+
+## 8. 进度 · 第四轮（2026-10-31 · **切换账号对齐 WorkBuddy 手感**）
+
+> 决策依据：[`DECISIONS.md` D54](DECISIONS.md)。用户报障原话：「trae 和 qoder 切换账号功能，
+> 目前可用性和易用性完全不如 workbuddy」。
+
+**改了什么（只动换号链路，不动账号库 / 网关 / 签到）**：
+
+| 层 | 改动 | 落点 |
+|:--|:--|:--|
+| `process.rs` | 新增跨平台 `close_image`（两级：`WM_CLOSE`/SIGTERM → 强杀）· `launch_exe` · `wait_image_gone` | 非 WB 客户端的换号前置，此前只有 WB 有这套能力 |
+| `qoder/switch.rs` | `SwitchOptions { restart }` + `switch_account_with(.., progress)`；顺序固化为**先校验 → 再关 → 写 → 校验 →（可选）重开**；新增 `desktop_exe`（复用 `native::desktop_install_dir`） | 写失败时把客户端拉回来；启动失败**不判**整体失败（登录态已生效） |
+| `qoder/native.rs` | `desktop_install_dir` 由私有改 `pub(crate)` | 重开客户端与原生身份桥共用同一份安装目录探测，避免两套结论 |
+| 两宿主 | `qoder_switch_account(.., restart)` + 事件 `qoder-switch-progress`；webui `POST /api/qoder/accounts/switch` 读 `restart` | 与 Trae 的 `trae-switch-progress` 同形 |
+| `QoderAccountsPage` | 简单确认弹窗 → **统一重启确认框**（`RestartConfirmDialog`，CLI 走例外分支）+ 进度 toast + `relaunchError` 如实转述 | §3.15.3「不要各写一套」 |
+| `qoder-account-card` | 桌面版**运行中不再置灰**，tip 改为「切换时会自动关闭并重开」；CLI 运行中仍置灰 | 这是「点了不让切」的直接来源 |
+| `TraeAccountsPage` | 接上后端本就有的 `trae-switch-progress`，loading toast 逐步显示 | 后端语义未变，只补可见性 |
+
+**刻意没做**：
+
+- **不替 CLI 杀进程**：CLI 是用户终端里的会话，杀掉等于丢掉半截交互；CLI 的守卫语义保持
+  `fail-closed`（`restart` 对它静默无效 —— 比「假装重开」诚实）。
+- **不为 Qoder 造「会话迁移」**：Qoder 没有 WB 那种会话库，那是生态差异，不是欠账。
+- **不猜客户端路径**：`desktop_exe` 只认 launcher `state.ini` 与安装目录里**唯一**的
+  `*qoder*.exe`；找不到就如实说「请手动打开（切换已生效）」，不弹安装向导。
+
+**验证**：`cargo test -p buddy-switch-core --lib qoder` 166/0（新增 3 条：守卫给出下一步、
+`restart` 也先校验账号、进度回调阶段）；`cargo check --workspace --all-targets` 绿；
+`npm run build` 绿（`tsc` + api 契约 + scope 门禁 + vite）。

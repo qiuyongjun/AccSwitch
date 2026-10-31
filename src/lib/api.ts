@@ -3414,6 +3414,12 @@ export interface QoderSwitchResult {
   uid: string;
   backupPath: string | null;
   written: { path: string; form: string; tokenMasked: string };
+  /** 这次切换是否**关掉了**客户端（`restart` 且它本来在跑）。 */
+  closedClient?: boolean;
+  /** 是否已**重新拉起**客户端（`restart` 且启动成功）。 */
+  relaunched?: boolean;
+  /** 启动失败的原因（**切换本身已成功**，只是客户端没起来）。 */
+  relaunchError?: string | null;
 }
 
 /** 程序位状态（只读）。 */
@@ -3424,14 +3430,21 @@ export function qoderProgramStatus(scope: Scope): Promise<QoderProgramsView> {
 /**
  * 切换账号：把该账号的凭据**写回**指定程序位的登录态。
  *
- * ⚠️ 这是写客户端文件的动作：客户端在跑时后端会拒绝（进程守卫），写后校验失败会自动还原备份。
+ * ## `restart`（2026-10-31 · 对齐 WorkBuddy 的一键换号）
+ *
+ * - `true`：客户端在跑时**先关、写完再重开** —— 与 WorkBuddy 切换同体验；
+ * - `false`：保留进程守卫（客户端在跑即拒绝），需要用户先自己退出客户端。
+ *
+ * ⚠️ 写客户端文件 + 可能关闭客户端 ⇒ 调用前必须已拿到用户的显式确认
+ * （统一重启确认框），不要把 `restart` 默认成 `true` 直接调。
  */
 export function qoderSwitchAccount(
   scope: Scope,
   program: string,
   uid: string,
+  restart = false,
 ): Promise<QoderSwitchResult> {
-  return call<QoderSwitchResult>("qoder_switch_account", { scope, program, uid });
+  return call<QoderSwitchResult>("qoder_switch_account", { scope, program, uid, restart });
 }
 
 /** 改自定义分组（与备注同构；`null` / 空串 = 未分组）。 */

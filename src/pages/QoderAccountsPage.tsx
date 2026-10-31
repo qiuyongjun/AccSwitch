@@ -41,6 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
   KeyRound,
@@ -72,6 +73,7 @@ import { AddAccountDrawer } from "@/components/add-account-drawer";
 import { ExportAccountsDialog } from "@/components/export-accounts-dialog";
 import { ImportAccountsDialog } from "@/components/import-accounts-dialog";
 import { RecycleBinSheet } from "@/components/recycle-bin-sheet";
+import { RestartConfirmDialog } from "@/components/restart-confirm-dialog";
 import {
   QoderAccountCard,
   QoderForeignBadge,
@@ -748,21 +750,30 @@ function QoderAccountsPanel({
   /**
    * 抽屉里的「切换到此账号」目标（原型 :3480-3486）。
    *
-   * `available` 的判据 = **该程序位已就绪且客户端没在跑**：
-   * - 四态不是 `ready` ⇒ 没装 / 没登录 / 读不出来，切换无处可写；
-   * - 客户端在跑 ⇒ 后端会拒绝（退出时内存态会覆盖），界面提前置灰。
+   * ## 可用性判据（2026-10-31 改为与 WorkBuddy 同档）
+   *
+   * - 四态不是 `ready` ⇒ 没装 / 没登录 / 读不出来，切换无处可写，禁用；
+   * - **桌面版在运行**不再禁用：确认框里勾选「自动重开」后，后端会先关掉客户端、
+   *   写完再拉起（此前这里直接置灰，用户必须自己去退出客户端 —— 那正是
+   *   「Qoder 切换不如 WorkBuddy 好用」的主因）；
+   * - **CLI 在运行**仍然禁用：那是用户自己终端里的会话，本工具不替用户杀掉它
+   *   （后端的守卫语义对 CLI 保持不变）。
+   *
    * `current` 为真时不再重复切换（只读高亮）。
    */
   const switchTargetsFor = useCallback(
     (account: QoderAccountView): DetailSwitchTarget[] =>
-      (programs ?? []).map((program) => ({
-        key: program.id,
-        label: program.label,
-        current: program.currentUid === account.uid,
-        available: program.state === "ready" && !program.running,
-        busy: switchBusy,
-        onSwitch: () => setSwitchTarget({ account, program }),
-      })),
+      (programs ?? []).map((program) => {
+        const cliRunning = program.id === "cli" && program.running;
+        return {
+          key: program.id,
+          label: program.label,
+          current: program.currentUid === account.uid,
+          available: program.state === "ready" && !cliRunning,
+          busy: switchBusy,
+          onSwitch: () => setSwitchTarget({ account, program }),
+        };
+      }),
     [programs, switchBusy],
   );
 
@@ -788,26 +799,61 @@ function QoderAccountsPanel({
   /**
    * 执行切换（把凭据写回指定程序位的登录态）。
    *
-   * ⚠️ 后端会在客户端运行时拒绝、写后校验失败时自动还原备份 —— 前端**如实转述**后端的话，
-   * 不要自己编「切换成功」。
+   * ## 与 WorkBuddy 对齐的三件事（2026-10-31）
+   *
+   * 1. **一键**：`restart=true` 时后端会自动关闭客户端、写完再拉起 —— 用户不再需要
+   *    「先自己去退出 Qoder」；
+   * 2. **有进度**：关闭客户端可能等好几秒，这里订阅后端的 `qoder-switch-progress`
+   *    把每一步写进 loading toast（webui 没有事件通道，如实只显示一条「正在切换」）；
+   * 3. **如实转述**：后端会在写后校验失败时还原备份、在启动失败时把原因放进
+   *    `relaunchError` —— 前端不自己编「切换成功」，也不把「客户端没起来」说成失败
+   *    （登录态确实已经换好了）。
    */
-  async function confirmSwitch() {
-    if (!switchTarget || switchBusy) return;
-    const { account, program } = switchTarget;
+  async function doSwitch(account: QoderAccountView, program: QoderProgramStatus, restart: boolean) {
+    if (switchBusy) return;
+    const name = qoderAccountName(account);
     setSwitchBusy(true);
+    const toastId = toast.loading(t("qoder.page.accounts.switch.loading", { name }), {
+      description: restart
+        ? t("qoder.page.accounts.switch.loadingAuto", { program: program.label })
+        : t("qoder.page.accounts.switch.loadingManual", { program: program.label }),
+    });
+
+    /* 进度事件（桌面端）：失败不影响主流程，切换本身的返回才是事实来源。 */
+    let unlisten: (() => void) | undefined;
+    if (!api.isWebui()) {
+      try {
+        unlisten = await listen<{ message: string }>("qoder-switch-progress", (event) => {
+          toast.loading(t("qoder.page.accounts.switch.loading", { name }), {
+            id: toastId,
+            description: event.payload.message,
+          });
+        });
+      } catch {
+        /* 事件通道不可用（非 Tauri 环境）⇒ 只保留初始那条 loading。 */
+      }
+    }
+
     try {
-      const result = await api.qoderSwitchAccount(scope, program.id, account.uid);
-      toast.success(t("qoder.page.accounts.switch.done", { name: qoderAccountName(account) }), {
-        description: result.backupPath
+      const result = await api.qoderSwitchAccount(scope, program.id, account.uid, restart);
+      const description = result.relaunchError
+        ? t("qoder.page.accounts.switch.relaunchFailed", { error: result.relaunchError })
+        : result.backupPath
           ? t("qoder.page.accounts.switch.backup", { path: result.backupPath })
-          : undefined,
+          : undefined;
+      toast.success(t("qoder.page.accounts.switch.done", { name }), {
+        id: toastId,
+        description,
       });
-      setSwitchTarget(null);
       /* 切换改的是**客户端登录态**⇒ 必须重取程序位状态（「当前登录」徽章才会跟着动）。 */
       await loadEnrichment();
     } catch (e) {
-      toast.error(api.asError(e));
+      toast.error(t("qoder.page.accounts.switch.failed"), {
+        id: toastId,
+        description: api.asError(e),
+      });
     } finally {
+      unlisten?.();
       setSwitchBusy(false);
     }
   }
@@ -2174,31 +2220,22 @@ function QoderAccountsPanel({
         onRestored={() => void reload()}
       />
 
-      {/* ── 切换确认（**写客户端登录态**，与 WB 的切换同级 ⇒ 必须先确认） ── */}
-      <Dialog open={switchTarget !== null} onOpenChange={(open) => !open && setSwitchTarget(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("qoder.page.accounts.switch.title")}</DialogTitle>
-            <DialogDescription>
-              {switchTarget
-                ? t("qoder.page.accounts.switch.desc", {
-                    name: qoderAccountName(switchTarget.account),
-                    program: switchTarget.program.label,
-                  })
-                : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSwitchTarget(null)} disabled={switchBusy}>
-              {t("qoder.page.accounts.switch.cancel")}
-            </Button>
-            <Button onClick={() => void confirmSwitch()} disabled={switchBusy}>
-              {switchBusy ? <Loader2 className="size-4 animate-spin" /> : null}
-              {t("qoder.page.accounts.switch.confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ── 切换确认：走**统一重启确认框**（§3.15.3「不要各写一套」） ──
+          与 WorkBuddy / Trae 同一条流程：桌面版告知未保存文件风险 + 默认勾选「自动重开」，
+          CLI 例外（不重开、只提示会话会中断）。确认后带着 `restart` 调后端。 */}
+      <RestartConfirmDialog
+        open={switchTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setSwitchTarget(null);
+        }}
+        clientLabel={switchTarget?.program.label ?? ""}
+        isCli={switchTarget?.program.id === "cli"}
+        onConfirm={(restart) => {
+          const target = switchTarget;
+          setSwitchTarget(null);
+          if (target) void doSwitch(target.account, target.program, restart);
+        }}
+      />
 
       {/* ── 账号详情抽屉（备注编辑在这里；操作区 = 刷新 / 签到 / 导出 / 删除） ── */}
       <AccountDetailDrawer

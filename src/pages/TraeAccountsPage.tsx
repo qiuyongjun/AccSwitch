@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
   CircleSlash,
@@ -761,6 +762,18 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * `restart`（确认框的「自动重开」）映射到后端 `launch`：`true` ⇒ 切换后拉起客户端；
    * `false` ⇒ 只换登录态、不拉起（与 WorkBuddy 的 `restart` 同一语义）。
    *
+   * ## ★ 为什么要单独写一遍，而不是复用 {@link run}（2026-10-31）
+   *
+   * 切换是**唯一**会「关掉编辑器 → 复制/恢复整份登录态 → 再打开」的动作：慢的时候
+   * 十几秒（多账号快照动辄上千文件）。原先走 `run` 只有一个聊胜于无的忙态 ——
+   * 用户看不到「现在卡在关客户端还是卡在恢复」，于是反复点击。
+   * 后端本来就是**逐步**回调的（`trae_switch_progress` 事件，见 `trae_switch_account`），
+   * 这里把它接上：loading toast 的副标题直接显示后端当前那一步。
+   *
+   * 失败仍如实转述后端给出的整句原因（`api.traeSwitchAccount` 抛的 error 已是
+   * 「预检查失败 / 关不掉客户端 / 快照缺失」这类可操作的话），并在 error 之后
+   * **不带**「已更新」之类的成功尾巴。
+   *
    * ⚠️ `programLabel` 由调用方从**程序位自己的展示名**传进来（卡片/抽屉读的是后端
    * `TraeProgramStatus.label`），**不得**在这里用 `traeVariantLabel(programVariant)` 反推：
    * 变体 `trae_cn` 同时属于遗留 `trae_code` 与合并版 `trae`（issue #20，两者共用变体），
@@ -772,12 +785,56 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     programLabel: string,
     restart: boolean,
   ) {
-    await run(
-      `switch-${userId}@${programVariant}`,
-      "trae.page.accounts.actionSwitch",
-      () => api.traeSwitchAccount({ userId, launch: restart, variant: programVariant }),
-      { line: programLabel },
-    );
+    const key = `switch-${userId}@${programVariant}`;
+    if (busy !== null) return;
+    setBusy(key);
+    const label = t("trae.page.accounts.actionSwitch", { line: programLabel });
+    const toastId = toast.loading(t("trae.page.accounts.switchLoading", { line: programLabel }), {
+      description: restart
+        ? t("trae.page.accounts.switchLoadingAuto", { line: programLabel })
+        : t("trae.page.accounts.switchLoadingManual", { line: programLabel }),
+    });
+
+    /* 进度事件（桌面端）：通道不可用不影响主流程 —— 返回的整份报告才是事实来源。 */
+    let unlisten: (() => void) | undefined;
+    if (!api.isWebui()) {
+      try {
+        unlisten = await listen<{ message: string }>("trae-switch-progress", (event) => {
+          const message = event.payload?.message;
+          if (!message) return;
+          toast.loading(t("trae.page.accounts.switchLoading", { line: programLabel }), {
+            id: toastId,
+            description: message,
+          });
+        });
+      } catch {
+        /* 非 Tauri 环境：保留初始那条 loading。 */
+      }
+    }
+
+    try {
+      const outcome = await api.traeSwitchAccount({
+        userId,
+        launch: restart,
+        variant: programVariant,
+      });
+      /* 成功时把**最后一步**（「已启动客户端」/「切换完成」）留在提示里 ——
+         那正是用户最想确认的一句；没有步骤时退回程序位名字。 */
+      const last = outcome.steps?.[outcome.steps.length - 1];
+      toast.success(t("trae.page.accounts.actionDone", { label }), {
+        id: toastId,
+        description: last?.message ?? programLabel,
+      });
+      await loadAll();
+    } catch (e) {
+      toast.error(t("trae.page.accounts.actionFailed", { label }), {
+        id: toastId,
+        description: api.asError(e),
+      });
+    } finally {
+      unlisten?.();
+      setBusy(null);
+    }
   }
 
   /**

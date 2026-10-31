@@ -30,7 +30,7 @@
 | 新增一个平台 / 产品线 | [`specs/P5-ARCH.md`](specs/P5-ARCH.md) + [`specs/UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) §11 |
 | 改账号库的读写 / 续期回写 / 软删除 | [`specs/ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md)（**写路径必须进事务**） |
 | 用词拿不准（region / scope / 作用域…） | [`specs/VOCABULARY.md`](specs/VOCABULARY.md)（**冻结，不许自创**） |
-| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D51） |
+| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D54） |
 | 加新交互（先原型、后代码） | [`prototype/`](prototype/) → `index.html` 可直接打开 |
 | 查这版改了什么 | [`releases/`](releases/) |
 
@@ -45,7 +45,7 @@
 | 文档 | 内容 | 状态 |
 |:--|:--|:--|
 | [`PLAN.md`](specs/PLAN.md) | 架构与交互重构总方案 v2.8（P0–P16 分期表、交互规范、Playbook） | 现行 · P0–P16 已落地 |
-| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D51，逐条有结论 | 现行 · 已拍板 |
+| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D54，逐条有结论 | 现行 · 已拍板 |
 | [`VOCABULARY.md`](specs/VOCABULARY.md) | 词汇表（P0 冻结）。**新代码只许用「新词汇」** | 现行 · 冻结 |
 | [`COVERAGE-REPORT.md`](specs/COVERAGE-REPORT.md) | 原型 112 条行为 vs 真实应用的覆盖度实测 | 现行 · 随原型更新 |
 | [`ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md) | 账号库写事务：并发丢更新 / 跨进程覆盖 / 容错读抹库的收敛与使用纪律 | 现行 · 2026-10-28 落地 |

@@ -722,14 +722,19 @@ export function QoderAccountCard({
             {programs.map((program) => {
               const active = program.currentUid === account.uid;
               /* 三态：当前（✓） / 可切换（可点） / 未就绪（禁用 + 原因 tooltip）。
-                 ★ 客户端在跑时**不可切换** —— 后端会拒绝（进程守卫），界面提前置灰并说明，
-                 而不是让用户点了才失败。
+                 ★ 2026-10-31 起**桌面版在运行也允许切换**：确认框里勾选「自动重开」后，
+                 后端会先关客户端、写完再拉起（与 WorkBuddy 同档的一键体验）。
+                 CLI 在运行仍然禁用 —— 那是用户自己终端里的会话，不替用户杀掉它
+                 （后端对 CLI 的守卫语义不变）。
                  短名与 WB / Trae 页脚同一口径；完整展示名留在 tooltip / 无障碍名里。 */
-              const ready = program.state === "ready" && !program.running;
+              const cliRunning = program.id === "cli" && program.running;
+              const ready = program.state === "ready" && !cliRunning;
               const short = programShortLabel(t, program);
-              const hint = program.running
+              const hint = cliRunning
                 ? t("qoder.page.accounts.program.runningHint")
-                : stateLabel(t, program.state);
+                : program.running
+                  ? t("qoder.page.accounts.program.runningHintAuto")
+                  : stateLabel(t, program.state);
               const title = `${program.label} · ${hint}`;
               /* 当前态不是按钮，而是与 WB / Trae 共用的只读胶囊（`ProgramSlotChip`）。
                  tip 与两平台同句（「{程序位} 当前账号」）：胶囊上只有短名「桌面」，

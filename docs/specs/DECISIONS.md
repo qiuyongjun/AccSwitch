@@ -1,4 +1,4 @@
-# 决策清单（D1–D50）—— **✅ 全部已确认**
+# 决策清单（D1–D54）—— **✅ 全部已确认**
 
 > ⚠️ **另有一组决策只在 `UNIFIED-GATEWAY-ARCH.md` §10（P16 统一入口，8 条，AI 定稿）**，
 > 尚未并入本文件编号；索引见本文 **K 段**。
@@ -969,6 +969,34 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
   `jwt.valid` / `jwt.warn` / `jwt.expired` / `jwt.validTip`）。
 - **选反方案的代价**：保留倒计时标签 ⇒ 继续与 WB / Qoder 分叉；改成「临期」无天数词
   仍是一枚 Trae 独有的状态标签，信息与下行日期重复。
+
+### D54 换号手感对齐 WorkBuddy：**关闭/重开客户端由工具代劳**，但守卫语义不降级 —— ✅ **已落地（2026-10-31）**
+
+**结论**：Qoder 的「切换账号」新增 `restart` 选项（默认 `false`，界面默认勾选 true）：
+
+- `restart = true`（桌面版）：**先关客户端 → 写回 → 校验 → 重新拉起**，与 WorkBuddy 一键换号同体验；
+- `restart = false`：保持原有 fail-closed 进程守卫（客户端在跑即拒绝写入）；
+- **CLI 程序位不认这个开关**：那是用户终端里的会话，本工具不替用户杀掉它（守卫照旧）。
+  桌面版在运行**不再把程序位置灰**，改由确认框告知「会被关闭并在写完后打开」。
+
+Trae 侧不新增后端语义（它早已自动关闭 + 可选 `launch`），本轮只补**进度可见性**：
+接上后端本就有的 `trae-switch-progress` 事件，把「关客户端 / 恢复快照 / 启动」逐步写进
+loading toast —— 之前整个过程只有一枚忙态，慢的时候（上千文件）用户以为卡死。
+
+**理由**：同一件事（换客户端登录态）在 WB 是一键、在 Qoder 是「自己先退出客户端、切完
+自己再打开」，差两档；这不是平台限制，纯粹是少写了一段「关/开」。**安全纪律一条没减**：
+- 关客户端走两级（`WM_CLOSE` → 强杀），保证 Electron 正常落盘（强杀会产出坏快照/坏登录态）；
+- 关之前**先把账号、区域、令牌全部校验完**（否则会出现「编辑器被关了，然后提示账号不存在」）；
+- 写入/校验失败时**把客户端拉回来**并如实说明；启动失败**不判整体失败**（登录态已生效）；
+- 顺序固化在 `qoder::switch::switch_account_impl`，单测钉住「校验在关闭之前」。
+
+- **定了会动什么**：`qoder/switch.rs`（`SwitchOptions` / `switch_account_with` / `desktop_exe`）、
+  `qoder/native.rs`（`desktop_install_dir` 开放给重开复用）、`process.rs`（新增跨平台
+  `close_image` / `launch_exe` / `wait_image_gone`）、两宿主命令（`restart` + `qoder-switch-progress`）、
+  `QoderAccountsPage`（统一重启确认框 + 进度 toast）、`qoder-account-card`（运行中不再置灰）、
+  `TraeAccountsPage`（进度 toast）、`qoderPages.*` / `traePages.*` 词条。
+- **选反方案的代价**：维持「请先退出客户端」⇒ Qoder 的换号永远是三步骤，且用户不知道自己
+  该在什么时候退、退完要不要再开；只加文案不加关闭能力，等于把成本留在用户身上。
 
 ---
 

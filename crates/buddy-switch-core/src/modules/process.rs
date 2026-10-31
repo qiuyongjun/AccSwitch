@@ -1767,6 +1767,143 @@ pub fn wait_process_gone_for(region: Region, timeout_secs: f64) -> bool {
     !is_workbuddy_running_for(region)
 }
 
+// ---------------------------------------------------------------------------
+// 通用「按映像名关闭 / 按路径启动」—— 非 WorkBuddy 客户端的换号前置
+// ---------------------------------------------------------------------------
+
+/// 轮询等待某个**映像名**的进程全部退出（与 [`wait_process_gone_for`] 同一节奏）。
+///
+/// `image` 是完整映像名（`Qoder CN.exe`）；空名 ⇒ 判不出来 ⇒ 保守返回 `false`
+/// （调用方据此报「关不掉」，而不是假装关掉了）。
+pub fn wait_image_gone(image: &str, timeout_secs: f64) -> bool {
+    if image.trim().is_empty() {
+        return false;
+    }
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(0.0));
+    loop {
+        if !is_image_running(image) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// 按**映像名**关闭一个客户端，返回「是否确实关闭过」（本来就没在跑 ⇒ `Ok(false)`）。
+///
+/// ## 为什么是两级（优雅 → 强杀），而不是一上来就 `/F`
+///
+/// 与 [`close_workbuddy_inner`] / `trae::platform::kill_client_inner` 同一条纪律：
+/// `taskkill` **不带** `/F` 等价于向窗口投递 `WM_CLOSE`，Electron 客户端收到后才会
+/// 正常落盘（leveldb / WAL / Cookie 库）。强杀会让这些写入停在内存里，而换号紧接着
+/// 就要去改这些文件 —— 症状是「切换后客户端变成未登录」。
+///
+/// 反过来，**只**优雅关闭也不行：客户端弹着模态框时会吞掉 `WM_CLOSE`，用户看到的是
+/// 「一直转圈最后说关不掉」。因此超时后必须升级为强杀，并在之后**确认进程真的消失**
+/// （Electron 单实例锁不释放，紧接着的启动会被拒 —— 表现为「切换成功但客户端没起来」）。
+///
+/// 非 Windows 分支与 Windows **逐级对称**（SIGTERM ≈ `WM_CLOSE`）。
+pub fn close_image(image: &str, timeout_secs: i64) -> Result<bool, String> {
+    let image = image.trim();
+    if image.is_empty() {
+        return Err("缺少客户端映像名，无法关闭进程".to_string());
+    }
+    if !is_image_running(image) {
+        return Ok(false);
+    }
+    invalidate_process_snapshot();
+    let result = close_image_inner(image, timeout_secs);
+    invalidate_process_snapshot();
+    result
+}
+
+fn close_image_inner(image: &str, timeout_secs: i64) -> Result<bool, String> {
+    // 优雅关闭的预算：给客户端足够时间弹「是否保存」并落盘，但不超过总预算。
+    let graceful = Duration::from_secs(8).min(Duration::from_secs(timeout_secs.max(1) as u64));
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = run_cmd_timeout("taskkill", &["/IM", image], 10);
+        if wait_image_gone(image, graceful.as_secs_f64()) {
+            return Ok(true);
+        }
+        let _ = run_cmd_timeout("taskkill", &["/F", "/IM", image], 10);
+        if wait_image_gone(image, 5.0) {
+            return Ok(true);
+        }
+        return Err(format!(
+            "无法关闭 {image} —— 请手动退出该客户端后重试"
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // macOS / Linux 的进程名不带 `.exe`；`pkill -x` 要求完整进程名匹配。
+        let stem = image.strip_suffix(".exe").unwrap_or(image);
+        let _ = run_cmd_timeout("pkill", &["-x", stem], 10);
+        if wait_image_gone(image, graceful.as_secs_f64()) {
+            return Ok(true);
+        }
+        let _ = run_cmd_timeout("pkill", &["-9", "-x", stem], 10);
+        if wait_image_gone(image, 5.0) {
+            return Ok(true);
+        }
+        Err(format!(
+            "无法关闭 {image} —— 请手动退出该客户端后重试"
+        ))
+    }
+}
+
+/// 启动一个可执行文件（**分离**子进程，不等它退出）。
+///
+/// 只做「拉起来」这一件事：不等待窗口出现、不确认登录成功 —— 调用方拿到的 `Ok`
+/// 只代表进程已 spawn。失败必须如实带**路径**（用户据此判断是「没装」还是「路径错」）。
+///
+/// macOS 的 `.app` 是目录，必须走 `open -a` 才会被 LaunchServices 正常激活。
+pub fn launch_exe(exe: &Path) -> Result<(), String> {
+    if !exe.exists() {
+        return Err(format!(
+            "未找到客户端可执行文件（尝试路径: {}）。请确认客户端已安装，或手动打开一次。",
+            exe.display()
+        ));
+    }
+    // 拉起前后都让展示快照失效：否则程序位胶囊会继续显示「未运行」直到 TTL 到期，
+    // 用户会以为「切换完了客户端没起来」（而它其实正在启动）。
+    invalidate_process_snapshot();
+    let result = launch_exe_inner(exe);
+    invalidate_process_snapshot();
+    result
+}
+
+fn launch_exe_inner(exe: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if exe
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("app"))
+        {
+            let status = cmd_builder("open")
+                .arg("-a")
+                .arg(exe)
+                .status()
+                .map_err(|error| format!("启动客户端失败: {error}（路径: {}）", exe.display()))?;
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("启动客户端失败（路径: {}）", exe.display()))
+            };
+        }
+    }
+    cmd_builder(exe)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("启动客户端失败: {error}（路径: {}）", exe.display()))?;
+    Ok(())
+}
+
 /// 关闭 WorkBuddy（CN）：优雅退出 → 超时后强杀 → 确认进程消失。对照 `close_workbuddy`。
 pub fn close_workbuddy(timeout_secs: i64) -> Result<(), String> {
     close_workbuddy_for(Region::Cn, timeout_secs)

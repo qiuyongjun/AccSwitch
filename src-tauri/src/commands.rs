@@ -4669,22 +4669,42 @@ pub async fn qoder_program_status(scope: String) -> Result<Value, String> {
         .map_err(|error| format!("读取 Qoder 程序位状态失败: {error}"))
 }
 
+/// 进度事件名（前端订阅用，集中定义避免拼写漂移）。
+const QODER_SWITCH_PROGRESS_EVENT: &str = "qoder-switch-progress";
+
 /// POST /api/qoder/accounts/switch —— 切换账号（把凭据写回指定程序位的登录态）。
 ///
-/// ⚠️ 这是**写客户端文件**的动作（本项目里与 `switch_account` 同级）：客户端在跑时会被
-/// 拒绝（`switch::program_running` 守卫），失败自动还原备份。
+/// ## `restart`（2026-10-31 · 对齐 WorkBuddy 的一键换号）
+///
+/// - `true`（界面默认）：客户端在跑时**先关、写完再重开** —— 与 WorkBuddy 切换同体验；
+/// - `false`：保留旧的进程守卫（客户端在跑即拒绝）。
+///
+/// ★ 这是**写客户端文件**的动作且会关闭客户端，因此界面必须先弹统一重启确认框
+/// （`RestartConfirmDialog`）拿到用户的显式确认，再带着 `restart` 调进来 ——
+/// 默认值取 `false`（保守），绝不让「没确认的调用」悄悄关掉用户的编辑器。
+///
+/// ★ 进度走 `qoder-switch-progress`（与 Trae 的 `trae-switch-progress` 同形）：
+/// 关闭客户端可能等好几秒，没有进度用户会以为点了没反应。
 #[tauri::command]
 pub async fn qoder_switch_account(
+    app: tauri::AppHandle,
     scope: String,
     program: String,
     uid: String,
+    restart: Option<bool>,
 ) -> Result<Value, String> {
     let scope = resolve_scope_param(Some(&scope))?;
     let region = require_qoder_region(scope)?;
     let program = qoder::switch::QoderProgram::parse(&program)
         .ok_or_else(|| format!("未知的 Qoder 程序位: {program}"))?;
+    let options = qoder::switch::SwitchOptions {
+        restart: restart.unwrap_or(false),
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        qoder::switch::switch_account_for(region, program, &uid)
+        let progress = |message: &str| {
+            let _ = app.emit(QODER_SWITCH_PROGRESS_EVENT, json!({ "message": message }));
+        };
+        qoder::switch::switch_account_with(region, program, &uid, options, Some(&progress))
     })
     .await
     .map_err(|error| format!("切换 Qoder 账号失败: {error}"))?

@@ -180,31 +180,84 @@ where
 
 /// 切换：把 `uid` 这条账号的凭据**写回**指定程序位的登录态。
 ///
-/// 返回 `{ ok, program, region, uid, backupPath, written }`：
+/// 返回 `{ ok, program, region, uid, backupPath, written, closedClient, relaunched, relaunchError }`：
 /// - `backupPath`：写前备份的路径（无既有文件时为 `null`）；
-/// - `written`：`{ path, form, tokenMasked }` —— 写入目标、形态与**掩码**令牌。
+/// - `written`：`{ path, form, tokenMasked }` —— 写入目标、形态与**掩码**令牌；
+/// - `closedClient` / `relaunched`：这次切换**是否关过 / 重开过**客户端（仅 `restart` 路径可能为真）。
 ///
 /// ★ **返回值不含任何令牌明文**：需要展示时只给 [`store::mask`] 的掩码
 /// （本项目用户经常贴截图报障）。
 ///
 /// ## 顺序（不可调换）
 ///
-/// ① 进程守卫 → ② 查账号 → ③ 区域 fail-closed → ④ 写回（含备份）→ ⑤ 写后校验 →
-/// ⑥ 不一致则回滚。守卫必须在写之前：见模块头第 2 条。
+/// ① 参数与账号校验 → ② 进程守卫（`restart` 时改为「关掉」）→ ③ 写回（含备份）→
+/// ④ 写后校验 → ⑤ 不一致则回滚 → ⑥（可选）重开客户端。
+///
+/// ★ 本函数是 `restart = false` 的**保守形态**（客户端在跑就拒绝）。要一键换号请用
+/// [`switch_account_with`] 传 `SwitchOptions { restart: true }`。
 pub fn switch_account_for(
     region: QoderRegion,
     program: QoderProgram,
     uid: &str,
 ) -> Result<Value, String> {
-    switch_account_for_with(
+    switch_account_with(region, program, uid, SwitchOptions::default(), None)
+}
+
+/// 一次切换的选项（与 WorkBuddy / Trae 的 `restart` **同一语义**）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SwitchOptions {
+    /// `true` ⇒ 客户端在跑时**自动关闭 → 写完 → 自动重开**（一键换号，与 WorkBuddy 同体验）。
+    /// `false` ⇒ 客户端在跑时**拒绝写入**（旧的进程守卫语义，保持 fail-closed）。
+    ///
+    /// ★ 只有**桌面版**认这个开关：CLI 是用户自己终端里的会话，本工具不替用户杀它；
+    /// 传 `true` 给 CLI 会被静默忽略（守卫照旧生效）—— 「忽略」比「假装重开」诚实。
+    pub restart: bool,
+}
+
+/// 切换进度回调（宿主注入：桌面端转成事件、webui 无进度即传 `None`）。
+pub type ProgressFn<'a> = &'a dyn Fn(&str);
+
+/// [`switch_account_for`] 的完整形态：带选项与进度回调（生产路径就这一个）。
+///
+/// ## 与旧版本的关键差异（2026-10-31 · 可用性对齐 WorkBuddy）
+///
+/// 旧版把「客户端在跑」当成**用户必须先手动处理**的错误：界面把程序位置灰、后端拒绝执行。
+/// 用户的实际感受是「点了不让切，得自己去关客户端，切完还得自己再打开」—— 而 WorkBuddy
+/// 侧是一键（关 → 写 → 开）。同一件事在两个平台体验差两档，因此这里补上**关闭与重开**，
+/// 但**不降级安全语义**：
+///
+/// - `restart = false`（默认）：行为与旧版**逐字一致**，守卫仍在（写客户端正在使用的文件
+///   会被它退出时的内存态覆盖）；
+/// - `restart = true`：先关（两级：优雅 → 强杀，见 [`crate::modules::process::close_image`]），
+///   写完确实通过校验后再拉起；**任何一步失败都把客户端恢复到「开着」的状态**
+///   （否则用户会遇到「切换失败了，客户端还被关着」这种更坏的结果）。
+///
+/// ## 顺序（不可调换）
+///
+/// ① 参数与账号校验（**全部前置**——先关客户端再发现「账号不存在」是最差的顺序）→
+/// ②（可选）关闭客户端 → ③ 写回（含备份）→ ④ 写后校验 → ⑤ 不一致则回滚 →
+/// ⑥（可选）重新拉起客户端。
+///
+/// 校验链路留在写入之前，是为了让「关掉客户端」这个**有破坏性的动作**只在真的能写时发生。
+pub fn switch_account_with(
+    region: QoderRegion,
+    program: QoderProgram,
+    uid: &str,
+    options: SwitchOptions,
+    progress: Option<ProgressFn<'_>>,
+) -> Result<Value, String> {
+    switch_account_impl(
         region,
         program,
         uid,
+        options,
+        progress,
         crate::modules::process::is_image_running,
     )
 }
 
 /// [`switch_account_for`] 的可注入版本（单测用，注入进程探测避免依赖真机状态）。
+#[cfg(test)]
 fn switch_account_for_with<F>(
     region: QoderRegion,
     program: QoderProgram,
@@ -214,28 +267,47 @@ fn switch_account_for_with<F>(
 where
     F: FnMut(&str) -> bool,
 {
+    switch_account_impl(
+        region,
+        program,
+        uid,
+        SwitchOptions::default(),
+        None,
+        probe,
+    )
+}
+
+/// 切换的真实实现：`probe` 可注入，`progress` 可为空。
+fn switch_account_impl<F>(
+    region: QoderRegion,
+    program: QoderProgram,
+    uid: &str,
+    options: SwitchOptions,
+    progress: Option<ProgressFn<'_>>,
+    mut probe: F,
+) -> Result<Value, String>
+where
+    F: FnMut(&str) -> bool,
+{
+    let report = |message: &str| {
+        if let Some(callback) = progress {
+            callback(message);
+        }
+    };
+
     let uid = uid.trim();
     if uid.is_empty() {
         return Err("缺少账号 uid —— 无法确定要切换哪个账号。".to_string());
     }
 
-    // ① 进程守卫（fail-closed）。
-    if program_running_with(region, program, probe) {
-        return Err(format!(
-            "{} 正在运行，写回的登录态会被它退出时的内存态覆盖。请先退出 {} 客户端，再切换账号。",
-            program.label(),
-            program.label()
-        ));
-    }
-
-    // ② 查账号。
+    // ①a 查账号（先确认目标存在，避免「关了客户端才发现账号没了」）。
     let account = account::find_account_for(region, uid)
         .ok_or_else(|| format!("未找到账号 {uid}（区域 {}）。", region.as_str()))?;
 
-    // ③ 区域 fail-closed：账号的归属域名必须属于目标区域。
+    // ①b 区域 fail-closed：账号的归属域名必须属于目标区域。
     account::ensure_region_matches(region, &account.domain)?;
 
-    // 写回必须有访问令牌：只写个空 token 会让客户端直接退登。
+    // ①c 写回必须有访问令牌：只写个空 token 会让客户端直接退登。
     if account
         .access_token
         .as_deref()
@@ -247,7 +319,106 @@ where
         ));
     }
 
-    let outcome = match program {
+    // ①d 进程守卫 / 自动关闭。
+    //
+    // `restart` 只对桌面版生效：CLI 是用户自己终端里的会话，杀它的代价（丢掉半截交互）
+    // 远大于「省一次手动退出」，因此 CLI 一栏保持旧的 fail-closed 语义。
+    let running = program_running_with(region, program, &mut probe);
+    let auto_close = options.restart && program == QoderProgram::Desktop;
+    let mut closed_by_us = false;
+    if running {
+        if !auto_close {
+            return Err(format!(
+                "{} 正在运行，写回的登录态会被它退出时的内存态覆盖。请先退出 {} 客户端再切换\
+                 （桌面版可在确认框里勾选「自动重开」由本工具代劳）。",
+                program.label(),
+                program.label()
+            ));
+        }
+        report(&format!("正在关闭 {}…", program.label()));
+        match crate::modules::process::close_image(program_image(region, program), 20) {
+            Ok(closed) => closed_by_us = closed,
+            // 关不掉 ⇒ **不继续**：此时写入必然被客户端退出时的内存态覆盖，等于白切。
+            Err(error) => {
+                return Err(format!(
+                    "{} 正在运行且无法自动关闭：{error}",
+                    program.label()
+                ))
+            }
+        }
+        // 复核一次：`close_image` 已等过进程消失，这里再探一次是为了兜住
+        // 「关掉主进程但残留子进程」的形态（探测实现按映像名匹配，子进程同名会被算进来）。
+        if program_running_with(region, program, &mut probe) {
+            return Err(format!(
+                "{} 仍在运行，已中止切换（此时写入会被它退出时的内存态覆盖）。",
+                program.label()
+            ));
+        }
+        report(&format!("{} 已关闭", program.label()));
+    }
+
+    report("正在备份并写入登录态…");
+
+    let write_result = write_login_state(region, program, &account);
+
+    let outcome = match write_result {
+        Ok(outcome) => outcome,
+        // 写入/校验失败：如果客户端是被我们关掉的，必须把它重新拉起来 ——
+        // 「切换失败 + 客户端被关着」比单纯的失败更糟。
+        Err(error) => {
+            let relaunch = if closed_by_us {
+                relaunch_after_failure(region, program, &report)
+            } else {
+                None
+            };
+            return Err(match relaunch {
+                Some(note) => format!("{error}（{note}）"),
+                None => error,
+            });
+        }
+    };
+
+    report("写入已通过校验");
+
+    // ⑥（可选）重新拉起客户端。
+    let mut relaunched = false;
+    let mut relaunch_error: Option<String> = None;
+    if options.restart && program == QoderProgram::Desktop {
+        report(&format!("正在启动 {}…", program.label()));
+        match launch_desktop(region) {
+            Ok(()) => relaunched = true,
+            // 启动失败**不改变**「切换是否成功」：登录态已经写好并通过校验，
+            // 用户手动打开客户端同样生效。因此如实附带一句，而不是判为整体失败。
+            Err(error) => relaunch_error = Some(error),
+        }
+    }
+
+    report("切换完成");
+
+    Ok(json!({
+        "ok": true,
+        "program": program.as_str(),
+        "region": region.as_str(),
+        "uid": uid,
+        "backupPath": outcome.backup_path,
+        "written": outcome.written,
+        // 界面据此如实说明「客户端是我关的 / 是我重开的」，而不是让用户自己发现。
+        "closedClient": closed_by_us,
+        "relaunched": relaunched,
+        "relaunchError": relaunch_error,
+    }))
+}
+
+/// 把凭据写进指定程序位的登录态（写 + 备份 + 校验 + 失败回滚都在下层完成）。
+///
+/// 单独抽成函数是为了让 [`switch_account_impl`] 的「关/开客户端」与「写」两件事
+/// 各自可读、可测；两条分支的差异只有「写给谁」，不该把加密细节摊在主流程里。
+fn write_login_state(
+    region: QoderRegion,
+    program: QoderProgram,
+    account: &RawAccount,
+) -> Result<SwitchWriteOutcome, String> {
+    match program {
         QoderProgram::Desktop => {
             let app_dir = paths::desktop_app_dir(region);
             let encode = move |plain: &[u8]| {
@@ -269,19 +440,90 @@ where
                     LINUX_SECRET_TOOL_NAMES,
                 )
             };
-            switch_desktop(region, &account, encode, decode)?
+            switch_desktop(region, account, encode, decode)
         }
-        QoderProgram::Cli => switch_cli(region, &account)?,
-    };
+        QoderProgram::Cli => switch_cli(region, account),
+    }
+}
 
-    Ok(json!({
-        "ok": true,
-        "program": program.as_str(),
-        "region": region.as_str(),
-        "uid": uid,
-        "backupPath": outcome.backup_path,
-        "written": outcome.written,
-    }))
+/// 写入失败后把客户端拉回来（best-effort），返回一句**如实**的说明。
+///
+/// 只在「客户端是被本次切换关掉的」时调用 —— 用户自己关掉的客户端不该被我们偷偷打开。
+/// 拉不起来也不吞掉原错误：调用方会把说明拼在原始错误后面。
+fn relaunch_after_failure(
+    region: QoderRegion,
+    program: QoderProgram,
+    report: &dyn Fn(&str),
+) -> Option<String> {
+    if program != QoderProgram::Desktop {
+        return None;
+    }
+    report(&format!("正在重新启动 {}…", program.label()));
+    Some(match launch_desktop(region) {
+        Ok(()) => format!("已重新启动 {}，登录态保持切换前的状态", program.label()),
+        Err(error) => format!("{} 未能重新启动：{error}", program.label()),
+    })
+}
+
+/// 拉起 Qoder 桌面版（找不到可执行文件时给出**可操作**的错误）。
+fn launch_desktop(region: QoderRegion) -> Result<(), String> {
+    let exe = desktop_exe(region).ok_or_else(|| {
+        format!(
+            "未找到 {} 的安装位置，无法自动启动。请手动打开客户端（切换已生效）。",
+            QoderProgram::Desktop.label()
+        )
+    })?;
+    crate::modules::process::launch_exe(&exe)
+}
+
+/// 桌面版客户端的**可执行文件**（用于切换后自动重开）。
+///
+/// 查找顺序：`launcher state.ini` 的 `installDir`（[`super::native::desktop_install_dir`]，
+/// 与原生身份桥**同一份**探测）→ 在该目录里按映像名精确匹配 → 退一步找文件名含
+/// `qoder` 的 `.exe`（排除卸载 / 更新器）。
+///
+/// ⚠️ 找不到就返回 `None`：**不猜路径**。猜错的后果是把用户引到一个报错弹窗，
+/// 而「请手动打开客户端」是一句确定成立的话。
+pub fn desktop_exe(region: QoderRegion) -> Option<PathBuf> {
+    let install = super::native::desktop_install_dir(region)?;
+    let image = program_image(region, QoderProgram::Desktop);
+    let exact = install.join(image);
+    if exact.is_file() {
+        return Some(exact);
+    }
+    // 退一步：安装目录里唯一的 `*qoder*.exe`（大小写不敏感）。
+    //
+    // 只在**恰好一个**候选时采用 —— 多个候选说明目录里有更新器/卸载器，
+    // 挑错的代价是弹出安装向导弹窗，比「找不到」更糟。
+    let entries = std::fs::read_dir(&install).ok()?;
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_exe = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
+        if !is_exe {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let looks_like_updater = stem.contains("unins")
+            || stem.contains("update")
+            || stem.contains("setup")
+            || stem.contains("install");
+        if stem.contains("qoder") && !looks_like_updater {
+            candidates.push(path);
+        }
+    }
+    if candidates.len() == 1 {
+        return candidates.pop();
+    }
+    None
 }
 
 /// 一次写回的结果（内部形态）。
@@ -968,6 +1210,82 @@ mod tests {
         // 且文件**未被改动**（守卫在写之前生效）。
         let after = std::fs::read_to_string(paths::desktop_auth_file(QoderRegion::Cn)).unwrap();
         assert_eq!(after, DESKTOP_PLAINTEXT);
+    }
+
+    /// 守卫的拒绝文案必须**给出下一步**（勾选「自动重开」或手动退出），
+    /// 不能只说「不允许」—— 用户报障的原始诉求就是「点了不让切，也不知道怎么办」。
+    #[test]
+    fn guard_error_tells_the_user_how_to_proceed() {
+        let _env = TestEnv::new();
+        store_account(QoderRegion::Cn, account("u1", "dt-new", "drt-new"));
+        seed_desktop(QoderRegion::Cn, DESKTOP_PLAINTEXT);
+
+        let error = switch_account_for_with(QoderRegion::Cn, QoderProgram::Desktop, "u1", |_| true)
+            .unwrap_err();
+        assert!(error.contains("自动重开"), "要说清可以自动重开：{error}");
+    }
+
+    /// ★★ `restart = true` 也**必须先校验账号**，再动客户端。
+    ///
+    /// 顺序错了的症状：用户点切换 → 编辑器被关掉 → 然后才提示「账号不存在」。
+    /// 可证伪：把 `switch_account_impl` 里的查账号挪到关闭分支之后，本用例变红
+    /// （会先走到真的 `taskkill`，错误文案变成「无法关闭」而不是「未找到账号」）。
+    #[test]
+    fn restart_validates_the_account_before_touching_the_client() {
+        let _env = TestEnv::new();
+        // 故意不建账号：目标是「不存在的 uid」。
+        seed_desktop(QoderRegion::Cn, DESKTOP_PLAINTEXT);
+
+        let error = switch_account_impl(
+            QoderRegion::Cn,
+            QoderProgram::Desktop,
+            "u-missing",
+            SwitchOptions { restart: true },
+            None,
+            |_| true,
+        )
+        .unwrap_err();
+        assert!(error.contains("未找到账号"), "{error}");
+        // 文件与账号无关的那一步没被动过。
+        let after = std::fs::read_to_string(paths::desktop_auth_file(QoderRegion::Cn)).unwrap();
+        assert_eq!(after, DESKTOP_PLAINTEXT);
+    }
+
+    /// 进度回调按真实阶段推送，且**失败路径也说话**（不能只在成功时报喜）。
+    ///
+    /// 这里用 **CLI 程序位**跑通最小路径：桌面版的写回要 Electron `safeStorage` 密钥
+    /// （单测环境没有），而本用例关心的是**阶段是否被报出来**，不是加密细节。
+    #[test]
+    fn progress_callback_reports_the_write_stages() {
+        let _env = TestEnv::new();
+        seed_machine_id(QoderRegion::Cn, "0123456789abcdef");
+        store_account(
+            QoderRegion::Cn,
+            account("u1", "dt-new-token", "drt-new-token"),
+        );
+        let auth = paths::cli_auth_file(QoderRegion::Cn);
+        std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        std::fs::write(&auth, br#"{"token":"dt-old-token","user":{"id":"u1"}}"#).unwrap();
+
+        let seen = std::cell::RefCell::new(Vec::<String>::new());
+        let record = |message: &str| seen.borrow_mut().push(message.to_string());
+        switch_account_impl(
+            QoderRegion::Cn,
+            QoderProgram::Cli,
+            "u1",
+            SwitchOptions { restart: false },
+            Some(&record),
+            |_| false,
+        )
+        .expect("切换应成功");
+
+        let messages = seen.into_inner();
+        assert!(
+            messages.iter().any(|m| m.contains("备份并写入")),
+            "{messages:?}"
+        );
+        assert!(messages.iter().any(|m| m.contains("校验")), "{messages:?}");
+        assert_eq!(messages.last().map(String::as_str), Some("切换完成"));
     }
 
     // ── 桌面版：保留未知字段（本模块最重要的判据）──
