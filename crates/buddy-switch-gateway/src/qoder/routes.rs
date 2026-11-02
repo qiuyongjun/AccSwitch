@@ -454,7 +454,7 @@ pub async fn chat_for_region(
                 .and_then(|pool| pool.acquire(&uid, inflight_limit))
         };
         let Some(inflight) = inflight else {
-            failures.push(format!("{uid}：该账号在途请求已满（{inflight_limit}）"));
+            failures.push(format!("{name}：该账号在途请求已满（{inflight_limit}）"));
             continue;
         };
 
