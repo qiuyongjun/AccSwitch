@@ -323,9 +323,10 @@ ModelGatePaused {
 与本次请求的模型无关 ⇒ 请求 B 模型时会误报 503。必须逐账号问该模型的截止时刻
 （`pool::pick::model_cooling_until`，与选号同一套硬约束）。
 
-> ⚠️ 本分支（2026-11-02）的已知缺口：**半开探针票尚未按请求归属** —— `ModelGate.probe_owner`
-> 不存在，`/status` 也不输出该字段。它随上游 43e6926 引入，那个提交同时重写 `try_probe`
-> 的签名与四个调用点，本分支未移植。
+> **半开探针票按请求归属**（2026-11-02 已落地）：`ModelGate.probe_owner` 记录持票请求，
+> `try_probe(model, now_ms, owner)` 只对持票者放行同一张票，`release_probe` 在 `relay`
+> 外层归还 —— 领票却没拿到模型级结论的请求（例如池里一个号都没有）不再把整模型白锁
+> `PROBE_LEASE_MS`（120s）。`/status` 的 `model_gates[].probe_owner` 是该诊断的出口。
 >
 > 白名单维度（`model_cooling_until` 的 `allowed` 形参）**已随 #76 批次补齐**：名单内
 > 全不可用时走 `NoCredentialCause::ScopeEmpty` 报「名单口径」，不再报全池口径。
