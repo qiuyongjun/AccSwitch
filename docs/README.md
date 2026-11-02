@@ -118,6 +118,7 @@
 | [`reference-workbuddy-manager.md`](history/reference-workbuddy-manager.md) | 外部同栈项目的调研记录 |
 | [`CLEANUP-2026-10-13.md`](history/CLEANUP-2026-10-13.md) | 上一轮工作区清理报告（含当时的引用扫描证据） |
 | [`upstream-triage-2026-11-02.md`](history/upstream-triage-2026-11-02.md) | 上游 254 提交的分流结论：挑了哪 17 个、哪些要手工移植、哪些明确不取 |
+| [`upstream-merge-closure-2026-11-02.md`](history/upstream-merge-closure-2026-11-02.md) | 本轮合并的收尾记录：收尾判据、69 个提交覆盖了什么、剩余项为何不做、以后从哪起 |
 
 ---
 
