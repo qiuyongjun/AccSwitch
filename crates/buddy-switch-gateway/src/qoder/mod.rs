@@ -8,7 +8,8 @@
 //!
 //! - 选号算法 [`crate::pool::pick_with_preference`]（条目实现 [`pool::QoderPoolEntry`]）；
 //! - 会话粘性 [`crate::StickyTable`]、请求日志 [`crate::logging::RequestLog`]；
-//! - 协议转换 [`crate::protocol::anthropic`]（Anthropic ↔ OpenAI 双向）；
+//! - 协议转换 [`crate::protocol::anthropic`]（Anthropic ↔ OpenAI 双向）、
+//!   [`crate::protocol::responses`]（Responses API ↔ OpenAI chat 双向）；
 //! - 禁用偏好 [`crate::disabled_models`]（键 = **作用域**：`qoder-cn` / `qoder-global`）。
 //!
 //! 协议实现（COSY 签名 / 请求体构造 / 信封解包）在
@@ -227,6 +228,8 @@ pub struct QoderGatewayState {
     pub log: Arc<RequestLog>,
     /// 多 API Key 存储。
     pub key_store: Arc<apikey::QoderApiKeyStore>,
+    /// ★ 按密钥的用量账本（issue #76）—— 与 WB / Trae 侧**同一个实现**。
+    pub key_usage: Arc<crate::key_usage::KeyUsageStore>,
     /// 模型清单缓存（区域级）。
     catalogs: Arc<RwLock<HashMap<QoderRegion, CachedCatalog>>>,
     pub started_at: i64,
@@ -254,6 +257,9 @@ impl QoderGatewayState {
             sticky: Arc::new(Mutex::new(crate::StickyTable::new(config.sticky_ttl_ms))),
             log,
             key_store: Arc::new(apikey::QoderApiKeyStore::new(paths::gateway_keys_file())),
+            key_usage: Arc::new(crate::key_usage::KeyUsageStore::new(
+                paths::gateway_key_usage_file(),
+            )),
             catalogs: Arc::new(RwLock::new(HashMap::new())),
             started_at: core_config::now_ms(),
             total_requests: Arc::new(AtomicU64::new(0)),
@@ -446,6 +452,10 @@ impl QoderGatewayState {
         prompt_tokens: i64,
         completion_tokens: i64,
         error: Option<String>,
+        // ★ issue #76：调用方的 Key id（`None` = 无 Key / 老条目）。
+        key_id: Option<&str>,
+        // ★ 归属台账（`"qoder"` / `"unified"` / `None`）。
+        key_scope: Option<&'static str>,
     ) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.log.record(serde_json::json!({
@@ -462,6 +472,9 @@ impl QoderGatewayState {
             "completionTokens": completion_tokens,
             "stream": stream,
             "error": error,
+            // ★ issue #76：调用方 Key id（无 Key 写 `null`，键固定）。
+            "keyId": key_id,
+            "keyScope": key_scope,
         }));
         if let Some(message) = error {
             *self.last_error.write().await = Some(message);

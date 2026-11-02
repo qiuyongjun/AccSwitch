@@ -26,7 +26,7 @@
 //! `stream_options.include_usage`，因此本模块的出站路径统一按 SSE 处理：
 //! 客户端要流式就转事件流，不要流式就聚合成对象。
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -38,6 +38,98 @@ use crate::protocol::openai::{sse_event, CompletionAccumulator, ToolCallAccum};
 
 /// 单行缓冲区上限：畸形流（永不出现 `\n`）不得让内存无界增长。超限时原样冲刷保底。
 const MAX_LINE_BUFFER_BYTES: usize = 256 * 1024;
+
+/// freeform（custom）工具的**出站降级说明**。
+///
+/// Qoder / WB 上游只有 chat 的 `function` 工具，没有 Responses 的 `custom` 概念。
+/// Codex 等客户端把文件编辑工具声明成 `{"type":"custom","name":"apply_patch"}`，
+/// 若不降级就会被静默丢弃 —— 客户端以为工具在，模型却永远调不到（「Codex 改不动文件」）。
+const CUSTOM_TOOL_HINT: &str = "This is a freeform tool. Put the COMPLETE raw payload into \
+the single 'input' string parameter, verbatim. Do not wrap it in JSON, do not wrap it in \
+markdown code fences, do not add commentary.";
+
+/// 一条工具声明是不是 Responses 的 `custom`（freeform）工具。
+fn is_custom_tool(tool: &Value) -> bool {
+    tool.get("type")
+        .and_then(Value::as_str)
+        .map(|kind| kind.eq_ignore_ascii_case("custom"))
+        .unwrap_or(false)
+}
+
+/// 请求里声明为 custom（freeform）的工具名集合 —— 出站降级与入站还原共用这一份。
+pub fn custom_tool_names(body: &Value) -> HashSet<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|tool| is_custom_tool(tool))
+                .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 把 `custom` 工具降级成「单 `input` 字符串参数」的 function 工具。
+fn downgrade_custom_tool(tool: &Value) -> Option<Value> {
+    let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+    if name.is_empty() {
+        return None;
+    }
+    let description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let grammar = tool
+        .get("format")
+        .and_then(|format| {
+            format
+                .get("definition")
+                .and_then(Value::as_str)
+                .map(|text| format!("\n\nGrammar://n{text}"))
+                .or_else(|| {
+                    format
+                        .get("syntax")
+                        .and_then(Value::as_str)
+                        .map(|text| format!("\n\nGrammar syntax: {text}"))
+                })
+        })
+        .unwrap_or_default();
+    Some(json!({
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": format!("{description}\n\n{CUSTOM_TOOL_HINT}{grammar}").trim().to_string(),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "Complete raw payload for this tool, verbatim.",
+                    }
+                },
+                "required": ["input"],
+            },
+        }
+    }))
+}
+
+/// 从 `{"input": "..."}` 参数里取回 freeform 原文（取不到就原样返回）。
+///
+/// 模型有时直接给裸字符串、有时给 `{"input":{...}}`；两种都还原成字符串。
+pub fn unwrap_custom_input(arguments: &str) -> String {
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(Value::Object(map)) => match map.get("input") {
+            Some(Value::String(text)) => text.clone(),
+            Some(other) => other.to_string(),
+            None => arguments.to_string(),
+        },
+        Ok(Value::String(text)) => text,
+        _ => arguments.to_string(),
+    }
+}
 
 /// 把 Responses 请求体翻译成上游 `chat.completions` 请求体。
 pub fn to_upstream_request(body: &Value) -> Value {
@@ -108,6 +200,9 @@ pub fn to_upstream_request(body: &Value) -> Value {
                             }
                         }))
                     }
+                    // ★ freeform（custom）工具：降级成单 `input` 参数的 function。
+                    // 不降级的后果是「工具被静默丢弃」——Codex 的 apply_patch 就永远调不到。
+                    Some("custom") => downgrade_custom_tool(tool),
                     // 内置工具（web_search / file_search / computer_use …）上游不支持 ⇒ 跳过。
                     _ => None,
                 }
@@ -147,6 +242,12 @@ fn input_to_messages(input: &Value, out: &mut Vec<Value>) {
     match input {
         Value::String(text) => out.push(json!({"role": "user", "content": text})),
         Value::Array(items) => {
+            // ★ 并行的多个调用必须并进**同一条** assistant 消息的 `tool_calls`（issue #119）。
+            // 每条 item 各自产出一条 assistant 消息，等于把「一次并行调用」拆成多轮：
+            // 上游按「assistant 消息数与 tool 结果数」校验 ⇒ 回 400/11148
+            // `tool calls and tool results do not match`。`merge_into` 记住可续写的那条消息的下标，
+            // 遇到任何**真的产出**了新消息的 item 就清空（否则会把不同轮次合并）。
+            let mut merge_into: Option<usize> = None;
             for item in items {
                 match item.get("type").and_then(Value::as_str) {
                     // `type` 缺省：容忍 `{role, content}` 简写。
@@ -154,6 +255,7 @@ fn input_to_messages(input: &Value, out: &mut Vec<Value>) {
                         let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
                         let content = parts_to_content(item.get("content"));
                         out.push(json!({"role": role, "content": content}));
+                        merge_into = None;
                     }
                     Some("function_call") => {
                         let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
@@ -162,17 +264,39 @@ fn input_to_messages(input: &Value, out: &mut Vec<Value>) {
                             .get("arguments")
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        out.push(json!({
-                            "role": "assistant",
-                            "content": Value::Null,
-                            "tool_calls": [{
+                        push_tool_call(
+                            out,
+                            &mut merge_into,
+                            json!({
                                 "id": call_id,
                                 "type": "function",
                                 "function": {"name": name, "arguments": arguments},
-                            }],
-                        }));
+                            }),
+                        );
                     }
-                    Some("function_call_output") => {
+                    // ★ freeform 调用的历史项：还原成 chat 的 function 调用 + `{"input": …}`
+                    // 参数（与出站降级的形状对得上，多轮 Codex 才不会断）。
+                    Some("custom_tool_call") => {
+                        let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
+                        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                        let input = item
+                            .get("input")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        push_tool_call(
+                            out,
+                            &mut merge_into,
+                            json!({
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": json!({"input": input}).to_string(),
+                                },
+                            }),
+                        );
+                    }
+                    Some("custom_tool_call_output") | Some("function_call_output") => {
                         let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
                         let content = match item.get("output") {
                             Some(Value::String(text)) => text.clone(),
@@ -184,14 +308,39 @@ fn input_to_messages(input: &Value, out: &mut Vec<Value>) {
                             "tool_call_id": call_id,
                             "content": content,
                         }));
+                        merge_into = None;
                     }
                     // `reasoning` 是**出站**产物；上游不接受 reasoning 作为输入 ⇒ 丢弃。
+                    // 丢弃不打断合并：调用之间穿插 reasoning 是 Codex 的常态形状。
                     _ => {}
                 }
             }
         }
         _ => {}
     }
+}
+
+/// 追加一条 tool call：上一段仍是「只有 tool_calls 的 assistant」就续写，否则另起一条。
+///
+/// 判据刻意收窄成「上一条消息 `content` 为 `null` 且已有 `tool_calls`」——
+/// 带正文的 assistant 消息不参与合并，避免把上一轮的收尾文本与这一轮的调用并成一条。
+fn push_tool_call(out: &mut Vec<Value>, merge_into: &mut Option<usize>, call: Value) {
+    if let Some(index) = *merge_into {
+        if let Some(array) = out
+            .get_mut(index)
+            .and_then(|message| message.get_mut("tool_calls"))
+            .and_then(Value::as_array_mut)
+        {
+            array.push(call);
+            return;
+        }
+    }
+    out.push(json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "tool_calls": [call],
+    }));
+    *merge_into = Some(out.len().saturating_sub(1));
 }
 
 /// 把 Responses 的 content（字符串 / parts 数组）转成 chat content。
@@ -234,47 +383,216 @@ fn parts_to_content(content: Option<&Value>) -> Value {
     }
 }
 
+/// 非流式出口的**唯一**形状构造入参。
+///
+/// 两条上游的聚合产物形状不同（WB 的 [`CompletionAccumulator`]、Qoder 的
+/// `qoder::sse::AggregatedChat`），但 Responses 对象的形状**只能有一份** ——
+/// 各自拼一遍必然漂移（改一处另一处静默给旧形状）。
+#[derive(Debug, Clone, Copy)]
+pub struct ResponsesParts<'a> {
+    pub content: &'a str,
+    pub reasoning: &'a str,
+    /// chat 形态的工具调用：`{id, type, function:{name, arguments}}`。
+    pub tool_calls: &'a [Value],
+    pub model: Option<&'a str>,
+    pub created_at: Option<i64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// 本次请求里声明为 **custom（freeform）** 的工具名 —— 命中的调用要还原成
+    /// `custom_tool_call`，而不是 `function_call`。
+    pub custom: &'a HashSet<String>,
+    /// 上游原始 usage 统计，用于提取缓存命中及思考细节。
+    pub raw_usage: Option<&'a Value>,
+}
+
 /// 由聚合结果构造 Responses 对象（非流式出口）。
-pub fn to_response_object(accumulator: &CompletionAccumulator, fallback_model: &str) -> Value {
-    let model = accumulator
-        .model
-        .clone()
-        .unwrap_or_else(|| fallback_model.to_string());
-    let created_at = accumulator
-        .created
+pub fn to_response_object(
+    accumulator: &CompletionAccumulator,
+    fallback_model: &str,
+    custom: &HashSet<String>,
+) -> Value {
+    let tool_calls: Vec<Value> = accumulator
+        .tool_calls
+        .iter()
+        .map(|call| {
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments},
+            })
+        })
+        .collect();
+    to_response_object_from(
+        &ResponsesParts {
+            content: &accumulator.content,
+            reasoning: &accumulator.reasoning,
+            tool_calls: &tool_calls,
+            model: accumulator.model.as_deref(),
+            created_at: accumulator.created,
+            input_tokens: accumulator.prompt_tokens.unwrap_or(0),
+            output_tokens: accumulator.completion_tokens.unwrap_or(0),
+            custom,
+            raw_usage: accumulator.raw_usage.as_ref(),
+        },
+        fallback_model,
+    )
+}
+
+/// 构造符合 Responses 协议规范的 `usage` 结构。
+///
+/// 保留 `input_tokens`、`output_tokens`、`total_tokens`，
+/// 并从上游原始 `usage` 中提取并映射 `input_tokens_details.cached_tokens`
+/// 与 `output_tokens_details.reasoning_tokens`。
+pub(crate) fn build_responses_usage(
+    raw_usage: Option<&Value>,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> Value {
+    let mut cached_tokens: Option<u64> = None;
+    let mut reasoning_tokens: Option<u64> = None;
+
+    if let Some(raw) = raw_usage {
+        // 1. 尝试从 prompt_tokens_details 提取 cached_tokens
+        if let Some(details) = raw.get("prompt_tokens_details").and_then(Value::as_object) {
+            if let Some(cached) = details.get("cached_tokens").and_then(Value::as_u64) {
+                cached_tokens = Some(cached);
+            }
+        }
+        // 若 prompt_tokens_details 未包含或为 0，回退尝试 prompt_cache_hit_tokens / cache_read_input_tokens / cached_tokens
+        if cached_tokens.is_none() || cached_tokens == Some(0) {
+            if let Some(hit) = raw.get("prompt_cache_hit_tokens").and_then(Value::as_u64) {
+                if hit > 0 {
+                    cached_tokens = Some(hit);
+                }
+            } else if let Some(hit) = raw.get("cache_read_input_tokens").and_then(Value::as_u64) {
+                if hit > 0 {
+                    cached_tokens = Some(hit);
+                }
+            } else if let Some(hit) = raw.get("cached_tokens").and_then(Value::as_u64) {
+                if hit > 0 {
+                    cached_tokens = Some(hit);
+                }
+            }
+        }
+
+        // 2. 尝试从 completion_tokens_details 提取 reasoning_tokens
+        if let Some(details) = raw.get("completion_tokens_details").and_then(Value::as_object) {
+            if let Some(reasoning) = details.get("reasoning_tokens").and_then(Value::as_u64) {
+                reasoning_tokens = Some(reasoning);
+            }
+        }
+        // 若 completion_tokens_details 未包含或为 0，回退尝试 completion_thinking_tokens
+        if reasoning_tokens.is_none() || reasoning_tokens == Some(0) {
+            if let Some(reasoning) = raw.get("completion_thinking_tokens").and_then(Value::as_u64) {
+                if reasoning > 0 {
+                    reasoning_tokens = Some(reasoning);
+                }
+            }
+        }
+    }
+
+    let mut input_details = serde_json::Map::new();
+    input_details.insert(
+        "cached_tokens".to_string(),
+        json!(cached_tokens.unwrap_or(0)),
+    );
+
+    let mut output_details = serde_json::Map::new();
+    output_details.insert(
+        "reasoning_tokens".to_string(),
+        json!(reasoning_tokens.unwrap_or(0)),
+    );
+
+    // 若上游存在 prompt_tokens_details，透传其它扩展字段
+    if let Some(raw) = raw_usage {
+        if let Some(ptd) = raw.get("prompt_tokens_details").and_then(Value::as_object) {
+            for (key, val) in ptd {
+                if key != "cached_tokens" {
+                    input_details.insert(key.clone(), val.clone());
+                }
+            }
+        }
+        if let Some(ctd) = raw.get("completion_tokens_details").and_then(Value::as_object) {
+            for (key, val) in ctd {
+                if key != "reasoning_tokens" {
+                    output_details.insert(key.clone(), val.clone());
+                }
+            }
+        }
+    }
+
+    json!({
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "input_tokens_details": Value::Object(input_details),
+        "output_tokens_details": Value::Object(output_details),
+    })
+}
+
+/// 由**部件**构造 Responses 对象（非流式出口的唯一形状实现，两条上游共用）。
+pub fn to_response_object_from(parts: &ResponsesParts<'_>, fallback_model: &str) -> Value {
+    let model = parts.model.unwrap_or(fallback_model).to_string();
+    let created_at = parts
+        .created_at
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
     let mut output: Vec<Value> = Vec::new();
-    if !accumulator.reasoning.is_empty() {
+    if !parts.reasoning.is_empty() {
         output.push(json!({
             "id": new_id("rs"),
             "type": "reasoning",
-            "summary": [{"type": "summary_text", "text": accumulator.reasoning}],
+            "summary": [{"type": "summary_text", "text": parts.reasoning}],
         }));
     }
     // 无工具调用时恒输出 message（哪怕是空串），与官方「至少一个 message item」的形状一致。
-    if !accumulator.content.is_empty() || accumulator.tool_calls.is_empty() {
+    if !parts.content.is_empty() || parts.tool_calls.is_empty() {
         output.push(json!({
             "id": new_id("msg"),
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": accumulator.content, "annotations": []}],
+            "content": [{"type": "output_text", "text": parts.content, "annotations": []}],
         }));
     }
-    for tool_call in &accumulator.tool_calls {
+    for tool_call in parts.tool_calls {
+        let call_id = tool_call
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let function = tool_call.get("function");
+        let name = function
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let arguments = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if parts.custom.contains(name) {
+            // freeform 调用：把 `{"input": …}` 拆回原始 payload。
+            output.push(json!({
+                "id": new_id("fc"),
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": name,
+                "input": unwrap_custom_input(arguments),
+            }));
+            continue;
+        }
         output.push(json!({
             "id": new_id("fc"),
             "type": "function_call",
             "status": "completed",
-            "call_id": tool_call.id,
-            "name": tool_call.name,
-            "arguments": tool_call.arguments,
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments,
         }));
     }
 
-    let input_tokens = accumulator.prompt_tokens.unwrap_or(0);
-    let output_tokens = accumulator.completion_tokens.unwrap_or(0);
+    let input_tokens = parts.input_tokens;
+    let output_tokens = parts.output_tokens;
     json!({
         "id": new_id("resp"),
         "object": "response",
@@ -282,14 +600,11 @@ pub fn to_response_object(accumulator: &CompletionAccumulator, fallback_model: &
         "status": "completed",
         "model": model,
         "output": output,
-        "output_text": accumulator.content,
+        // 官方非流式对象带 `output_text` 便捷字段；流式末帧没有它（见 `finish` 的注解）。
+        "output_text": parts.content,
         "parallel_tool_calls": true,
         "tools": [],
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-        },
+        "usage": build_responses_usage(parts.raw_usage, input_tokens, output_tokens),
     })
 }
 
@@ -326,10 +641,14 @@ pub struct ResponsesSseStream<S> {
     reasoning: String,
     tool_calls: Vec<ToolCallAccum>,
     usage: Option<Value>,
+    /// 声明为 custom（freeform）的工具名：这些调用要按 `custom_tool_call` 事件输出。
+    custom: std::sync::Arc<HashSet<String>>,
 }
 
 impl<S> ResponsesSseStream<S> {
-    pub fn new(inner: S, model: String) -> Self {
+    /// `custom` 来自**原始** Responses 请求体（[`custom_tool_names`]），
+    /// 与出站降级共用同一份集合 ⇒ 声明了 custom 的调用一定会被还原成 custom 事件。
+    pub fn new(inner: S, model: String, custom: std::sync::Arc<HashSet<String>>) -> Self {
         Self {
             inner: Box::pin(inner),
             buffer: Vec::new(),
@@ -349,6 +668,7 @@ impl<S> ResponsesSseStream<S> {
             reasoning: String::new(),
             tool_calls: Vec::new(),
             usage: None,
+            custom,
         }
     }
 
@@ -473,20 +793,34 @@ impl<S> ResponsesSseStream<S> {
             item.id.clone()
         };
         let name = item.name.clone();
+        let custom = self.custom.contains(&name);
         let output_index = 2 + index;
+        let item = if custom {
+            // freeform 工具：官方事件的 item 形状是 `custom_tool_call` + `input`。
+            json!({
+                "id": item_id,
+                "type": "custom_tool_call",
+                "status": "in_progress",
+                "call_id": item.id,
+                "name": name,
+                "input": "",
+            })
+        } else {
+            json!({
+                "id": item_id,
+                "type": "function_call",
+                "status": "in_progress",
+                "call_id": item.id,
+                "name": name,
+                "arguments": "",
+            })
+        };
         self.push_event(
             "response.output_item.added",
             json!({
                 "type": "response.output_item.added",
                 "output_index": output_index,
-                "item": {
-                    "id": item_id,
-                    "type": "function_call",
-                    "status": "in_progress",
-                    "call_id": item.id,
-                    "name": name,
-                    "arguments": "",
-                },
+                "item": item,
             }),
         );
     }
@@ -503,6 +837,28 @@ impl<S> ResponsesSseStream<S> {
             if !usage.is_null() {
                 self.usage = Some(usage.clone());
             }
+        }
+        // 上游中途报错（Qoder 的 `event:error` 帧、WB 的 `{"error":{…}}` 分片）——
+        // **必须转成 Responses 的 `error` 事件**：否则本层只看到「没有 choices」，
+        // 静默走完 `response.completed` ⇒ 客户端拿到「200 + 空回答」，故障隐身。
+        if let Some(error) = chunk.get("error") {
+            let message = error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| error.to_string());
+            // OpenAI 的 `code` 是字符串；Qoder 给的是数字状态码 ⇒ 统一成字符串。
+            let code = match error.get("code") {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Number(number)) => number.to_string(),
+                _ => "upstream_error".to_string(),
+            };
+            self.ensure_started();
+            self.push_event(
+                "error",
+                json!({"type": "error", "code": code, "message": message}),
+            );
+            return;
         }
         let Some(choice) = chunk
             .get("choices")
@@ -585,15 +941,23 @@ impl<S> ResponsesSseStream<S> {
                 self.open_tool(index);
                 if !argument_delta.is_empty() {
                     let item_id = self.tool_calls[index].id.clone();
-                    self.push_event(
-                        "response.function_call_arguments.delta",
-                        json!({
-                            "type": "response.function_call_arguments.delta",
-                            "item_id": item_id,
-                            "output_index": 2 + index,
-                            "delta": argument_delta,
-                        }),
-                    );
+                    let custom = self.custom.contains(&self.tool_calls[index].name);
+                    /* ★ freeform 的增量**刻意不发**：上游给的是 `{"input":"…"}` 的 JSON 片段，
+                    而 `custom_tool_call_input.delta` 的语义是**原文片段**。把 JSON 片段当原文
+                    发出去，按规范累加 delta 的客户端会拼出一坨 `{"input":"…"}`（协议违约）。
+                    原文只在 `.done` / `output_item.done` 里给（Codex 正是读那里）。
+                    （参考实现发的是 JSON 片段，实测 Codex 能用，但对别的客户端是隐患。） */
+                    if !custom {
+                        self.push_event(
+                            "response.function_call_arguments.delta",
+                            json!({
+                                "type": "response.function_call_arguments.delta",
+                                "item_id": item_id,
+                                "output_index": 2 + index,
+                                "delta": argument_delta,
+                            }),
+                        );
+                    }
                 }
             }
         }
@@ -694,31 +1058,58 @@ impl<S> ResponsesSseStream<S> {
                 item.id.clone()
             };
             let arguments = item.arguments.clone();
-            self.push_event(
-                "response.function_call_arguments.done",
-                json!({
-                    "type": "response.function_call_arguments.done",
-                    "item_id": item_id,
-                    "output_index": 2 + index,
-                    "arguments": arguments,
-                }),
-            );
+            let custom = self.custom.contains(&item.name);
+            if custom {
+                // freeform：`.done` 给**拆好的原文**（`{"input": …}` → 原文），
+                // 客户端据此拿到 apply_patch 的完整补丁文本。
+                self.push_event(
+                    "response.custom_tool_call_input.done",
+                    json!({
+                        "type": "response.custom_tool_call_input.done",
+                        "item_id": item_id,
+                        "output_index": 2 + index,
+                        "input": unwrap_custom_input(&arguments),
+                    }),
+                );
+            } else {
+                self.push_event(
+                    "response.function_call_arguments.done",
+                    json!({
+                        "type": "response.function_call_arguments.done",
+                        "item_id": item_id,
+                        "output_index": 2 + index,
+                        "arguments": arguments,
+                    }),
+                );
+            }
             let item_id = self.tool_calls[index].id.clone();
             let name = self.tool_calls[index].name.clone();
             let arguments = self.tool_calls[index].arguments.clone();
+            let done_item = if custom {
+                json!({
+                    "id": item_id,
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "call_id": self.tool_calls[index].id,
+                    "name": name,
+                    "input": unwrap_custom_input(&arguments),
+                })
+            } else {
+                json!({
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": self.tool_calls[index].id,
+                    "name": name,
+                    "arguments": arguments,
+                })
+            };
             self.push_event(
                 "response.output_item.done",
                 json!({
                     "type": "response.output_item.done",
                     "output_index": 2 + index,
-                    "item": {
-                        "id": item_id,
-                        "type": "function_call",
-                        "status": "completed",
-                        "call_id": self.tool_calls[index].id,
-                        "name": name,
-                        "arguments": arguments,
-                    },
+                    "item": done_item,
                 }),
             );
         }
@@ -758,14 +1149,25 @@ impl<S> ResponsesSseStream<S> {
                 continue;
             }
             let item = &self.tool_calls[index];
-            output.push(json!({
-                "id": item.id,
-                "type": "function_call",
-                "status": "completed",
-                "call_id": item.id,
-                "name": item.name,
-                "arguments": item.arguments,
-            }));
+            if self.custom.contains(&item.name) {
+                output.push(json!({
+                    "id": item.id,
+                    "type": "custom_tool_call",
+                    "status": "completed",
+                    "call_id": item.id,
+                    "name": item.name,
+                    "input": unwrap_custom_input(&item.arguments),
+                }));
+            } else {
+                output.push(json!({
+                    "id": item.id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": item.id,
+                    "name": item.name,
+                    "arguments": item.arguments,
+                }));
+            }
         }
 
         let mut response = self.response_skeleton("completed");
@@ -773,11 +1175,7 @@ impl<S> ResponsesSseStream<S> {
             object.insert("output".to_string(), Value::Array(output));
             object.insert(
                 "usage".to_string(),
-                json!({
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                }),
+                build_responses_usage(self.usage.as_ref(), input_tokens, output_tokens),
             );
         }
         self.push_event(
@@ -854,6 +1252,11 @@ mod tests {
 
     fn chunk(text: &str) -> Result<Bytes, std::io::Error> {
         Ok(Bytes::from(text.to_string()))
+    }
+
+    /// 没有 freeform 工具的常规用例。
+    fn empty_custom() -> std::sync::Arc<HashSet<String>> {
+        std::sync::Arc::new(HashSet::new())
     }
 
     async fn collect_events<S>(stream: S) -> Vec<Value>
@@ -945,6 +1348,72 @@ mod tests {
         assert_eq!(upstream["tool_choice"]["function"]["name"], "get_weather");
     }
 
+    /// issue #119：并行的多个 `function_call` 若各自产出一条 assistant 消息，上游按
+    /// 「tool calls ↔ tool results 对不上」回 400/11148。必须并进同一条消息。
+    #[test]
+    fn parallel_function_calls_share_one_assistant_message() {
+        let body = json!({
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]},
+                {"type": "reasoning", "summary": []},
+                {"type": "function_call", "call_id": "c0", "name": "exec_command", "arguments": "{\"cmd\":\"ls\"}"},
+                // 调用之间穿插 reasoning 不打断合并（Codex 的常态形状）
+                {"type": "reasoning", "summary": []},
+                {"type": "function_call", "call_id": "c1", "name": "exec_command", "arguments": "{\"cmd\":\"pwd\"}"},
+                {"type": "function_call_output", "call_id": "c0", "output": "ok"},
+                {"type": "function_call_output", "call_id": "c1", "output": "ok"}
+            ]
+        });
+        let upstream = to_upstream_request(&body);
+        let messages = upstream["messages"].as_array().unwrap();
+        assert_eq!(
+            messages.len(),
+            4,
+            "user + 一条 assistant + 两条 tool: {messages:?}"
+        );
+        assert_eq!(messages[1]["role"], "assistant");
+        let calls = messages[1]["tool_calls"].as_array().unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "并行调用必须在同一条 assistant 消息里: {calls:?}"
+        );
+        assert_eq!(calls[0]["id"], "c0");
+        assert_eq!(calls[1]["id"], "c1");
+        assert_eq!(messages[2]["tool_call_id"], "c0");
+        assert_eq!(messages[3]["tool_call_id"], "c1");
+    }
+
+    /// 反向守卫：调用 → 结果 → 再调用（第二轮）**不得**被并进上一轮的 assistant 消息。
+    #[test]
+    fn tool_calls_after_tool_result_start_a_new_assistant_message() {
+        let body = json!({
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]},
+                {"type": "function_call", "call_id": "c0", "name": "f", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c0", "output": "ok"},
+                {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}]},
+                {"type": "function_call", "call_id": "c2", "name": "f", "arguments": "{}"}
+            ]
+        });
+        let upstream = to_upstream_request(&body);
+        let messages = upstream["messages"].as_array().unwrap();
+        // user / assistant(c0) / tool / assistant(c1) / assistant(text) / assistant(c2)
+        assert_eq!(messages.len(), 6, "{messages:?}");
+        assert_eq!(messages[1]["tool_calls"].as_array().unwrap().len(), 1);
+        assert_eq!(messages[3]["tool_calls"].as_array().unwrap().len(), 1);
+        // 带正文的 assistant 消息不参与合并
+        assert_eq!(messages[4]["content"], "done");
+        assert!(
+            messages[4].get("tool_calls").is_none(),
+            "文本消息不得被塞 tool_calls"
+        );
+        assert_eq!(messages[5]["tool_calls"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn upstream_request_maps_image_parts_to_multimodal() {
         let body = json!({
@@ -970,7 +1439,7 @@ mod tests {
             "data: [DONE]\n\n",
         );
         let accumulator = CompletionAccumulator::from_sse(sse);
-        let response = to_response_object(&accumulator, "fallback");
+        let response = to_response_object(&accumulator, "fallback", &HashSet::new());
         assert_eq!(response["object"], "response");
         assert_eq!(response["status"], "completed");
         assert_eq!(response["model"], "m");
@@ -991,7 +1460,7 @@ mod tests {
     fn response_object_includes_function_calls() {
         let sse =             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
         let accumulator = CompletionAccumulator::from_sse(sse);
-        let response = to_response_object(&accumulator, "m");
+        let response = to_response_object(&accumulator, "m", &HashSet::new());
         assert_eq!(response["output"][0]["type"], "function_call");
         assert_eq!(response["output"][0]["call_id"], "call_1");
         assert_eq!(response["output"][0]["name"], "f");
@@ -1015,7 +1484,11 @@ mod tests {
             chunk("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n"),
             chunk("data: [DONE]\n\n"),
         ];
-        let stream = ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string());
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
         let events = collect_events(stream).await;
         let types = event_types(&events);
 
@@ -1059,7 +1532,11 @@ mod tests {
             chunk("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"),
             chunk("data: [DONE]\n\n"),
         ];
-        let stream = ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string());
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
         let chunks: Vec<Result<Bytes, std::io::Error>> = stream.collect().await;
         let text: String = chunks
             .iter()
@@ -1078,7 +1555,11 @@ mod tests {
             chunk("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"),
             chunk("data: [DONE]\n\n"),
         ];
-        let stream = ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string());
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
         let events = collect_events(stream).await;
         let types = event_types(&events);
         assert!(types.contains(&"response.reasoning_summary_text.delta".to_string()));
@@ -1095,11 +1576,42 @@ mod tests {
     #[tokio::test]
     async fn stream_with_no_content_still_completes() {
         let input: Vec<Result<Bytes, std::io::Error>> = vec![];
-        let stream = ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string());
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
         let events = collect_events(stream).await;
         let types = event_types(&events);
         assert_eq!(types.first().unwrap(), "response.created");
         assert_eq!(types.last().unwrap(), "response.completed");
+    }
+
+    /// 上游中途报错帧 ⇒ **`error` 事件**（不能静默成「200 + 空回答」，issue #64）。
+    ///
+    /// 可证伪：去掉 `handle_payload` 里那段 `chunk.get("error")` ⇒ 本用例一条断言都拿不到。
+    #[tokio::test]
+    async fn stream_surfaces_upstream_error_frame_as_error_event() {
+        let input = vec![
+            chunk("data: {\"error\":{\"message\":\"上游错误（HTTP 429）：rate limited\",\"type\":\"upstream_error\",\"code\":429}}\n\n"),
+            chunk("data: [DONE]\n\n"),
+        ];
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
+        let events = collect_events(stream).await;
+        let error = events
+            .iter()
+            .find(|event| event["type"] == "error")
+            .expect("必须有 error 事件");
+        assert!(
+            error["message"].as_str().unwrap().contains("429"),
+            "{error}"
+        );
+        // `code` 必须是字符串（OpenAI schema；Qoder 给的是数字 429）。
+        assert_eq!(error["code"], "429");
     }
 
     #[tokio::test]
@@ -1109,12 +1621,221 @@ mod tests {
             chunk("b\"}}]}\n\n"),
             chunk("data: [DONE]\n\n"),
         ];
-        let stream = ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string());
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "m".to_string(),
+            empty_custom(),
+        );
         let events = collect_events(stream).await;
         let completed = events.last().unwrap();
         assert_eq!(
             completed["response"]["output"][0]["content"][0]["text"], "ab",
             "跨 chunk 切分的 JSON 必须正确拼回"
         );
+    }
+    // ---------------------------------------------------------------------
+    // freeform（custom）工具：Codex 的 `apply_patch` 走这条路
+    // ---------------------------------------------------------------------
+
+    /// 出站：`custom` 降级成单 `input` 参数的 function；内置工具（web_search）仍被丢弃。
+    ///
+    /// 可证伪：删掉 `Some("custom") => downgrade_custom_tool(tool)` ⇒ 工具整条消失，
+    /// 模型永远调不到 apply_patch（「Codex 改不动文件」）。
+    #[test]
+    fn upstream_request_downgrades_custom_tools() {
+        let body = json!({
+            "model": "m",
+            "input": "fix it",
+            "tools": [
+                {"type": "custom", "name": "apply_patch", "description": "apply a patch",
+                 "format": {"type": "grammar", "syntax": "lark", "definition": "start: patch"}},
+                {"type": "function", "name": "shell", "description": "run",
+                 "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}},
+                {"type": "web_search"},
+            ],
+        });
+        let upstream = to_upstream_request(&body);
+        let tools = upstream["tools"].as_array().expect("必须有工具");
+        assert_eq!(tools.len(), 2, "web_search 必须被跳过: {tools:?}");
+        let patch = &tools[0];
+        assert_eq!(patch["type"], "function");
+        assert_eq!(patch["function"]["name"], "apply_patch");
+        // freeform 提示 + 语法都要进 description（模型才知道把原文塞进 input）
+        let description = patch["function"]["description"].as_str().unwrap();
+        assert!(description.contains("freeform"), "{description}");
+        assert!(description.contains("start: patch"), "{description}");
+        // 单 `input` 字符串参数、必填
+        assert_eq!(patch["function"]["parameters"]["required"][0], "input");
+        assert_eq!(
+            patch["function"]["parameters"]["properties"]["input"]["type"],
+            "string"
+        );
+        // 普通 function 工具不受影响
+        assert_eq!(tools[1]["function"]["name"], "shell");
+
+        // custom 名字集合与降级同源
+        let names = custom_tool_names(&body);
+        assert!(names.contains("apply_patch"));
+        assert!(!names.contains("shell"));
+    }
+
+    /// 入站历史：`custom_tool_call` / `custom_tool_call_output` 必须还原成 chat 形状，
+    /// 否则 Codex 多轮对话会在第二次请求时丢掉"我刚调过 apply_patch"。
+    #[test]
+    fn upstream_request_translates_custom_tool_history() {
+        let body = json!({
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix"}]},
+                {"type": "custom_tool_call", "call_id": "call_1", "name": "apply_patch", "input": "*** Begin Patch"},
+                {"type": "custom_tool_call_output", "call_id": "call_1", "output": "done"},
+            ],
+        });
+        let upstream = to_upstream_request(&body);
+        let messages = upstream["messages"].as_array().unwrap();
+        let assistant = messages
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("必须还原成 assistant 调用");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            "apply_patch"
+        );
+        let arguments = assistant["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert_eq!(unwrap_custom_input(arguments), "*** Begin Patch");
+        let tool = messages
+            .iter()
+            .find(|message| message["role"] == "tool")
+            .expect("必须有 tool 结果");
+        assert_eq!(tool["tool_call_id"], "call_1");
+        assert_eq!(tool["content"], "done");
+    }
+
+    /// 非流式出站：custom 调用还原成 `custom_tool_call`，`input` 是**拆好的原文**。
+    #[test]
+    fn response_object_restores_custom_tool_calls() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"apply_patch\",\"arguments\":\"{\\\"input\\\":\\\"*** Begin Patch\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n";
+        let accumulator = CompletionAccumulator::from_sse(sse);
+        let custom: HashSet<String> = ["apply_patch".to_string()].into_iter().collect();
+        let response = to_response_object(&accumulator, "m", &custom);
+        let item = &response["output"][0];
+        assert_eq!(item["type"], "custom_tool_call");
+        assert_eq!(item["name"], "apply_patch");
+        assert_eq!(item["input"], "*** Begin Patch", "{item}");
+
+        // 未声明为 custom 的同名调用仍走 function_call（集合是唯一判据）
+        let response = to_response_object(&accumulator, "m", &HashSet::new());
+        assert_eq!(response["output"][0]["type"], "function_call");
+    }
+
+    /// 流式出站：custom 调用发 `custom_tool_call_input.done`，item 类型是 `custom_tool_call`。
+    #[tokio::test]
+    async fn stream_emits_custom_tool_call_events() {
+        let input = vec![
+            chunk("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"apply_patch\",\"arguments\":\"{\\\"input\\\":\\\"*** Begin Patch\\\"}\"}}]}}]}\n\n"),
+            chunk("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"),
+            chunk("data: [DONE]\n\n"),
+        ];
+        let custom = std::sync::Arc::new(
+            ["apply_patch".to_string()]
+                .into_iter()
+                .collect::<HashSet<String>>(),
+        );
+        let stream =
+            ResponsesSseStream::new(futures_util::stream::iter(input), "m".to_string(), custom);
+        let events = collect_events(stream).await;
+        let types = event_types(&events);
+        assert!(
+            types.contains(&"response.custom_tool_call_input.done".to_string()),
+            "缺 custom 收尾事件（原文只在这里给）: {types:?}"
+        );
+        assert!(
+            !types.contains(&"response.custom_tool_call_input.delta".to_string()),
+            "custom 不得发 delta（上游是 JSON 片段，按规范会被拼进原文）: {types:?}"
+        );
+        assert!(
+            !types.contains(&"response.function_call_arguments.delta".to_string()),
+            "custom 调用不得发 function 增量: {types:?}"
+        );
+        let done = events
+            .iter()
+            .find(|event| event["type"] == "response.custom_tool_call_input.done")
+            .unwrap();
+        assert_eq!(done["input"], "*** Begin Patch");
+        let completed = events.last().unwrap();
+        let item = &completed["response"]["output"][0];
+        assert_eq!(item["type"], "custom_tool_call");
+        assert_eq!(item["input"], "*** Begin Patch");
+    }
+
+    /// `unwrap_custom_input`：字符串 / `{"input": …}` / 裸 JSON 三种形态都要能取回原文。
+    #[test]
+    fn unwrap_custom_input_handles_all_shapes() {
+        assert_eq!(unwrap_custom_input("{\"input\":\"raw\"}"), "raw");
+        assert_eq!(unwrap_custom_input("\"bare\""), "bare");
+        assert_eq!(unwrap_custom_input("not json"), "not json");
+        assert_eq!(unwrap_custom_input("{\"input\":{\"a\":1}}"), "{\"a\":1}");
+    }
+
+    /// 验证 Responses usage 能正确映射上游标准缓存命中及思考 token。
+    #[test]
+    fn build_responses_usage_maps_cache_hit_and_reasoning_details() {
+        let raw = json!({
+            "prompt_tokens": 1500,
+            "completion_tokens": 200,
+            "total_tokens": 1700,
+            "prompt_tokens_details": {
+                "cached_tokens": 1200
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 80
+            }
+        });
+        let usage = build_responses_usage(Some(&raw), 1500, 200);
+        assert_eq!(usage["input_tokens"], 1500);
+        assert_eq!(usage["output_tokens"], 200);
+        assert_eq!(usage["total_tokens"], 1700);
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], 1200);
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 80);
+    }
+
+    /// 验证 Responses usage 能兼容厂商自定义的缓存命中与思考字段。
+    #[test]
+    fn build_responses_usage_falls_back_to_vendor_cache_and_thinking_fields() {
+        let raw = json!({
+            "prompt_tokens": 2000,
+            "completion_tokens": 150,
+            "total_tokens": 2150,
+            "prompt_cache_hit_tokens": 1800,
+            "completion_thinking_tokens": 60,
+        });
+        let usage = build_responses_usage(Some(&raw), 2000, 150);
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], 1800);
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 60);
+    }
+
+    /// 验证流式终帧的 response.completed 事件能够正确携带缓存详情。
+    #[tokio::test]
+    async fn stream_emits_cache_details_in_terminal_response() {
+        let input = vec![
+            chunk("data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"),
+            chunk("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":800},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\n"),
+        ];
+        let stream = ResponsesSseStream::new(
+            futures_util::stream::iter(input),
+            "deepseek-v4.1-flash".to_string(),
+            empty_custom(),
+        );
+        let events = collect_events(stream).await;
+        let completed = events.last().expect("must have response.completed");
+        assert_eq!(completed["type"], "response.completed");
+        let usage = &completed["response"]["usage"];
+        assert_eq!(usage["input_tokens"], 1000);
+        assert_eq!(usage["output_tokens"], 10);
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], 800);
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 5);
     }
 }

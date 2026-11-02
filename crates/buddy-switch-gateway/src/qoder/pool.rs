@@ -12,6 +12,8 @@
 //! - 池从账号库 `sync_for(region)` 重建（每次网关取号前同步，保证「导入即入池」）。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
@@ -56,6 +58,9 @@ pub enum QoderErrKind {
     Transient,
     /// 4xx（非上述）：客户端参数错 ⇒ **不换号**，原样回给调用方。
     ClientError,
+    /// ★ 上游**排队**（`10605` / `isQueued`，通常裹在 401/403 信封里）：
+    /// 账号没问题、也不是凭据死 ⇒ **不冷却、不标 dead**，只轮换。
+    Queued,
 }
 
 impl QoderErrKind {
@@ -65,6 +70,7 @@ impl QoderErrKind {
             QoderErrKind::AuthDead => "auth_dead",
             QoderErrKind::Transient => "transient",
             QoderErrKind::ClientError => "client_error",
+            QoderErrKind::Queued => "queued",
         }
     }
 
@@ -74,7 +80,7 @@ impl QoderErrKind {
     }
 }
 
-/// HTTP 状态码分类。
+/// HTTP 状态码分类（**只看状态码**；探测路径没有 body 可用）。
 pub fn classify_http(status: u16) -> QoderErrKind {
     match status {
         429 => QoderErrKind::RateLimited,
@@ -83,6 +89,48 @@ pub fn classify_http(status: u16) -> QoderErrKind {
         400..=499 => QoderErrKind::ClientError,
         _ => QoderErrKind::Transient,
     }
+}
+
+/// ★ 这条 detail 是不是「上游排队」信号（`10605` / `isQueued`）。
+///
+/// 为什么必须单独判：Qoder 把排队塞进 **401/403** 信封里，只看状态码会把它当成
+/// 「凭据失效」⇒ 账号被标 `auth_dead` + 30 分钟冷却 ⇒ 单号池直接变「无可用账号」，
+/// 面板看起来就是凭证坏了（参考实现 issue #71 的同一个坑）。
+///
+/// ⚠️ 必须排除**真正的**会话失效词：`401 token expired` 也带 401，不能被当成排队放过去。
+pub(crate) fn queue_signal(detail: &str) -> bool {
+    let low = detail.to_ascii_lowercase();
+    let queued = detail.contains("10605") || low.contains("isqueued");
+    if !queued {
+        return false;
+    }
+    const SESSION_DEAD_HINTS: [&str; 5] = [
+        "token_invalid",
+        "invalid token",
+        "token expired",
+        "session expired",
+        "login expired",
+    ];
+    !SESSION_DEAD_HINTS.iter().any(|hint| low.contains(hint))
+}
+
+/// 排队时给客户端看的文案（流式 / 非流式**同一句**，避免两处各拼一份）。
+///
+/// 入参可能已经是我们自己的措辞（信封错误帧先格式化过一次）⇒ 幂等，不重复前缀。
+pub(crate) fn queue_message(detail: &str) -> String {
+    if detail.contains("上游排队中") {
+        detail.to_string()
+    } else {
+        format!("上游排队中（不是账号或凭据问题，稍后重试即可）：{detail}")
+    }
+}
+
+/// 带 body 的分类：`401/403` 里若是排队信号 ⇒ [`QoderErrKind::Queued`]（不惩罚账号）。
+pub fn classify_http_with_detail(status: u16, detail: &str) -> QoderErrKind {
+    if matches!(status, 401 | 403) && queue_signal(detail) {
+        return QoderErrKind::Queued;
+    }
+    classify_http(status)
 }
 
 fn classify_err_kind_text(kind: QoderErrKind) -> &'static str {
@@ -105,6 +153,11 @@ pub struct QoderPoolEntry {
     /// 模型级冷却：模型名 → 解冻时刻（毫秒）。
     pub model_cooldowns: HashMap<String, i64>,
     pub last_error: Option<String>,
+    /// 该账号**在途请求数**（进程级；`BUDDY_SWITCH_QODER_MAX_INFLIGHT` > 0 时才作为闸门）。
+    ///
+    /// 用 `Arc<AtomicUsize>` 而不是普通计数：release 发生在流结束 / 客户端断开的
+    /// **Drop** 里，那里不能 await 池锁；原子量让释放无需拿锁、也不会泄漏。
+    pub inflight: Arc<AtomicUsize>,
     success_ema: f64,
     error_ema: f64,
     last_used_ms: i64,
@@ -123,6 +176,7 @@ impl QoderPoolEntry {
             cooldown_reason: None,
             model_cooldowns: HashMap::new(),
             last_error: None,
+            inflight: Arc::new(AtomicUsize::new(0)),
             success_ema: 0.0,
             error_ema: 0.0,
             last_used_ms: 0,
@@ -294,7 +348,55 @@ pub struct QoderPool {
     region: Option<QoderRegion>,
 }
 
+/// 每账号在途请求上限（`BUDDY_SWITCH_QODER_MAX_INFLIGHT`；0 / 缺省 = 关闭）。
+///
+/// 为什么默认关：参考实现只对**团队 / 企业账号**启用这套自用保护（issue #56），
+/// 本仓没有团队账号这一分类 —— 默认给个人账号降速是错的。需要「多设备共用一个号 /
+/// 想更保守」的用户可以显式开。
+pub fn max_inflight() -> usize {
+    std::env::var("BUDDY_SWITCH_QODER_MAX_INFLIGHT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+/// 在途计数的 RAII 守卫：**Drop 时自减**（流结束 / 客户端断开都会走到）。
+pub struct InflightGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        // 防下溢：如果释放路径被意外走两次，也不能把计数减成天文数字。
+        let _ = self
+            .counter
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                Some(current.saturating_sub(1))
+            });
+    }
+}
+
 impl QoderPool {
+    /// 抢占一个在途名额；`limit == 0` ⇒ 不启用闸门（恒返回守卫，计数仍记）。
+    ///
+    /// 返回 `None` 表示**该账号已满**，调用方应当跳过它（换号或报忙），**不要排队等待**：
+    /// 网关卡在 `chat_for_region` 里等，会把客户端超时拖成「上游很慢」。
+    pub fn acquire(&mut self, uid: &str, limit: usize) -> Option<InflightGuard> {
+        let entry = self.entries.get(uid)?;
+        if limit > 0 && entry.inflight.load(Ordering::SeqCst) >= limit {
+            return None;
+        }
+        // 先加再核（并发下可能短暂超一）⇒ 超了就回滚，宁可这次跳过也不突破上限。
+        entry.inflight.fetch_add(1, Ordering::SeqCst);
+        if limit > 0 && entry.inflight.load(Ordering::SeqCst) > limit {
+            entry.inflight.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(InflightGuard {
+            counter: entry.inflight.clone(),
+        })
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -312,6 +414,9 @@ impl QoderPool {
             if let Some(previous) = self.entries.get(&entry.uid) {
                 // 保留运行态；令牌与名字以库为准（刷新 / 改备注后即时生效）。
                 entry.auth_dead = previous.auth_dead && entry.access_token == previous.access_token;
+                // 在途计数是进程级事实：重建条目时按 uid 继承，否则「正在跑的请求」
+                // 会凭空消失（闸门失效 + 释放时少减一次）。
+                entry.inflight = previous.inflight.clone();
                 entry.cooldown_until = previous.cooldown_until;
                 entry.cooldown_reason = previous.cooldown_reason.clone();
                 entry.model_cooldowns = previous.model_cooldowns.clone();
@@ -352,6 +457,8 @@ impl QoderPool {
         model: &str,
         tried: &HashSet<String>,
         preferred_uid: Option<&str>,
+        // ★ issue #76：本密钥的允许名单（`None` = 全部账号）。
+        allowed: Option<&HashSet<String>>,
     ) -> Option<String> {
         let now = now_ms();
         let policy = qoder_pick_policy();
@@ -365,6 +472,7 @@ impl QoderPool {
             model,
             tried,
             excluded: &excluded,
+            allowed,
             mode,
             seed,
         };
@@ -396,6 +504,12 @@ impl QoderPool {
         let Some(entry) = self.entries.get_mut(uid) else {
             return;
         };
+        /* ★ 排队**不是账号问题**：既不推 EMA、也不设冷却、更不标 `auth_dead`。
+        推 EMA 会让健康账号在池里排到后面，最终表现为「无可用账号」。 */
+        if kind == QoderErrKind::Queued {
+            entry.last_error = Some(format!("queued: {reason}"));
+            return;
+        }
         entry.success_ema *= 0.9;
         entry.error_ema = entry.error_ema * 0.9 + 0.1;
         entry.last_error = Some(format!("{}: {reason}", classify_err_kind_text(kind)));
@@ -415,7 +529,7 @@ impl QoderPool {
                 entry.cooldown_until = now + 10_000;
                 entry.cooldown_reason = Some("上游暂时不可用".to_string());
             }
-            QoderErrKind::ClientError => {}
+            QoderErrKind::ClientError | QoderErrKind::Queued => {}
         }
     }
 
@@ -608,8 +722,19 @@ impl QoderPool {
 
     /// 逐账号「为什么不能路由」（诊断区，形状与 Trae 侧同款：`名字(尾8位:原因)`）。
     pub fn diagnose(&self, now: i64) -> Vec<String> {
+        self.diagnose_for(now, None)
+    }
+
+    /// 逐账号诊断；`allowed` 生效时**只列这把 Key 允许用的账号**（issue #76）。
+    ///
+    /// 与 Trae 侧同款理由：白名单用户该看到的是「我允许用的那几个号」为什么不可用。
+    pub fn diagnose_for(&self, now: i64, allowed: Option<&HashSet<String>>) -> Vec<String> {
         self.entries
             .values()
+            .filter(|entry| match allowed {
+                Some(only) => only.contains(&entry.uid),
+                None => true,
+            })
             .map(|entry| {
                 let tail = entry
                     .uid
@@ -649,6 +774,7 @@ mod tests {
             cooldown_reason: None,
             model_cooldowns: HashMap::new(),
             last_error: None,
+            inflight: Arc::new(AtomicUsize::new(0)),
             success_ema: 0.0,
             error_ema: 0.0,
             last_used_ms: 0,
@@ -691,14 +817,20 @@ mod tests {
         pool.entries.insert("b".into(), entry("b", "t-b"));
         let tried = HashSet::new();
         // 偏好命中。
-        assert_eq!(pool.pick("m", &tried, Some("b")), Some("b".to_string()));
+        assert_eq!(
+            pool.pick("m", &tried, Some("b"), None),
+            Some("b".to_string())
+        );
         // 偏好被 tried 排除 ⇒ 回落自动择优。
         let mut tried = HashSet::new();
         tried.insert("b".to_string());
-        assert_eq!(pool.pick("m", &tried, Some("b")), Some("a".to_string()));
+        assert_eq!(
+            pool.pick("m", &tried, Some("b"), None),
+            Some("a".to_string())
+        );
         // 全被排除 ⇒ None。
         tried.insert("a".to_string());
-        assert_eq!(pool.pick("m", &tried, None), None);
+        assert_eq!(pool.pick("m", &tried, None, None), None);
     }
 
     #[test]
@@ -853,5 +985,80 @@ mod tests {
         assert_eq!(diagnose.len(), 5);
         assert!(diagnose.iter().any(|line| line.contains("PAT")));
         assert!(diagnose.iter().any(|line| line.contains("模型冷却")));
+
+        // ★ issue #76：名单口径只列这把 Key 允许用的账号 —— 全池数字对白名单用户是噪声，
+        //   还会把他推去修一堆本来就不许用的账号。
+        let only: std::collections::HashSet<String> = ["pat".to_string()].into_iter().collect();
+        let scoped = pool.diagnose_for(now, Some(&only));
+        assert_eq!(scoped.len(), 1, "名单外账号不得出现在诊断里: {scoped:?}");
+        assert!(scoped[0].contains("PAT"), "{scoped:?}");
+        let missing: std::collections::HashSet<String> = ["zzz".to_string()].into_iter().collect();
+        assert!(
+            pool.diagnose_for(now, Some(&missing)).is_empty(),
+            "名单没覆盖本池 ⇒ 空诊断（上层据此说「名单没覆盖本区域」）"
+        );
+    }
+    /// ★ 排队信号（`10605` / `isQueued`）藏在 401/403 里 ⇒ **不惩罚账号**。
+    ///
+    /// 可证伪：删掉 `classify_http_with_detail` 的排队分支（退回只看状态码）⇒
+    /// 第一个断言拿到的就是 `AuthDead`，账号会被标死 + 冷却 30 分钟。
+    #[test]
+    fn queued_envelope_is_not_an_account_failure() {
+        assert_eq!(
+            classify_http_with_detail(403, "{\"code\":10605,\"msg\":\"isQueued\"}"),
+            QoderErrKind::Queued
+        );
+        assert_eq!(
+            classify_http_with_detail(401, "isQueued: true"),
+            QoderErrKind::Queued
+        );
+        // 真·凭据失效不能被当成排队吞掉（否则账号永远不刷新）。
+        assert_eq!(
+            classify_http_with_detail(401, "{\"code\":\"TOKEN_INVALID\"}"),
+            QoderErrKind::AuthDead
+        );
+        assert_eq!(
+            classify_http_with_detail(401, "token expired"),
+            QoderErrKind::AuthDead
+        );
+        // 其它状态码不受影响。
+        assert_eq!(
+            classify_http_with_detail(429, "10605"),
+            QoderErrKind::RateLimited
+        );
+        assert_eq!(
+            classify_http_with_detail(400, "isQueued"),
+            QoderErrKind::ClientError
+        );
+        assert_eq!(
+            classify_http_with_detail(500, "10605"),
+            QoderErrKind::Transient
+        );
+        // 排队要换号（另一个号可能没排队），但**不是**客户端错。
+        assert!(QoderErrKind::Queued.should_rotate());
+        assert_eq!(QoderErrKind::Queued.as_str(), "queued");
+    }
+
+    /// `apply_error(Queued)` 不改 `auth_dead` / 冷却 / EMA —— 只留痕。
+    #[test]
+    fn queued_does_not_penalise_the_entry() {
+        let mut pool = QoderPool::new();
+        pool.entries.insert("a".into(), entry("a", "t-a"));
+        let before = pool.entries["a"].clone();
+        pool.apply_error("a", QoderErrKind::Queued, "isQueued", "m-a");
+        let after = &pool.entries["a"];
+        assert!(!after.auth_dead, "排队不是凭据死");
+        assert_eq!(after.cooldown_until, before.cooldown_until, "不得设冷却");
+        assert_eq!(after.success_ema, before.success_ema, "不得推 EMA");
+        assert_eq!(after.error_ema, before.error_ema, "不得推 EMA");
+        assert!(
+            after
+                .last_error
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("queued"),
+            "必须留痕: {:?}",
+            after.last_error
+        );
     }
 }

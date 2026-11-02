@@ -34,41 +34,58 @@ export type PoolTileKey =
   | "modelCooling"
   | "excluded";
 
-/** 默认五格（Trae 侧：积分过期有判据）。 */
+/**
+ * 默认六格（Trae 侧：积分过期有判据，另有「已排除」）。
+ *
+ * ★「已排除」是**互斥第六态**（被排除的号不能再算「可路由」）：后端已把它从
+ * `available` 里扣掉并单独计数 ⇒ 卡片必须给它一格，否则「可用 2」而实际有 3 个号、
+ * 少掉的那个去哪了无从得知（数字与事实不符）。
+ */
 export const DEFAULT_POOL_TILES: PoolTileKey[] = [
   "available",
   "cooling",
   "disabled",
   "expired",
   "zeroCredits",
+  "excluded",
 ];
 
 /**
- * WorkBuddy 侧的四格 —— **没有「积分过期」**。
+ * WorkBuddy 侧的六格 —— **没有「积分过期」**，但有「模型冷却」。
  *
  * 后端池条目只存「快过期的积分**数量**」，不存有效期，没有判据 ⇒ 该 state 恒为 0。
  * 与其摆一个永远为 0 的假格子，不如不给（诚实 > 看起来对齐）。
  *
- * ★ 新增「已排除」（2026-10-17）：它是**互斥第六态**（被排除的号不能再算「可路由」），
+ * ★「已排除」（2026-10-17）：它是**互斥第六态**（被排除的号不能再算「可路由」），
  * 因此必须有自己的一格 —— 否则「可路由 4」与实际可选中 3 个互相矛盾。
- * Trae / Qoder 侧暂不加：它们的排除端点还没接（摆一个恒 0 的格子就是假控件）。
+ *
+ * ★「模型冷却」（issue #88，2026-10-26）：此前 WB 侧**一格都没有**反映模型级冷却，
+ * 于是「探测判出 429 → 池卡全绿」看起来像探测没生效。Qoder 侧早有这一格，
+ * 缺它是实现不对称，不是「WB 没有这一维」—— WB 的 6004 同样是按模型报的。
  */
 export const WB_POOL_TILES: PoolTileKey[] = [
   "available",
   "cooling",
   "disabled",
+  "modelCooling",
   "zeroCredits",
   "excluded",
 ];
 
 /**
- * Qoder 侧的四格 —— **没有积分两格**（池不建模积分），多一格**模型冷却**。
+ * Qoder 侧的五格 —— **没有积分两格**（池不建模积分），多一格**模型冷却**。
  *
  * 上游 429 是**按模型**报的（「…switch to the other models」）⇒ 一个账号可能
  * 「对 A 模型冷却、对 B 模型仍可服务」。这一格与 `cooling`（账号级）**正交**，
  * 是真数据、不是把零值摆出来凑数（与 WB 去掉「积分过期」同一判据）。
  */
-export const QODER_POOL_TILES: PoolTileKey[] = ["available", "cooling", "disabled", "modelCooling"];
+export const QODER_POOL_TILES: PoolTileKey[] = [
+  "available",
+  "cooling",
+  "disabled",
+  "modelCooling",
+  "excluded",
+];
 
 const TILE_META: Record<PoolTileKey, { labelKey: TranslationKey; tone: "ok" | "warn" | "danger" | "muted" }> = {
   available: { labelKey: "shared.gateway.pool.tile.available", tone: "ok" },
@@ -86,18 +103,75 @@ const TILE_META: Record<PoolTileKey, { labelKey: TranslationKey; tone: "ok" | "w
  * 与账号级 `cooling` **分开显示**的依据：模型冷却时账号仍可用于**其它**模型，
  * 混进「冷却中」会让人把「换个模型就好」误判成「这个号废了」。
  * Trae 侧没有这一维 ⇒ 字段缺失时返回 `null`（不渲染假徽标）。
+ *
+ * ★ 必须带**解冻时刻**（issue #88 补充）：此前界面上只有「N 个模型限流」几个字，
+ * 时间只藏在 `title` 的模型名里 —— 用户无从判断「还要等多久」「是不是早就该好了」。
+ * 上游 429 的恢复信息本来就是按模型给的，不展示等于把它丢掉。
  */
-function modelCoolingBadge(account: GatewayPoolAccount): ReactNode {
-  const entries = Object.entries(account.modelCoolings ?? {});
-  if (!entries.length) return null;
-  const models = entries.map(([model]) => model).join("、");
+/**
+ * 解冻时刻的可读形式：**今天只给时分，跨天补上「月/日」**（issue #88 缺口 4.2）。
+ *
+ * 改造前一律用 `toLocaleTimeString`（只到时分）。封禁档最长 24 小时，跨天时
+ * 「05:00」会被读成「今天早上 5 点已过」，而实际是**次日**。
+ */
+function formatThawAt(ms: number, now: number): string {
+  const target = new Date(ms);
+  const sameDay = target.toDateString() === new Date(now).toDateString();
+  return target.toLocaleString(
+    undefined,
+    sameDay
+      ? { hour: "2-digit", minute: "2-digit" }
+      : { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" },
+  );
+}
+
+/** 剩余时长的粗粒度表述（tooltip 逐行用）。 */
+function formatRemaining(ms: number, now: number): string {
+  const minutes = Math.max(0, Math.round((ms - now) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+function modelCoolingBadge(account: GatewayPoolAccount, t: ReturnType<typeof useT>): ReactNode {
+  const details = account.modelCooldownDetails ?? {};
+  const rows = Object.entries(account.modelCoolings ?? {}).map(([model, until]) => ({
+    model,
+    until,
+    fallback: details[model]?.fallback ?? false,
+  }));
+  const now = Date.now();
+  // 只展示仍有效的（后端已过滤，这里再兜一次防时钟漂移导致的负数）。
+  const live = rows.filter((row) => Number.isFinite(row.until) && row.until > now);
+  if (!live.length) return null;
+
+  const earliest = Math.min(...live.map((row) => row.until));
+  const latest = Math.max(...live.map((row) => row.until));
+  // ★ issue #88 缺口 4.2：**不能只给最早**。
+  //
+  // 3 个模型分别冷却 2 分钟 / 10 分钟 / 2 小时时，只说「最近 2 分钟后」会被读成
+  // 「整批都快好了」—— 而实际还有两个要等两小时。所以只要不是同一个时刻，就给区间。
+  const range =
+    latest > earliest
+      ? `${formatThawAt(earliest, now)} – ${formatThawAt(latest, now)}`
+      : formatThawAt(earliest, now);
+
+  // tooltip 逐模型列出：名称 + 剩余时长 +（若是兜底值）标记。
+  // 「兜底」必须显式标出来 —— 那是本仓猜的 10 分钟，不是上游说的，排查含义相反。
+  const hint = live
+    .map((row) =>
+      t("shared.gateway.pool.modelCoolingRow", {
+        model: row.model,
+        remaining: formatRemaining(row.until, now),
+        fallback: row.fallback ? t("shared.gateway.pool.modelCoolingFallback") : "",
+      }),
+    )
+    .join("\n");
+
   return (
-    <Badge
-      variant="secondary"
-      className="shrink-0 text-warning"
-      title={`${models} 处于模型级冷却（只影响这些模型，其它模型仍可用）`}
-    >
-      {`${entries.length} 个模型限流`}
+    <Badge variant="secondary" className="shrink-0 text-warning" title={hint}>
+      {t("shared.gateway.pool.modelCoolingBadge", { count: live.length, time: range })}
     </Badge>
   );
 }
@@ -249,10 +323,16 @@ export function AccountPoolCard({
         )}
       </div>
 
+      {/* 格数不同 ⇒ 断点不同：5 格一行铺满；6 格（Trae：多了「已排除」）在中等宽度下
+          先折成 3 列，避免每格被压到放不下「积分过期」四个字。 */}
       <div
         className={cn(
           "grid gap-0 border-b border-border/60",
-          tiles.length >= 5 ? "grid-cols-2 sm:grid-cols-5" : "grid-cols-2 sm:grid-cols-4",
+          tiles.length >= 6
+            ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
+            : tiles.length >= 5
+              ? "grid-cols-2 sm:grid-cols-5"
+              : "grid-cols-2 sm:grid-cols-4",
         )}
       >
         {tiles.map((key, index) => {
@@ -362,7 +442,7 @@ export function AccountPoolCard({
                         {/* 模型级冷却：账号本身可用，只是**这个模型**在冷却。
                             必须与账号级 `cooling` 分开显示 —— 混在一起会让人把「换个模型就好」
                             误判成「这个号废了」。 */}
-                        {modelCoolingBadge(account)}
+                        {modelCoolingBadge(account, t)}
                         {(account.status === "cooling" || account.status === "disabled") &&
                           account.cooldownReason && (
                             <span className="truncate text-xs text-muted-foreground">

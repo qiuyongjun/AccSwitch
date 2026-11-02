@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 
 use buddy_switch_core::modules::trae::variant::TraeVariant;
 use buddy_switch_core::modules::trae::{account, credits, device};
+use buddy_switch_core::modules::upstream::SESSION_DEAD_MARKERS;
 
 use crate::pool::entry::CoolKind;
 use crate::pool::entry_like::PoolEntryLike;
@@ -44,8 +45,22 @@ pub enum TraeErrKind {
     PlanLimit,
     /// 触发限流。
     SoftRate,
-    /// 会话失效（凭据问题，永久禁用）。
+    /// 会话失效（上游**真的**作废了会话：`12153` / `Offline user session not found`）。
+    ///
+    /// 永久禁用。**只有**带作废标记时才该落到这里（见 [`TraeErrKind::AuthRejected`]）。
     SessionDead,
+    /// **凭据被拒**（401/403，但响应体里**没有**会话作废标记）。
+    ///
+    /// ## 为什么必须与 `SessionDead` 分开（issue #108 §P0-B）
+    ///
+    /// 改造前 401 一律判 `SessionDead` ⇒ `until = 9999999999`（永久）+ 派生 `disabled`
+    /// ⇒ 账号进入**静默终态**：不路由、不签到、不解冻、不探测回填。而 401 的绝大多数
+    /// 成因是 **access token 过期**，保活刷新一轮就能自愈 —— 把可自愈的问题打成终态，
+    /// 用户看到的是「号没坏却再也用不了」，而且重新登录也救不回来（冷却表没人清）。
+    ///
+    /// 本档的处置与 WorkBuddy 侧 `UpstreamEvent::AuthRejected` **同一口径**：
+    /// 换号 + 浅冷却 60 秒，**不计数、不禁用**。
+    AuthRejected,
     /// 接口不存在。
     NotFound,
     /// 上游 5xx。
@@ -64,6 +79,7 @@ impl TraeErrKind {
             TraeErrKind::PlanLimit => "PlanLimit",
             TraeErrKind::SoftRate => "SoftRate",
             TraeErrKind::SessionDead => "SessionDead",
+            TraeErrKind::AuthRejected => "AuthRejected",
             TraeErrKind::NotFound => "NotFound",
             TraeErrKind::Server => "Server",
             TraeErrKind::Client => "Client",
@@ -77,10 +93,29 @@ impl TraeErrKind {
     }
 }
 
-/// 按 HTTP 状态码分类（上游在**建立连接阶段**就失败时使用）。
-pub fn classify_http(status: u16) -> TraeErrKind {
+/// 按 HTTP 状态码 + **响应体**分类（上游在**建立连接阶段**就失败时使用）。
+///
+/// ## 为什么必须带 body（issue #108 §P0-B）
+///
+/// 判定顺序不能反：**先**看 body 里有没有会话作废标记（`12153` /
+/// `Offline user session not found`，与 WB 侧同一常量来源
+/// [`SESSION_DEAD_MARKERS`]），**再**按状态码归类。
+///
+/// - 有标记 ⇒ `SessionDead`（永久，需重新登录）；
+/// - 裸 401/403（无标记）⇒ `AuthRejected`（浅冷却 60s，可自愈）。
+///
+/// 改造前 Trae 侧**完全不识别 `12153`**，所以「真正的作废」与「token 过期」只能共用
+/// 裸 401 这一个判据 —— 怎么选都错。先补识别，才有资格降级。
+pub fn classify_http(status: u16, body: &str) -> TraeErrKind {
+    if SESSION_DEAD_MARKERS
+        .iter()
+        .any(|marker| body.contains(marker))
+    {
+        return TraeErrKind::SessionDead;
+    }
     match status {
-        401 => TraeErrKind::SessionDead,
+        // 403 与 401 同族：凭据被拒，但未必是终态。
+        401 | 403 => TraeErrKind::AuthRejected,
         429 => TraeErrKind::SoftRate,
         404 => TraeErrKind::NotFound,
         code if code >= 500 => TraeErrKind::Server,
@@ -94,6 +129,14 @@ pub fn classify_http(status: u16) -> TraeErrKind {
 /// 顺序有讲究：先看业务码，再看文案兜底，最后才按数字区间归类。把 `1005`（套餐额度）
 /// 误判成 `Client` 会让一个额度耗尽的账号在 10 分钟后被反复重试。
 pub fn classify_solo(code: i64, message: &str) -> TraeErrKind {
+    // ★ issue #108：会话作废标记优先于一切业务码判读 —— 它是**唯一**能把
+    //   「真作废」与「token 过期」区分开的证据，放在后面会被 code 分支吞掉。
+    if SESSION_DEAD_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        return TraeErrKind::SessionDead;
+    }
     let lower = message.to_lowercase();
     if code == 1005 || lower.contains("plan") {
         return TraeErrKind::PlanLimit;
@@ -110,7 +153,8 @@ pub fn classify_solo(code: i64, message: &str) -> TraeErrKind {
         return TraeErrKind::SoftRate;
     }
     match code {
-        401 => TraeErrKind::SessionDead,
+        // 与 `classify_http` 同口径：裸 401/403 是「凭据被拒」，不是「会话作废」。
+        401 | 403 => TraeErrKind::AuthRejected,
         429 => TraeErrKind::SoftRate,
         404 => TraeErrKind::NotFound,
         // **只有真正的 HTTP 状态码区间**才映射为 Client / Server。
@@ -263,7 +307,17 @@ impl TraePool {
         self.entries = account::entries_for_region(variant.region())
             .into_iter()
             .map(|(uid, raw)| {
-                let cooldown = cooldowns.cooldowns.get(&uid);
+                // ★★ issue #108 §P0-A：冷却记录必须**自证它判的是哪一份凭据**。
+                //
+                // 否则会出现最坏的一种不一致：卡片（走 `account_view`）已经因指纹不符而
+                // 显示正常，池这边却仍把它 `disabled` ⇒ 界面说「可用」、网关永远不选它。
+                // 判定与视图必须同源，故这里用同一个 `matches_credential`。
+                let credential_exp =
+                    buddy_switch_core::modules::trae::jwt::parse(&raw.jwt).exp_timestamp;
+                let cooldown = cooldowns
+                    .cooldowns
+                    .get(&uid)
+                    .filter(|entry| entry.matches_credential(credential_exp));
                 let device = device::derive(&uid);
                 TraePoolEntry {
                     jwt: clean_jwt(&raw.jwt),
@@ -350,6 +404,9 @@ impl TraePool {
         now: i64,
         tried: &HashSet<String>,
         preferred_uid: Option<&str>,
+        // ★ issue #76：本密钥的允许名单（`None` = 全部账号）。
+        //   分组已由调用方展开成 uid（Trae 的分组是 `groupId`，池不认识分组概念）。
+        allowed: Option<&HashSet<String>>,
     ) -> Option<PickedTraeAccount> {
         // 共用内核按 `BTreeMap<uid, E>` 组织候选；池本身用 `Vec`（沿用账号库顺序，
         // 供展示层直接遍历），故这里临时构造一份候选表。
@@ -376,6 +433,7 @@ impl TraePool {
             model: "",
             tried,
             excluded: &excluded,
+            allowed,
             mode,
             seed,
         };
@@ -426,7 +484,24 @@ impl TraePool {
         // 关键：按**本池变体**写回冷却（`self.variant`）。若改回无变体的 `save_cooldown`，
         // 会恒定写默认产品线，导致 CN 账号的冷却落进 Work 文件、CN 池读 CN 文件读不到，
         // 死号永不被冷却且被反复选中——正是「读侧改了、写侧没改」的半成品缺陷。
-        credits::save_cooldown_for(self.variant, uid, error_type, cooldown_seconds, reason);
+        // ★ issue #108 §P0-A：写入时记下**这次判定所依据的** JWT `exp`。
+        //   凭据被换掉（重新登录 / 续期 / 手动粘贴）后，这条记录会自动失效，
+        //   无需那六个出口各自去清冷却。
+        let credential_exp = self
+            .entries
+            .iter()
+            .find(|entry| entry.uid == uid)
+            .and_then(|entry| {
+                buddy_switch_core::modules::trae::jwt::parse(&entry.jwt).exp_timestamp
+            });
+        credits::save_cooldown_with_credential_for(
+            self.variant,
+            uid,
+            error_type,
+            cooldown_seconds,
+            reason,
+            credential_exp,
+        );
 
         let now = chrono::Local::now().timestamp();
         for entry in self.entries.iter_mut().filter(|entry| entry.uid == uid) {
@@ -545,8 +620,20 @@ impl TraePool {
 
     /// 诊断：每个账号为什么不能路由。用于「no healthy account」的排查。
     pub fn diagnose(&self, now: i64) -> Vec<String> {
+        self.diagnose_for(now, None)
+    }
+
+    /// 逐账号诊断；`allowed` 生效时**只列这把 Key 允许用的账号**（issue #76）。
+    ///
+    /// 白名单用户看到的必须是「我允许用的那几个号」为什么不可用 —— 把全池
+    /// 12 个号的原因堆给他，等于让他去修一堆本来就不许用的账号。
+    pub fn diagnose_for(&self, now: i64, allowed: Option<&HashSet<String>>) -> Vec<String> {
         self.entries
             .iter()
+            .filter(|entry| match allowed {
+                Some(only) => only.contains(&entry.uid),
+                None => true,
+            })
             .map(|entry| {
                 let reason = entry.rejection(now).unwrap_or("可用");
                 let credits = entry
@@ -756,13 +843,19 @@ fn mask_device(device_id: &str) -> String {
 
 /// 错误类别 → `(落盘类型名, 冷却秒数)`。
 ///
-/// 秒数沿用 Trae 账号模块的经验值：`-1` 表示永久。**不要**把 `SessionDead` 调小，
-/// 401 是凭据失效，短冷却只会让它被反复重试并持续触发风控。
+/// 秒数沿用 Trae 账号模块的经验值：`-1` 表示永久。
+///
+/// ★ issue #108：`SessionDead` 仍然永久（**真**会话作废，短冷却只会反复撞墙）；
+/// 但 401/403 已经改由 [`TraeErrKind::AuthRejected`] 承担，浅冷却 60 秒、不禁用 ——
+/// 与 WorkBuddy 侧 `AUTH_REJECT_COOLDOWN_MS` 对齐。改造前那段「401 是凭据失效，
+/// 短冷却只会让它被反复重试」的注释针对的是**裸 401 被当成终态**这个前提，
+/// 该前提现在由「先识别 12153」取代，注释一并改写以免与新语义冲突。
 fn cooldown_of(kind: TraeErrKind) -> (&'static str, i64) {
     match kind {
         TraeErrKind::None => ("None", 0),
         TraeErrKind::PlanLimit => ("PlanLimit", 43_200),
         TraeErrKind::SoftRate => ("SoftRate", 60),
+        TraeErrKind::AuthRejected => ("AuthRejected", 60),
         TraeErrKind::SessionDead => ("SessionDead", -1),
         TraeErrKind::NotFound => ("NotFound", 60),
         TraeErrKind::Server => ("Server", 600),
@@ -807,15 +900,43 @@ mod tests {
         assert_eq!(clean_jwt("   "), "");
     }
 
+    /// ★★ issue #108 §P0-B：**先识别 `12153`，再降级裸 401**。
+    ///
+    /// 两条断言必须同批存在，缺一条都会把修复做反：
+    /// - 裸 401/403 不得判成永久失效（否则「token 过期」被打成终态，重登也救不回）；
+    /// - 带作废标记的 401 **必须**判成永久失效（否则真作废会被当可自愈，反复撞墙）。
     #[test]
-    fn classify_http_covers_the_error_families() {
-        assert_eq!(classify_http(401), TraeErrKind::SessionDead);
-        assert_eq!(classify_http(429), TraeErrKind::SoftRate);
-        assert_eq!(classify_http(404), TraeErrKind::NotFound);
-        assert_eq!(classify_http(500), TraeErrKind::Server);
-        assert_eq!(classify_http(503), TraeErrKind::Server);
-        assert_eq!(classify_http(400), TraeErrKind::Client);
-        assert_eq!(classify_http(200), TraeErrKind::None);
+    fn classify_http_separates_session_dead_from_plain_401() {
+        // ① 裸 401/403 ⇒ 浅冷却档，`is_permanent()` 必须为假。
+        assert_eq!(classify_http(401, ""), TraeErrKind::AuthRejected);
+        assert_eq!(classify_http(403, ""), TraeErrKind::AuthRejected);
+        assert!(
+            !classify_http(401, "").is_permanent(),
+            "裸 401 不得是终态：access token 过期可自愈"
+        );
+        // ② 带作废标记 ⇒ 永久档，与状态码无关（上游也可能用 200/400 返回）。
+        for body in [
+            r#"{"code":12153,"message":"Offline user session not found"}"#,
+            r#"{"code":0,"message":"12153"}"#,
+        ] {
+            assert_eq!(
+                classify_http(401, body),
+                TraeErrKind::SessionDead,
+                "带作废标记必须判永久：{body}"
+            );
+            assert!(classify_http(400, body).is_permanent(), "{body}");
+        }
+        // ③ 其余家族不变。
+        assert_eq!(classify_http(429, ""), TraeErrKind::SoftRate);
+        assert_eq!(classify_http(404, ""), TraeErrKind::NotFound);
+        assert_eq!(classify_http(500, ""), TraeErrKind::Server);
+        assert_eq!(classify_http(503, ""), TraeErrKind::Server);
+        assert_eq!(classify_http(400, ""), TraeErrKind::Client);
+        assert_eq!(classify_http(200, ""), TraeErrKind::None);
+
+        // ④ 冷却时长：浅档 60s、永久档 -1（`-1` 是落盘的「永久」语义）。
+        assert_eq!(cooldown_of(TraeErrKind::AuthRejected), ("AuthRejected", 60));
+        assert_eq!(cooldown_of(TraeErrKind::SessionDead), ("SessionDead", -1));
     }
 
     #[test]
@@ -829,7 +950,12 @@ mod tests {
         assert_eq!(classify_solo(4008, ""), TraeErrKind::SoftRate);
         assert_eq!(classify_solo(0, "Quota exceeded"), TraeErrKind::SoftRate);
         assert_eq!(classify_solo(0, "rate limit"), TraeErrKind::SoftRate);
-        assert_eq!(classify_solo(401, ""), TraeErrKind::SessionDead);
+        // 裸 401 走浅冷却档；带作废标记才是永久档（issue #108）。
+        assert_eq!(classify_solo(401, ""), TraeErrKind::AuthRejected);
+        assert_eq!(
+            classify_solo(0, "Offline user session not found"),
+            TraeErrKind::SessionDead
+        );
         assert_eq!(classify_solo(500, ""), TraeErrKind::Server);
         assert_eq!(classify_solo(400, ""), TraeErrKind::Client);
         assert_eq!(classify_solo(0, ""), TraeErrKind::None);
@@ -888,13 +1014,15 @@ mod tests {
         let zero = entry("zero", Some(0.0), Some(now + 10));
 
         let mut pool = pool_with(vec![soon, later, cooling, zero]);
-        let picked = pool.pick(now, &HashSet::new(), None).expect("应选出账号");
+        let picked = pool
+            .pick(now, &HashSet::new(), None, None)
+            .expect("应选出账号");
         assert_eq!(picked.uid, "soon", "到期最近的优先");
 
         // 已试过的账号不再选。
         let mut tried = HashSet::new();
         tried.insert("soon".to_string());
-        assert_eq!(pool.pick(now, &tried, None).unwrap().uid, "later");
+        assert_eq!(pool.pick(now, &tried, None, None).unwrap().uid, "later");
 
         // 全试过 → 不重复尝试已试账号，但会走**全冷却兜底**挑「最早解冻者」。
         // ★ 这是接入共用内核后新增的能力（旧实现此时直接返回 None）。
@@ -902,7 +1030,7 @@ mod tests {
         // （`cool_expiry_ms() == 0`），不参与兜底。
         tried.insert("later".to_string());
         let fallback = pool
-            .pick(now, &tried, None)
+            .pick(now, &tried, None, None)
             .expect("全冷却兜底应挑出最早解冻者");
         assert_eq!(fallback.uid, "cooling");
     }
@@ -913,7 +1041,10 @@ mod tests {
         let unknown = entry("unknown", Some(5000.0), None);
         let known = entry("known", Some(1.0), Some(now + 999));
         let mut pool = pool_with(vec![unknown, known]);
-        assert_eq!(pool.pick(now, &HashSet::new(), None).unwrap().uid, "known");
+        assert_eq!(
+            pool.pick(now, &HashSet::new(), None, None).unwrap().uid,
+            "known"
+        );
     }
 
     /// ★★ 护栏：旧实现的「**积分到期最近优先**」语义必须在新算法下继续成立。
@@ -931,7 +1062,9 @@ mod tests {
         let far = entry("far", Some(999.0), Some(now + 365 * 24 * 3600));
         let mut pool = pool_with(vec![far, soon]);
 
-        let picked = pool.pick(now, &HashSet::new(), None).expect("应选出账号");
+        let picked = pool
+            .pick(now, &HashSet::new(), None, None)
+            .expect("应选出账号");
         assert_eq!(picked.uid, "soon", "「先用掉快过期的额度」必须压过积分多寡");
     }
 
@@ -947,7 +1080,7 @@ mod tests {
         let mut pool = pool_with(vec![rich, poor]);
 
         let picked = pool
-            .pick(now, &HashSet::new(), Some("__max_credits__"))
+            .pick(now, &HashSet::new(), Some("__max_credits__"), None)
             .expect("应选出账号");
         assert_eq!(picked.uid, "rich", "哨兵值必须按积分择优");
     }
@@ -961,7 +1094,7 @@ mod tests {
         let mut pool = pool_with(vec![rich, poor]);
 
         let picked = pool
-            .pick(now, &HashSet::new(), Some("poor"))
+            .pick(now, &HashSet::new(), Some("poor"), None)
             .expect("应选出账号");
         assert_eq!(picked.uid, "poor", "指定账号可用时必须优先");
     }
@@ -982,14 +1115,14 @@ mod tests {
 
         // 冷却中的偏好 → 回落
         assert_eq!(
-            pool.pick(now, &HashSet::new(), Some("cooling"))
+            pool.pick(now, &HashSet::new(), Some("cooling"), None)
                 .unwrap()
                 .uid,
             "healthy"
         );
         // 禁用的偏好 → 回落
         assert_eq!(
-            pool.pick(now, &HashSet::new(), Some("disabled"))
+            pool.pick(now, &HashSet::new(), Some("disabled"), None)
                 .unwrap()
                 .uid,
             "healthy"
@@ -998,12 +1131,12 @@ mod tests {
         let mut tried = HashSet::new();
         tried.insert("healthy".to_string());
         let picked = pool
-            .pick(now, &tried, Some("healthy"))
+            .pick(now, &tried, Some("healthy"), None)
             .expect("应回落到其它账号");
         assert_ne!(picked.uid, "healthy", "已试过的偏好必须被跳过");
         // 不存在的 uid → 回落
         assert_eq!(
-            pool.pick(now, &HashSet::new(), Some("no-such-uid"))
+            pool.pick(now, &HashSet::new(), Some("no-such-uid"), None)
                 .unwrap()
                 .uid,
             "healthy"
@@ -1021,7 +1154,7 @@ mod tests {
         let mut pool = pool_with(vec![limited]);
 
         assert!(
-            pool.pick(now, &HashSet::new(), None).is_none(),
+            pool.pick(now, &HashSet::new(), None, None).is_none(),
             "硬冷却账号既不在候选里，也不该被兜底强试"
         );
     }
@@ -1151,6 +1284,43 @@ mod tests {
         let lines = pool.diagnose(now);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("冷却中"), "{}", lines[0]);
+    }
+
+    /// issue #76：白名单生效时诊断只列**这把 Key 允许用**的账号。
+    ///
+    /// 阳性对照：去掉 `diagnose_for` 里的 uid 过滤（退化成 `diagnose`）⇒
+    /// 第一条断言必红 —— 那正是「白名单用户被告知池里 3 个号都不可用」的来源。
+    #[test]
+    fn diagnose_for_filters_to_allowlisted_accounts() {
+        let now = 1_000_000;
+        let mut cooling = entry("u1", Some(9.0), Some(now + 100));
+        cooling.cooldown_until = now + 60;
+        let disabled = {
+            let mut e = entry("u2", Some(9.0), Some(now + 100));
+            e.disabled = true;
+            e
+        };
+        let ok = entry("u3", Some(9.0), Some(now + 100));
+        let pool = pool_with(vec![cooling, disabled, ok]);
+
+        assert_eq!(
+            pool.diagnose(now).len(),
+            3,
+            "全池口径不变（管理面要看全池）"
+        );
+
+        let only: HashSet<String> = ["u2".to_string()].into_iter().collect();
+        let lines = pool.diagnose_for(now, Some(&only));
+        assert_eq!(lines.len(), 1, "名单外账号不得出现在诊断里");
+        assert!(
+            lines[0].contains("u2") || lines[0].contains("禁用"),
+            "{}",
+            lines[0]
+        );
+
+        // 名单里的 uid 不在池中 ⇒ 空诊断（上层据此说「名单没覆盖本区域」）。
+        let missing: HashSet<String> = ["zzz".to_string()].into_iter().collect();
+        assert!(pool.diagnose_for(now, Some(&missing)).is_empty());
     }
 
     #[test]

@@ -176,67 +176,186 @@ pub fn normalize_roles(messages: Option<&Vec<Value>>) -> Vec<Value> {
     out
 }
 
-/// 把 OpenAI content（字符串或 parts 列表）压成纯文本；图片单独收集。
-pub fn flatten_content_text(content: Option<&Value>) -> (String, Vec<String>) {
+/// content 拆解结果。
+pub struct FlattenedContent {
+    /// 纯文本（多段文本以 `\n` 连接；与旧行为一致）。
+    pub text: String,
+    /// 图片 URL（`data:` URL 原样保留）。
+    pub images: Vec<String>,
+    /// **有图时**才保留的多模态 parts（`[{type:"text"},{type:"image_url"}]`）；
+    /// 无图时为 `None`（此时上游收纯文本字符串即可）。
+    ///
+    /// ★ 为何必须保留：上游**只读** message content 里的结构化 `image_url` parts，
+    /// **不读**顶层 `image_urls` / `chat_context.imageUrls`（实测：填了顶层字段
+    /// 模型仍回「我没有收到图片」；改成 parts 后才正确识别图像内容）。
+    /// 所以带图消息的 content **不能**压成字符串。
+    pub parts: Option<Vec<Value>>,
+}
+
+impl FlattenedContent {
+    fn empty() -> Self {
+        Self {
+            text: String::new(),
+            images: Vec::new(),
+            parts: None,
+        }
+    }
+}
+
+/// 把 OpenAI content（字符串 / parts 列表 / 单个 part 对象）拆成
+/// 纯文本 + 图片 + **保留形态的 parts**。
+///
+/// ★ 单 part 形态（`content` 直接给一个 part 对象而非列表）按**单元素列表**处理，
+/// 绝不 `str()` —— 否则图像被字面量文本化（模型收到一段
+/// `{"type":"image_url",...}` 字符串），图像从未真正到达模型。
+pub fn flatten_content(content: Option<&Value>) -> FlattenedContent {
     match content {
-        None | Some(Value::Null) => (String::new(), Vec::new()),
-        Some(Value::String(text)) => (text.clone(), Vec::new()),
-        Some(Value::Array(parts)) => {
-            let mut texts = Vec::new();
-            let mut images = Vec::new();
-            for piece in parts {
-                match piece {
-                    Value::String(text) => texts.push(text.clone()),
-                    Value::Object(object) => {
-                        let piece_type = object.get("type").and_then(Value::as_str).unwrap_or("");
-                        if matches!(
-                            piece_type,
-                            "text" | "input_text" | "output_text" | "summary_text"
-                        ) {
-                            if let Some(text) = object.get("text").and_then(Value::as_str) {
-                                texts.push(text.to_string());
-                            }
-                        } else if matches!(piece_type, "image_url" | "image" | "input_image")
-                            || object.contains_key("image_url")
-                        {
-                            let mut url = object
-                                .get("image_url")
-                                .or_else(|| object.get("url"))
-                                .and_then(|value| {
-                                    if let Some(inner) = value.get("url") {
-                                        inner.as_str()
-                                    } else {
-                                        value.as_str()
-                                    }
-                                })
-                                .map(str::to_string);
-                            if url.is_none() {
-                                if let Some(data) = object.get("data").and_then(Value::as_str) {
-                                    let mime = object
-                                        .get("mimeType")
-                                        .or_else(|| object.get("mime_type"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("image/png");
-                                    url = Some(format!("data:{mime};base64,{data}"));
-                                }
-                            }
-                            if let Some(url) = url {
-                                images.push(url);
-                            }
-                        }
+        None | Some(Value::Null) => FlattenedContent::empty(),
+        Some(Value::String(text)) => FlattenedContent {
+            text: text.clone(),
+            images: Vec::new(),
+            parts: None,
+        },
+        Some(Value::Array(parts)) => flatten_parts(parts),
+        Some(value @ Value::Object(_)) => flatten_parts(std::slice::from_ref(value)),
+        Some(other) => FlattenedContent {
+            text: other.to_string(),
+            images: Vec::new(),
+            parts: None,
+        },
+    }
+}
+
+/// 逐 part 拆解：文本进 `texts`，图片进 `images`；**有图时**同时保留 parts。
+fn flatten_parts(parts: &[Value]) -> FlattenedContent {
+    let mut texts: Vec<String> = Vec::new();
+    let mut images: Vec<String> = Vec::new();
+    let mut structured: Vec<Value> = Vec::new();
+    for piece in parts {
+        match piece {
+            Value::String(text) => {
+                texts.push(text.clone());
+                structured.push(serde_json::json!({ "type": "text", "text": text }));
+            }
+            Value::Object(object) => {
+                let piece_type = object.get("type").and_then(Value::as_str).unwrap_or("");
+                if matches!(
+                    piece_type,
+                    "text" | "input_text" | "output_text" | "summary_text"
+                ) {
+                    if let Some(text) = object.get("text").and_then(Value::as_str) {
+                        texts.push(text.to_string());
+                        structured.push(serde_json::json!({ "type": "text", "text": text }));
                     }
-                    _ => {}
+                } else if matches!(piece_type, "image_url" | "image" | "input_image")
+                    || object.contains_key("image_url")
+                {
+                    if let Some(url) = image_url_of(object) {
+                        images.push(url.clone());
+                        // ★ `detail` 必须跟着走：它是 OpenAI 的图片精度档位
+                        //   （`low` / `high` / `auto`），丢了对高精度场景就是**掉画质**
+                        //   ——分辨率与 token 消耗都由它决定。归一化只该改**形态**，
+                        //   不该顺手摘掉语义字段。
+                        let mut image = serde_json::json!({ "url": url });
+                        if let Some(detail) = image_detail_of(object) {
+                            image["detail"] = Value::String(detail);
+                        }
+                        structured
+                            .push(serde_json::json!({ "type": "image_url", "image_url": image }));
+                    }
                 }
             }
-            let text = texts
-                .into_iter()
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            (text, images)
+            _ => {}
         }
-        Some(other) => (other.to_string(), Vec::new()),
     }
+    let text = texts
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // 有图才保留 parts（无图时上游收纯文本，保留数组只是噪音）。
+    let parts = if images.is_empty() {
+        None
+    } else {
+        Some(structured)
+    };
+    FlattenedContent {
+        text,
+        images,
+        parts,
+    }
+}
+
+/// 从一个图片 part 里取出 URL（兼容 `image_url` 为字符串 / 对象两种写法、
+/// `data` + `mimeType` 的裸 base64 形态，以及 Anthropic 风格的 `source`）。
+fn image_url_of(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let mut url = object
+        .get("image_url")
+        .or_else(|| object.get("url"))
+        .and_then(|value| {
+            if let Some(inner) = value.get("url") {
+                inner.as_str()
+            } else {
+                value.as_str()
+            }
+        })
+        .map(str::to_string);
+    if url.is_none() {
+        if let Some(data) = object.get("data").and_then(Value::as_str) {
+            let mime = object
+                .get("mimeType")
+                .or_else(|| object.get("mime_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("image/png");
+            url = Some(format!("data:{mime};base64,{data}"));
+        }
+    }
+    // Anthropic 风格：`{"type":"image","source":{"type":"base64","media_type":…,"data":…}}`
+    // 或 `{"type":"image","source":{"type":"url","url":…}}`。
+    if url.is_none() {
+        if let Some(source) = object.get("source") {
+            if let Some(link) = source.get("url").and_then(Value::as_str) {
+                url = Some(link.to_string());
+            } else if let Some(data) = source.get("data").and_then(Value::as_str) {
+                let mime = source
+                    .get("media_type")
+                    .or_else(|| source.get("mediaType"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("image/png");
+                url = Some(format!("data:{mime};base64,{data}"));
+            }
+        }
+    }
+    url
+}
+
+/// 取图片精度档位（OpenAI `image_url.detail`）。
+///
+/// 两种位置都认：嵌在 `image_url` 对象里（chat 形态），或与 `image_url` 平级
+/// （Responses 的 `input_image` 把 `detail` 放在 part 顶层）。Anthropic 的
+/// `source` 形态没有这个字段 ⇒ `None`（别给它编一个默认值）。
+fn image_detail_of(object: &serde_json::Map<String, Value>) -> Option<String> {
+    object
+        .get("image_url")
+        .and_then(|value| value.get("detail"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("detail").and_then(Value::as_str))
+        .map(str::to_string)
+        .filter(|detail| !detail.is_empty())
+}
+
+/// 把 OpenAI content（字符串或 parts 列表）压成纯文本；图片单独收集。
+///
+/// ★ 图片**同时**保留在 [`flatten_content`] 的 `parts` 里 —— 上游只读
+/// content 里的结构化 parts，见 [`FlattenedContent::parts`]。
+
+/// 把 OpenAI content（字符串或 parts 列表）压成纯文本；图片单独收集。
+///
+/// ★ 图片**同时**保留在 [`flatten_content`] 的 `parts` 里 —— 上游只读
+/// content 里的结构化 parts，见 [`FlattenedContent::parts`]。
+pub fn flatten_content_text(content: Option<&Value>) -> (String, Vec<String>) {
+    let flat = flatten_content(content);
+    (flat.text, flat.images)
 }
 
 /// 扁平化结果：`(首个 system 文本, 历史消息, 图片 URL 列表)`。
@@ -269,8 +388,9 @@ pub fn flatten_messages(
             continue;
         };
         let role = object.get("role").and_then(Value::as_str).unwrap_or("");
-        let (text, message_images) = flatten_content_text(object.get("content"));
-        images.extend(message_images);
+        let flat_content = flatten_content(object.get("content"));
+        let text = flat_content.text.clone();
+        images.extend(flat_content.images.iter().cloned());
 
         if matches!(role, "system" | "developer") {
             if system_text.is_none() && !text.is_empty() {
@@ -391,8 +511,16 @@ pub fn flatten_messages(
             continue;
         }
 
-        // user 与其它角色原样保留（content 已压平成字符串）。
-        flat.push(serde_json::json!({ "role": role, "content": text }));
+        // user 与其它角色原样保留。
+        //
+        // ★ 带图消息的 content **保留 parts 形态**：上游只读 content 里的结构化
+        //   `image_url` parts，不读顶层 `image_urls`（实测填了顶层字段模型仍回
+        //   「我没有收到图片」）。无图时仍是纯文本字符串，避免无谓的数组噪音。
+        let content_value = match flat_content.parts.clone() {
+            Some(parts) => Value::Array(parts),
+            None => Value::String(text),
+        };
+        flat.push(serde_json::json!({ "role": role, "content": content_value }));
     }
 
     FlattenedMessages {
@@ -1112,7 +1240,8 @@ pub enum RefreshKind {
 pub struct TokenRefresh {
     pub access_token: String,
     pub refresh_token: Option<String>,
-    /// 过期时刻（unix 秒）。`expires_in` 单位是**毫秒**；缺省按 30 天。
+    /// 过期时刻（unix 秒）。`expires_in` 单位是**毫秒**；两个字段都缺时按**令牌家族**兜底
+    /// （`jrt-` 24 小时 / `drt-` 30 天，见 [`FALLBACK_EXPIRY_JOB_SECS`]）。
     pub expires_at: i64,
 }
 
@@ -1150,7 +1279,16 @@ pub fn parse_refresh_response(
     TokenRefresh {
         access_token,
         refresh_token,
-        expires_at: token_expiry(data),
+        // ★ issue #130 §5.3：兜底寿命按**令牌家族**取 —— `jrt-` 约 24 小时，
+        //   `drt-` 约 30 天。共用 30 天会把 24 小时寿命的令牌标成「还有一个月」，
+        //   于是保活永远跳过它，直到它 401。
+        expires_at: token_expiry_with_fallback(
+            data,
+            match kind {
+                RefreshKind::Job => FALLBACK_EXPIRY_JOB_SECS,
+                RefreshKind::Device => FALLBACK_EXPIRY_DEFAULT_SECS,
+            },
+        ),
     }
 }
 
@@ -1175,8 +1313,33 @@ pub(crate) fn as_num(value: &Value) -> Option<i64> {
         })
 }
 
+/// 兜底寿命（秒）：`jrt-`（Job 家族）的 access token 实测约 **24 小时**，
+/// 其余（`drt-` 设备令牌 / OAuth 登录）约 **30 天**。
+///
+/// ## 为什么必须按家族分开（issue #130 §5.3）
+///
+/// 改造前两者共用「30 天」这一个兜底。若某次 `jrt-` 刷新响应里既没有 `expires_in`
+/// 也没有 `expires_at`，到期时刻会被写成「30 天后」，而**真实寿命只有 24 小时** ⇒
+/// 此后 `needs_keepalive` 一直判「还剩 29 天，不用刷」，保活对这个号**彻底失效**，
+/// 直到它 401（再被判 `AuthDead`，只能人工恢复）。
+///
+/// 这条与窗口大小无关：窗口调到 48 小时也救不了，因为**判据输入本身是错的**。
+pub const FALLBACK_EXPIRY_JOB_SECS: i64 = 24 * 3_600;
+
+/// 兜底寿命（秒）：`drt-` / OAuth 家族（约 30 天）。
+pub const FALLBACK_EXPIRY_DEFAULT_SECS: i64 = 30 * 86_400;
+
 /// `expires_in`（毫秒）/ `expires_at`（RFC3339）→ unix 秒；都没有按 30 天。
+///
+/// ⚠️ 不知道令牌家族时**只能**用 30 天兜底。刷新路径请用
+/// [`token_expiry_with_fallback`] 并按 [`RefreshKind`] 传对应家族的兜底值
+/// （见 [`FALLBACK_EXPIRY_JOB_SECS`]）。
 pub fn token_expiry(data: &Value) -> i64 {
+    token_expiry_with_fallback(data, FALLBACK_EXPIRY_DEFAULT_SECS)
+}
+
+/// 同 [`token_expiry`]，但「两个字段都没有」时用调用方给的家族兜底。
+pub fn token_expiry_with_fallback(data: &Value, fallback_secs: i64) -> i64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -1192,7 +1355,7 @@ pub fn token_expiry(data: &Value) -> i64 {
             return datetime.and_utc().timestamp();
         }
     }
-    now + 30 * 86_400
+    now + fallback_secs
 }
 
 /// 签到状态。
@@ -1691,6 +1854,44 @@ pub async fn fetch_model_list_at(
 mod tests {
     use super::*;
 
+    /// ★★ issue #130 §5.3：兜底寿命必须按**令牌家族**取。
+    ///
+    /// `jrt-`（Job）家族的 access token 实测约 24 小时；共用 30 天兜底会把
+    /// 「24 小时后过期」标成「还有一个月」，于是 `needs_keepalive` 永远判「不用刷」，
+    /// 保活对这个号彻底失效，直到它 401（再被判 `AuthDead`，只能人工恢复）。
+    ///
+    /// 变异：把 `parse_refresh_response` 里按 `kind` 取兜底改回 `token_expiry(data)`
+    /// ⇒ 第一条断言红（24h 变成 30 天）。
+    #[test]
+    fn refresh_fallback_expiry_follows_the_token_family() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+        // 两个字段都没有 ⇒ 走兜底。
+        let empty = serde_json::json!({ "token": "jt-new" });
+        let job = parse_refresh_response(RefreshKind::Job, &empty, "jrt-old");
+        let delta = job.expires_at - now;
+        assert!(
+            (FALLBACK_EXPIRY_JOB_SECS - 5..=FALLBACK_EXPIRY_JOB_SECS + 5).contains(&delta),
+            "jrt- 家族兜底必须是 24 小时，实际 {delta}s"
+        );
+        let device = parse_refresh_response(RefreshKind::Device, &empty, "drt-old");
+        let delta = device.expires_at - now;
+        assert!(
+            (FALLBACK_EXPIRY_DEFAULT_SECS - 5..=FALLBACK_EXPIRY_DEFAULT_SECS + 5).contains(&delta),
+            "drt- 家族兜底仍是 30 天，实际 {delta}s"
+        );
+        // 上游给了 `expires_in` ⇒ 一律以它为准（毫秒），兜底不参与。
+        let with_field = serde_json::json!({ "token": "jt-new", "expires_in": 3_600_000 });
+        let job = parse_refresh_response(RefreshKind::Job, &with_field, "jrt-old");
+        let delta = job.expires_at - now;
+        assert!(
+            (3_595..=3_605).contains(&delta),
+            "`expires_in` 是毫秒，3600000 应折算成 1 小时，实际 {delta}s"
+        );
+    }
+
     fn meta() -> ModelMeta {
         ModelMeta {
             key: "ultimate".into(),
@@ -1743,6 +1944,30 @@ mod tests {
         assert_eq!(images.len(), 2);
         assert_eq!(images[0], "https://x/1.png");
         assert_eq!(images[1], "data:image/jpeg;base64,AAAA");
+    }
+
+    /// ★ 带图消息的 content 必须**保留 parts 数组**（上游只读 content 里的
+    /// 结构化 `image_url` parts；压成字符串 ⇒ 图像从未到达模型）。
+    #[test]
+    fn flatten_keeps_multimodal_parts_for_messages_with_images() {
+        let messages = vec![serde_json::json!({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "看这张"},
+                {"type": "image_url", "image_url": {"url": "https://x/1.png"}},
+            ],
+        })];
+        let flat = flatten_messages(&messages, false, false);
+        let content = &flat.messages[0]["content"];
+        assert!(
+            content.is_array(),
+            "带图消息的 content 必须是 parts 数组，实际：{content}"
+        );
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "看这张");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "https://x/1.png");
+        assert_eq!(flat.images, vec!["https://x/1.png".to_string()]);
     }
 
     #[test]

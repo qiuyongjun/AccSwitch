@@ -70,6 +70,61 @@ pub enum GatewayError {
         /// 池内该域的账号总数（含被排除的：它只影响「能不能选」，不影响「号是好的」）。
         total: usize,
     },
+    /// **模型闸门暂停中** → **503** + `Retry-After`（issue #106）。
+    ///
+    /// ## 为什么必须与 `no_credential` 分开
+    ///
+    /// 改造前闸门短路走的是 `pool_unavailable_error` 的兜底分支：`last == None`
+    /// ⇒ 只有 `PoolBusy`（503）或 `NoCredential`（401）两种出口，而 `PoolBusy` 的判据
+    /// （可用号全在途满）在这种场景不成立 ⇒ 一律落到 **401 `no_credential`**。
+    ///
+    /// 后果是致命的：客户端把 401/403 固定归为 `AUTH`、**不可重试**、并渲染成
+    /// 「API 密钥无效」（issue #106 的实测证据：闸门短路那次耗时 19ms、账号列为空）。
+    /// 于是一个**临时性的容量问题**被翻译成「你的凭据坏了」，整轮会话直接终止。
+    ///
+    /// ⇒ 语义上它是「上游此刻对这个模型整体限流」，属于**可重试的临时不可用**，
+    /// 必须是 503（客户端按 SERVER 重试），并带上**本进程自己算出来的**确定剩余秒数。
+    /// 与 429/402 不同，这里的退避依据是可信的（闸门的 `until_ms`），不违反
+    /// 「不臆造数字」的纪律 —— 见 [`Self::retry_after_secs`]。
+    ModelGatePaused {
+        /// 被闸门暂停的模型名（必须点名：用户要知道该换哪个模型）。
+        model: String,
+        /// 距解冻的剩余秒数（向上取整，至少 1）。
+        remain_secs: u64,
+        /// 触发暂停时**窗口内**累计的失败次数（不是账号数，见 [`crate::pool::gate`]）。
+        ///
+        /// ★ 只在闸门路径有意义；`cooled_accounts > 0` 那条路径恒为 `0`。
+        failures: usize,
+        /// ★ issue #134：**该模型在全部可用账号上都处于模型级冷却**时的账号数
+        /// （`0` = 不是这条路径，是闸门暂停）。
+        ///
+        /// 两条路径共用这个错误类型是因为对外语义完全相同（「上游此刻对该模型整体限流、
+        /// 稍后自愈、与凭据无关」⇒ 503 + `Retry-After`），但**成因与文案不同**：
+        /// 闸门靠「窗口内失败次数/去重账号数」开闸，这条靠「没有别的号可换」——
+        /// 单账号池里闸门永远不会开（去重上限就是 1），只能靠它兜住。
+        cooled_accounts: usize,
+        /// 本轮换号轨迹。闸门短路时它只有一条（`uid` 为空），但那一条恰好是
+        /// 全链路诊断价值最高的信息 —— 不能丢（issue #106 §2.4）。
+        attempts: Vec<UpstreamAttempt>,
+    },
+    /// ★ 这把 API Key 的用量配额已用尽 → **429**（issue #76）。
+    ///
+    /// 与 [`Self::Upstream`] 的账号级 429 是两件事：那个是「这个号被限流，换一个」，
+    /// 这个是「**这把 Key 到此为止**」—— 换号、重试、等冷却都不会好，
+    /// 因为额度是按 Key 计的。⇒ `attempts` 为空、不进换号循环。
+    ///
+    /// 文案必须带**单位与周期**（`1,000 万 token / 自然月`）：只说「配额已用尽」
+    /// 用户不知道该等多久、该改什么。
+    KeyQuotaExceeded {
+        /// 用量（当前口径）。
+        used: u64,
+        /// 上限。
+        limit: u64,
+        /// 计量单位（token / 请求数）。
+        unit: crate::apikey::QuotaUnit,
+        /// 重置周期（不重置 ⇒ 文案说「累计」）。
+        period: crate::apikey::QuotaPeriod,
+    },
     /// 网关自身错误（端口占用/目录失败/内部）→ 502（不返回裸堆栈）
     Internal(String),
 }
@@ -156,6 +211,32 @@ pub enum NoCredentialCause {
         /// 与 `excluded` 是同一个坑的两面：缺了它，「5 个号、0 禁用、0 冷却、0 零积分、
         /// 0 被排除」与「0 个可用」就自相矛盾 —— 用户会以为网关在胡说。
         in_flight_full: usize,
+        /// 其中「状态可用、但**该模型**有模型级冷却」的数量（**计入** `available`，
+        /// 正交计数，issue #106 §2.4）。
+        ///
+        /// 缺了它的后果与 `in_flight_full` 一模一样，而且在 6004 场景下**必然触发**：
+        /// 池快照会是「9 个号 / 0 禁用 / 0 冷却 / 0 零积分 / 0 排除」却说「0 个可用」，
+        /// 唯一解释就藏在这个字段里。用户数了数自己的号，对不上那句话。
+        model_cooling: usize,
+    },
+    /// **密钥白名单内**一个号都不可用（issue #76）。
+    ///
+    /// 与 [`Self::PoolExhausted`] 的区别只在**口径**：那一条统计整个区域池，
+    /// 这一条只统计这把 Key 允许用的账号。白名单生效时必须走这条 —— 否则
+    /// 「有 12 个号但 0 个可用」会把用户推去恢复一堆**本来就不许用**的账号，
+    /// 而真正的解是「放宽名单」或「恢复名单里那几个」。
+    ///
+    /// 计数一律是**名单口径**，`pool_total` 单独给出来只用于说明「名单覆盖了其中几个」。
+    ScopeEmpty {
+        /// 该区域池内账号总数（与 `allowed` 对照，说明名单覆盖面）。
+        pool_total: usize,
+        /// 名单覆盖、且在该区域池内的账号数（`0` = 名单里没有一个号属于本区域）。
+        allowed: usize,
+        disabled: usize,
+        cooling: usize,
+        zero_credits: usize,
+        excluded: usize,
+        in_flight_full: usize,
     },
 }
 
@@ -180,6 +261,11 @@ impl GatewayError {
             GatewayError::ModelDisabled { .. } => 403,
             // 503 = 并发占满。凭据正常、几秒内自愈 ⇒ 让客户端退避重试，别去改登录态。
             GatewayError::PoolBusy { .. } => 503,
+            // 503 = 模型闸门暂停（issue #106）。与 PoolBusy 同一档语义：
+            // 「此刻不可用、稍后自愈、与你的凭据无关」。**绝不能**是 401。
+            GatewayError::ModelGatePaused { .. } => 503,
+            // 配额用尽 ⇒ 429（Too Many Requests 的本义：这个调用方到此为止）。
+            GatewayError::KeyQuotaExceeded { .. } => 429,
             GatewayError::Internal(_) => 502,
         }
     }
@@ -192,9 +278,14 @@ impl GatewayError {
     /// ★ 限流（429）与余额不足（402）**刻意不给**：真正的解冻时刻在上游的响应里，
     /// 本仓拿不到可信值 —— 编一个数字（比如 60）会让客户端按错误的节奏重试，
     /// 比不给更糟（与「不臆造数字」同一纪律）。
+    ///
+    /// ★ 模型闸门暂停（issue #106）**必须给**，且与上面那条不冲突：闸门的 `until_ms`
+    /// 是**本进程自己算出来的确定值**（`gate_base_ms * 2^(trips-1)` 封顶），不是对
+    /// 上游的猜测。这正是「有确定依据才给」的正例。
     pub fn retry_after_secs(&self) -> Option<u64> {
         match self {
             GatewayError::PoolBusy { .. } => Some(POOL_BUSY_RETRY_AFTER_SECS),
+            GatewayError::ModelGatePaused { remain_secs, .. } => Some((*remain_secs).max(1)),
             _ => None,
         }
     }
@@ -217,6 +308,8 @@ impl GatewayError {
             GatewayError::BadRequest(_) => "bad_request",
             GatewayError::ModelDisabled { .. } => "model_disabled",
             GatewayError::PoolBusy { .. } => "pool_busy",
+            GatewayError::ModelGatePaused { .. } => "model_gate_paused",
+            GatewayError::KeyQuotaExceeded { .. } => "key_quota_exceeded",
             GatewayError::Internal(_) => "internal",
         }
     }
@@ -248,11 +341,67 @@ impl GatewayError {
             //
             // ⚠️ 措辞不能写成「{total} 个可用账号」：`total` 含**被用户排除**的条目
             //    （它们不可选，但账号本身是好的），说成「可用」就是新的数字不自洽。
+            GatewayError::KeyQuotaExceeded { used, limit, unit, period } => {
+                let unit_text = match unit {
+                    crate::apikey::QuotaUnit::Token => "token",
+                    crate::apikey::QuotaUnit::Request => "次请求",
+                };
+                let period_text = match period {
+                    crate::apikey::QuotaPeriod::None => "累计".to_string(),
+                    crate::apikey::QuotaPeriod::Daily => "每日".to_string(),
+                    crate::apikey::QuotaPeriod::Weekly => "每周".to_string(),
+                    crate::apikey::QuotaPeriod::Monthly => "自然月".to_string(),
+                };
+                format!(
+                    "这把 API Key 的{period_text}用量已用尽（已用 {used} / 上限 {limit} {unit_text}）；                     换号与重试都不会好 —— 额度按密钥计。请调高上限、切换周期，或改用其它密钥"
+                )
+            }
             GatewayError::PoolBusy { region, total } => format!(
                 "本机{}账号库有 {total} 个账号，可用的那些此刻全被在途请求占满（凭据与余额都正常）：\
                  稍等几秒重试即可；若长期如此，请在「网关 → 账号池」调高每账号在途上限或增加账号",
                 region_display(*region)
             ),
+            // ★ issue #106：模型闸门暂停必须自证「哪个模型 / 失败几次 / 还剩多久」。
+            //   改造前这条路径落到 `no_credential`，用户读到的是「凭据无效」——
+            //   事实恰恰相反：凭据完全正常，是上游对该模型整体限流。
+            //
+            // ⚠️ 措辞刻意与 429/402 分开：那两条的下一步是「等额度 / 充值」，
+            //   这条的下一步是「换个模型」或「等几十秒」。`failures` 的语义是
+            //   **窗口内失败次数**，不是账号数 —— 说成「N 个账号」在单号池时是假话。
+            GatewayError::ModelGatePaused {
+                model,
+                remain_secs,
+                failures,
+                cooled_accounts,
+                ..
+            } => {
+                if *cooled_accounts > 0 {
+                    // ★ issue #134：不是闸门开的，是**这个模型在所有可用账号上都在冷却**。
+                    //   说成「窗口内已失败 N 次」会是假话（这里根本没有闸门）。
+                    format!(
+                        "模型「{model}」此刻在全部 {cooled_accounts} 个可用账号上都处于限流冷却：约 {remain_secs} 秒后自动重试。\
+                         这是上游对该模型的限流，**与你的凭据无关** —— 换号、重新登录都不会解除。\
+                         可以换个模型继续，或稍等再试"
+                    )
+                } else if *remain_secs == 0 {
+                    // ★ 安全审计 P1-3：这一段改造前写的是「名额已被**其它请求**占用：
+                    //   稍等**一两秒**重试即可」。在「持票者自锁」的年代两句都是假的
+                    //   （占用的就是它自己；真实等待是 `PROBE_LEASE_MS` = 120s）。
+                    //   现在票按请求归属（43e6926），持票者不会被自己挡住 ⇒ 走到这一格的
+                    //   **确实**是别的请求在探路；而 `remain_secs` 由真实租约剩余驱动，
+                    //   不再是 0 哨兵，故此处的「片刻」也不再是假承诺。
+                    format!(
+                        "模型「{model}」正处于半开试探：另一个请求正在探路，请稍等片刻再试\
+                         （凭据与余额都正常，无需换号或重新登录）"
+                    )
+                } else {
+                    format!(
+                        "模型「{model}」此刻被整体暂停：窗口内已失败 {failures} 次，约 {remain_secs} 秒后自动放行试探。\
+                         这是上游对该模型的限流，**与你的凭据无关** —— 换号、重新登录都不会解除。\
+                         可以换个模型继续，或稍等再试"
+                    )
+                }
+            }
             GatewayError::Internal(message) => message.clone(),
         }
     }
@@ -284,6 +433,15 @@ impl GatewayError {
     fn attempts_json(&self) -> Option<Value> {
         match self {
             GatewayError::Upstream { attempts, .. } if !attempts.is_empty() => {
+                Some(json!(attempts
+                    .iter()
+                    .map(UpstreamAttempt::to_value)
+                    .collect::<Vec<_>>()))
+            }
+            // issue #106 §2.4：闸门短路那条路径把最有诊断价值的信息（哪个模型、
+            // 被几次限流、还剩几秒）写进了 `attempts`，改造前在 `no_credential`
+            // 出口被整表丢掉 —— 用户拿不到任何线索。
+            GatewayError::ModelGatePaused { attempts, .. } if !attempts.is_empty() => {
                 Some(json!(attempts
                     .iter()
                     .map(UpstreamAttempt::to_value)
@@ -326,6 +484,7 @@ fn no_credential_message(region: Region, cause: NoCredentialCause) -> String {
             zero_credits,
             excluded,
             in_flight_full,
+            model_cooling,
         } => {
             // ★ 排除必须出现在事实句里（QA 复核指出）：否则「N 个号 / 0 禁用 / 0 冷却 /
             //   0 零积分」会与「0 个可用」自相矛盾，用户根本不知道该去取消排除。
@@ -351,14 +510,70 @@ fn no_credential_message(region: Region, cause: NoCredentialCause) -> String {
             } else {
                 ""
             };
+            // ★ issue #106 §2.4：模型级冷却是**正交**信号（账号仍可用、只是这个模型
+            //   被罚），不补它就会出现「9 个号、五项计数全 0，却说 0 个可用」——
+            //   正是 `error.rs:385` 那段注释点名的反面教材，只因新增了正交维度而复现。
+            let model_cooling_clause = if model_cooling > 0 {
+                format!("、{model_cooling} 个只因该模型被限流（换模型即可用）")
+            } else {
+                String::new()
+            };
+            let model_cooling_hint = if model_cooling > 0 {
+                "；模型级限流只影响这一个模型，换一个模型就能继续，账号本身是好的"
+            } else {
+                ""
+            };
             format!(
                 "本机{name}账号库有 {total} 个账号，但此刻 0 个可用：\
                  {disabled} 个已禁用、{cooling} 个冷却中、{zero_credits} 个余额为 0\
-                 {excluded_clause}{in_flight_clause}。\
+                 {excluded_clause}{in_flight_clause}{model_cooling_clause}。\
                  重新登录 / 切换账号不会解除禁用、冷却与排除 —— \
                  请在「网关 → 账号池」查看逐账号原因（禁用是终态，需余额刷新成功或人工复活\
-                 {excluded_hint}{in_flight_hint}）"
+                 {excluded_hint}{in_flight_hint}{model_cooling_hint}）"
             )
+        }
+        // ★ 名单口径（issue #76）：白名单生效时**必须**走这条，否则用户会拿着
+        //   「12 个号都不可用」去修一堆他本来就不许用的账号。
+        NoCredentialCause::ScopeEmpty {
+            pool_total,
+            allowed,
+            disabled,
+            cooling,
+            zero_credits,
+            excluded,
+            in_flight_full,
+        } => {
+            let key_hint =
+                "请在「网关 → 密钥 → 权限」放宽这把 Key 的允许账号（或改成「全部账号」）";
+            if allowed == 0 {
+                format!(
+                    "本机{name}账号库有 {pool_total} 个账号，但这把 API Key 的允许名单里\
+                     没有一个属于{name}；{key_hint}"
+                )
+            } else {
+                let excluded_clause = if excluded > 0 {
+                    format!("、{excluded} 个被你排除")
+                } else {
+                    String::new()
+                };
+                let in_flight_clause = if in_flight_full > 0 {
+                    format!("、{in_flight_full} 个在途已满（并发占用中）")
+                } else {
+                    String::new()
+                };
+                let in_flight_hint = if in_flight_full > 0 {
+                    "；在途已满只是瞬时并发，几秒后自行恢复"
+                } else {
+                    ""
+                };
+                format!(
+                    "本机{name}账号库有 {pool_total} 个账号，这把 API Key 的允许名单只覆盖其中 \
+                     {allowed} 个，而这 {allowed} 个此刻都不可用：{disabled} 个已禁用、\
+                     {cooling} 个冷却中、{zero_credits} 个余额为 0\
+                     {excluded_clause}{in_flight_clause}。名单外的账号不会被使用 —— \
+                     {key_hint}，或在「网关 → 账号池」恢复这几个账号{in_flight_hint}"
+                )
+            }
         }
     }
 }
@@ -500,7 +715,7 @@ mod tests {
         );
     }
 
-    /// 四类原因的文案必须**两两不同**，且都必须点名区域。
+    /// 每一类原因的文案必须**两两不同**，且都必须点名区域。
     ///
     /// 阳性对照：改造前四类共用一句（逐字相同）⇒ 本用例必红。
     #[test]
@@ -514,6 +729,26 @@ mod tests {
                 total: 12,
                 disabled: 9,
                 cooling: 3,
+                excluded: 0,
+                zero_credits: 0,
+                in_flight_full: 0,
+                model_cooling: 0,
+            },
+            // 名单口径两种分支（issue #76）：覆盖到几个 / 一个都没覆盖。
+            NoCredentialCause::ScopeEmpty {
+                pool_total: 12,
+                allowed: 2,
+                disabled: 1,
+                cooling: 1,
+                excluded: 0,
+                zero_credits: 0,
+                in_flight_full: 0,
+            },
+            NoCredentialCause::ScopeEmpty {
+                pool_total: 12,
+                allowed: 0,
+                disabled: 0,
+                cooling: 0,
                 excluded: 0,
                 zero_credits: 0,
                 in_flight_full: 0,
@@ -547,6 +782,70 @@ mod tests {
         }
     }
 
+    /// issue #76：`ScopeEmpty` 与 `PoolExhausted` 共用 `type_name`（对外契约不变），
+    /// 但文案必须给出**名单口径**的事实与真正能解的那一步。
+    ///
+    /// 阳性对照：把文案换成 `PoolExhausted` 那句 ⇒ 第一条断言（必须出现「允许名单」）必红。
+    #[test]
+    fn scope_empty_points_at_the_allowlist_not_the_pool() {
+        let error = GatewayError::NoCredential {
+            region: Region::Cn,
+            cause: NoCredentialCause::ScopeEmpty {
+                pool_total: 12,
+                allowed: 2,
+                disabled: 1,
+                cooling: 1,
+                excluded: 0,
+                zero_credits: 0,
+                in_flight_full: 0,
+            },
+        };
+        // ★ 对外契约：仍是 `no_credential` / 401 —— 客户端按类别名分流，不能多一个类别。
+        assert_eq!(error.type_name(), "no_credential");
+        assert_eq!(error.status(), 401);
+
+        let message = error.message();
+        assert!(
+            message.contains("允许名单"),
+            "必须点出是名单导致的：{message}"
+        );
+        assert!(
+            message.contains("允许名单只覆盖其中 2 个"),
+            "必须说清名单覆盖面：{message}"
+        );
+        assert!(
+            message.contains("名单外的账号不会被使用"),
+            "必须消除「网关把号藏起来了」的误解：{message}"
+        );
+        assert!(
+            message.contains("密钥 → 权限"),
+            "必须指向真正能解的那一步（放宽名单）：{message}"
+        );
+        assert!(
+            !message.contains("重新登录"),
+            "名单问题是策略问题，让人去重新登录是无效指引：{message}"
+        );
+
+        // 名单一个都没覆盖到 ⇒ 不能说「2 个都不可用」，要说「名单里没有本区域的号」。
+        let uncovered = GatewayError::NoCredential {
+            region: Region::Cn,
+            cause: NoCredentialCause::ScopeEmpty {
+                pool_total: 12,
+                allowed: 0,
+                disabled: 0,
+                cooling: 0,
+                excluded: 0,
+                zero_credits: 0,
+                in_flight_full: 0,
+            },
+        }
+        .message();
+        assert!(
+            uncovered.contains("没有一个属于"),
+            "名单没覆盖本区域要明说：{uncovered}"
+        );
+    }
+
     /// ★ issue #26 的核心护栏：**「池里有号但一个都不可用」不得再让人去重新登录**。
     ///
     /// 真实报障（2026-10-14）：`切换过多个账号 桌面端或者buddyswitch都试过解决不了`。
@@ -565,6 +864,7 @@ mod tests {
                 excluded: 0,
                 zero_credits: 0,
                 in_flight_full: 0,
+                model_cooling: 0,
             },
         }
         .message();
@@ -634,6 +934,7 @@ mod tests {
                 excluded: 0,
                 zero_credits: 0,
                 in_flight_full: 0,
+                model_cooling: 0,
             },
         ] {
             let error = GatewayError::NoCredential {
@@ -694,5 +995,106 @@ mod tests {
         assert_eq!(anthropic["type"], "error");
         assert_eq!(anthropic["error"]["type"], "hard_credit");
         assert!(anthropic["error"]["message"].is_string());
+    }
+
+    /// ★★ issue #106 的核心不变量：**「模型闸门暂停」的对外状态码不是 401**。
+    ///
+    /// 报障现场：客户端把 401/403 固定归为 `AUTH`、**不可重试**、渲染成
+    /// 「本轮运行失败 API 密钥无效」⇒ 整轮会话直接终止。而闸门暂停是**临时容量问题**，
+    /// 凭据完全正常。变异：把 `status()` 里这条改回 401 ⇒ 本用例红。
+    #[test]
+    fn model_gate_pause_is_503_with_retry_after_and_never_401() {
+        let err = GatewayError::ModelGatePaused {
+            model: "glm-5.2".to_string(),
+            remain_secs: 8,
+            failures: 2,
+            cooled_accounts: 0,
+            attempts: vec![UpstreamAttempt {
+                account: String::new(),
+                uid: String::new(),
+                status: 0,
+                reason: "glm-5.2 整体暂停".to_string(),
+            }],
+        };
+        assert_eq!(err.status(), 503, "闸门暂停必须是可重试的 503，不能是 401");
+        assert_eq!(err.type_name(), "model_gate_paused");
+        assert_eq!(
+            err.retry_after_secs(),
+            Some(8),
+            "闸门的 until_ms 是本进程算出的确定值，必须给 Retry-After"
+        );
+
+        let message = err.message();
+        assert!(message.contains("glm-5.2"), "必须点名模型：{message}");
+        assert!(message.contains('8'), "必须给剩余秒数：{message}");
+        assert!(
+            message.contains("与你的凭据无关"),
+            "必须明确否定「凭据坏了」这个误判：{message}"
+        );
+
+        // ★ 诊断信息不能丢：闸门短路那条路径最有价值的就是「哪个模型、几次、几秒」。
+        let body = err.openai_body();
+        assert_eq!(body["error"]["attempts"][0]["reason"], "glm-5.2 整体暂停");
+
+        // 半开票被别的请求领走（remain_ms == 0）⇒ 文案不能说「还剩 0 秒」。
+        let taken = GatewayError::ModelGatePaused {
+            model: "m".to_string(),
+            remain_secs: 0,
+            failures: 0,
+            cooled_accounts: 0,
+            attempts: Vec::new(),
+        };
+        assert_eq!(taken.status(), 503);
+        assert_eq!(taken.retry_after_secs(), Some(1), "Retry-After 至少 1 秒");
+        assert!(
+            !taken.message().contains("0 秒后"),
+            "不能说「0 秒后自动放行」：{}",
+            taken.message()
+        );
+    }
+
+    /// ★ issue #106 §2.4：`no_credential` 的计数维度缺了 `model_cooling` 时，
+    /// 文案会渲染成「9 个号、五项计数全 0，却说 0 个可用」—— 自相矛盾。
+    ///
+    /// 变异：删掉 `model_cooling_clause` ⇒ 本用例红。
+    #[test]
+    fn pool_exhausted_message_accounts_for_model_cooling() {
+        let message = GatewayError::NoCredential {
+            region: Region::Cn,
+            cause: NoCredentialCause::PoolExhausted {
+                total: 9,
+                disabled: 0,
+                cooling: 0,
+                zero_credits: 0,
+                excluded: 0,
+                in_flight_full: 0,
+                model_cooling: 9,
+            },
+        }
+        .message();
+        assert!(
+            message.contains("只因该模型被限流"),
+            "必须把正交的模型级冷却摆进事实句：{message}"
+        );
+        assert!(
+            message.contains("换模型"),
+            "必须给出真能解的动作（换模型）：{message}"
+        );
+
+        // 反向对照：没有模型级冷却时不得出现这句（否则是新的噪音）。
+        let clean = GatewayError::NoCredential {
+            region: Region::Cn,
+            cause: NoCredentialCause::PoolExhausted {
+                total: 2,
+                disabled: 2,
+                cooling: 0,
+                zero_credits: 0,
+                excluded: 0,
+                in_flight_full: 0,
+                model_cooling: 0,
+            },
+        }
+        .message();
+        assert!(!clean.contains("只因该模型被限流"), "{clean}");
     }
 }

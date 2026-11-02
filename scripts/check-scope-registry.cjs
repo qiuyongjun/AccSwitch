@@ -5128,7 +5128,7 @@ check("★ P7 边界：损坏文件（非法 JSON）返回可读错误、不崩�
  *
  * ⚠️ 判据只锚**代码**（`readCode` 先剥注释）—— 锚在注释上会被「注释里写着反例」骗过去。
  * ⚠️ 第 ④ 条的 api.rs 一侧是**文件级**「读到了 scope」（与 `check-api-contract.cjs` 第 8 条
- *    同款粗粒度）；逐命令的四处同步由 `check:api` 兜住，本段只锁「恰 18 条 + 后端带 scope」
+ *    同款粗粒度）；逐命令的四处同步由 `check:api` 兜住，本段只锁「恰 40 条 + 后端带 scope」
  *    （2026-10-15：模型禁用两条从 region 升级为 scope、Qoder 账号运维四件 ——
  *     刷新 / 签到状态 / 签到领取 / 额度 —— 一并并入）。
  */
@@ -5241,7 +5241,23 @@ check("★ P5-④ 参数化命令**恰 38 条**且后端带 scope（commands.rs 
   return `${names.length} 条 · commands.rs 带 scope · api.ts 有 · api.rs 读 scope`;
 });
 
-check("★ P5-⑤ 程序位表驱动：4 个入口走 `find(table, id)`，无按 id 硬编码；表 3 项", () => {
+/// 从 `programs.rs` 的 `PROGRAMS` 表里解析**有序 id 列表**。
+///
+/// ★ 安全审计「流程 20」：此前这里（以及 B5）把 id 写死成 3 项，而表里实际有 5 项
+/// （`vscode_codebuddy_plugin` / `jetbrains_codebuddy_plugin` 从来没被校验过）——
+/// 标题还写着「表 3 项」。写死清单的门禁会**自己过期而没人发现**，所以改成从表里解析。
+function programSlotIds(rustSource) {
+  const start = rustSource.indexOf("PROGRAMS");
+  if (start < 0) throw new Error("programs.rs 里找不到 `PROGRAMS`");
+  const end = rustSource.indexOf("];", start);
+  if (end < 0) throw new Error("`PROGRAMS` 表没有闭合的 `];`");
+  const block = rustSource.slice(start, end);
+  const ids = [...block.matchAll(/id:\s*"([a-z0-9_]+)"/g)].map((m) => m[1]);
+  if (ids.length === 0) throw new Error("`PROGRAMS` 表里解析不到任何 `id:`");
+  return ids;
+}
+
+check("★ P5-⑤ 程序位表驱动：4 个入口走 `find(table, id)`，无按 id 硬编码；表内每一项都校验", () => {
   /* 变异⑤（落点 = programs.rs）：把 `status_in` 改成按 id 的 `match` 硬编码 ⇒ 本条变红
      （「加第 3 个程序位无需改代码」被破）。 */
   const programs = readCode(P5_PROGRAMS_RS);
@@ -5251,13 +5267,15 @@ check("★ P5-⑤ 程序位表驱动：4 个入口走 `find(table, id)`，无按
     if (!/find\(table,\s*id\)/.test(body)) throw new Error(`\`${fn}\` 未走表驱动 \`find(table, id)\``);
     if (/match\s+id\s*\{/.test(body)) throw new Error(`\`${fn}\` 出现按 id 的 match 硬编码`);
   }
-  for (const id of ["codebuddy_cli", "codebuddy_cn_ide", "vscode_cn_inject"]) {
+  const ids = programSlotIds(programs);
+  // 每个 id 必须真的出现在表里（解析来源就是表本身；这里防的是解析口径漂移）。
+  for (const id of ids) {
     if (!programs.includes(`"${id}"`)) throw new Error(`PROGRAMS 缺程序位 ${id}`);
   }
   if (!/fn adding_a_slot_needs_no_dispatch_change/.test(programs)) {
     throw new Error("缺「加程序位无需改派发」可证伪单测");
   }
-  return "4 入口走 find(table,id) · 无 id 硬编码 · 3 程序位 · 单测在";
+  return `4 入口走 find(table,id) · 无 id 硬编码 · ${ids.length} 程序位（${ids.join(",")}）· 单测在`;
 });
 
 check("★ P5 边界：WB 选号基线未动（expiry_urgency_weight=0.0 / deterministic=false）", () => {
@@ -6713,6 +6731,55 @@ check("★ P1-5 账号卡可键盘聚焦（tabIndex + 语义 role + Enter/Space 
   return "tabIndex + role + Enter/Space 打开详情";
 });
 
+check("★★ 整卡/整行打开详情必须走共用守卫（Portal 菜单项不是 button）", () => {
+  /* 2026-10-22 用户报障：「账号卡片的更多操作中，每次点击上面的任何一个操作，侧拉抽屉都被打开」。
+     根因不是漏写守卫，而是**守卫判据选错了维度**：
+       · Radix `DropdownMenuContent` 经 Portal 挂到 `<body>` ⇒ DOM 上不在卡片内，
+         但 React 树里仍在卡片内 ⇒ 冒泡照样回到 `<article onClick>`；
+       · 菜单项是 `Primitive.div[role="menuitem"]`，**不是 `<button>`**（`@radix-ui/react-menu`）
+         ⇒ 旧的 `closest("button, a, input, …")` 一条也命中不了。
+     顺着旧判据打补丁（往选择器里塞 `[role='menuitem']`）治不了根：`select` / `popover` /
+     `dialog` 都是同一套 Portal 手法，每加一个控件要再补一次，且**漏了不报错**、只静默开抽屉。
+     ⇒ 本断言钉住两件事：
+       ① 四处「点整块开详情」都用共用判据 `shouldOpenAccountDetail`；
+       ② 不许再手写 `closest("button, …")` 那种判据（它已经错过一次）。 */
+  const targets = [
+    "src/components/account-card.tsx",
+    "src/components/trae-account-card.tsx",
+    "src/components/qoder/qoder-account-card.tsx",
+    "src/components/account-table.tsx",
+  ];
+  for (const rel of targets) {
+    const src = stripComments(fs.readFileSync(path.join(ROOT, rel), "utf8"));
+    if (!/shouldOpenAccountDetail\(/.test(src)) {
+      throw new Error(
+        `${rel} 打开详情前没过共用判据 \`shouldOpenAccountDetail\` —— Portal 里的菜单项（div[role=menuitem]）会被当成点整卡`,
+      );
+    }
+    if (/closest\(\s*["'`]button,/.test(src)) {
+      throw new Error(
+        `${rel} 又手写了 \`closest("button, …")\` 判据 —— 该判据拦不住 Portal 菜单项（2026-10-22 报障根因），请用 \`shouldOpenAccountDetail\``,
+      );
+    }
+  }
+  const guard = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/lib/account-open-guard.ts"), "utf8"),
+  );
+  if (!/currentTarget\.contains\(target\)/.test(guard)) {
+    throw new Error(
+      "account-open-guard 缺 `currentTarget.contains(target)` —— 这是拦 Portal 内容的唯一稳定判据",
+    );
+  }
+  for (const role of ["menuitem", "button"]) {
+    if (!new RegExp(`role='${role}'`).test(guard)) {
+      throw new Error(
+        `account-open-guard 的豁免选择器缺 \`[role='${role}']\` —— ${role} 不是 <button> 标签，只列标签名会漏`,
+      );
+    }
+  }
+  return "四处同源 · 拦 Portal 弹层 + 非 button 控件";
+});
+
 check("★ P3 会话散点：四侧留边 + ZAxis range 存在（防气泡溢出绘图区）", () => {
   /* 审计 #12：原型要求「气泡不溢出绘图区」，真实由 recharts 布局保证 —— **此前无断言**。
      ⚠️ 本断言只锚**静态配置**（四侧 margin + ZAxis range 存在）；
@@ -7709,6 +7776,85 @@ check("★ Q2「指定」不得按账号状态禁用（偏好而非约束，D36�
   return "指定按钮只受 saving / excluded 控制（冷却等临时状态不禁用）";
 });
 
+check("★★ 三条产品线的账号池归一化都必须保留 `excluded`（否则排除后再也取消不掉）", () => {
+  /* 症状（2026-10-22 用户报障）：账号池里点了「排除」，按钮就再也变不回来 ——
+     文案恒为「排除」、点下去恒传 `excluded=true`（幂等）⇒ 账号被永久挡在选号外。
+     根因**不在按钮逻辑**，而在「字段看不见」：三条产品线各有各的归一化函数，
+     任何一处用白名单重建时漏掉 `excluded`，前端就永远看不到它。
+     —— PR #77 只补了 WorkBuddy 一侧（它当时以为「三平台共用同一个归一化」），
+     Trae / Qoder 侧照旧坏着 ⇒ 这条断言存在就是为了不让下一次再漏。 */
+  const wb = loadTs(path.join(ROOT, "src/lib/gateway.ts"));
+  const trae = loadTs(path.join(ROOT, "src/lib/trae-gateway.ts"));
+  const qoder = loadTs(path.join(ROOT, "src/lib/qoder-gateway.ts"));
+
+  /* 归一化后的账号：`excluded` 必须是**布尔真值**（漏字段 ⇒ undefined ⇒ 恒假）。 */
+  const row = { uid: "u1", name: "n1", status: "excluded", excluded: true, excludedNote: "手动" };
+  const wbOut = wb.normalizeGatewayPoolAccounts([row])[0];
+  const traeOut = trae.normalizeTraeGatewayStatus({ accounts: [row] }).accounts[0];
+  const qoderOut = qoder.normalizeQoderGatewayStatus({ accounts: [row] }).accounts[0];
+  for (const [name, account] of [
+    ["WorkBuddy", wbOut],
+    ["Trae", traeOut],
+    ["Qoder", qoderOut],
+  ]) {
+    if (!account) throw new Error(`${name} 侧归一化丢了整行账号`);
+    if (account.excluded !== true) {
+      throw new Error(
+        `${name} 侧归一化丢了 \`excluded\`（得到 ${JSON.stringify(account.excluded)}）`
+          + " —— 排除按钮会恒显示「排除」、恒传 true ⇒ 排除后再也取消不掉",
+      );
+    }
+    if (account.excludedNote !== "手动") {
+      throw new Error(`${name} 侧归一化丢了 \`excludedNote\`（得到 ${JSON.stringify(account.excludedNote)}）`);
+    }
+    /* ★ `status` 也必须保住 `"excluded"` —— 归一化若把它落回 `"available"`，
+       界面会显示「可用」而实际选号永远不选它（另一种形式的数字与事实不符）。
+       这一条是独立于 `excluded` 字段的：**字段在、状态被吞** 同样会误导人。 */
+    if (account.status !== "excluded") {
+      throw new Error(
+        `${name} 侧归一化把 status "excluded" 落成了 ${JSON.stringify(account.status)}`
+          + " —— 界面会显示「可用」，而实际选号永远不选它",
+      );
+    }
+  }
+
+  /* 「已排除」是**互斥第六态**：后端已把它从 `available` 里扣掉并单独计数，
+     卡片必须有这一格，否则「3 可用」而实际只有 2 个能被选中（数字与事实不符）。 */
+  const pool = { total: 3, available: 2, cooling: 0, disabled: 0, expired: 0, zeroCredits: 0, excluded: 1 };
+  if (wb.normalizeGatewayPoolSummary(pool).excluded !== 1) {
+    throw new Error("WorkBuddy 侧池摘要归一化丢了 `excluded` 计数");
+  }
+  const traePool = trae.normalizeTraeGatewayStatus({ pool }).pool;
+  if (traePool.excluded !== 1) {
+    throw new Error("Trae 侧池摘要归一化丢了 `excluded` 计数");
+  }
+  const qoderPool = qoder.normalizeQoderGatewayStatus({ pool }).pool;
+  if (qoderPool.excluded !== 1) {
+    throw new Error("Qoder 侧池摘要归一化丢了 `excluded` 计数");
+  }
+
+  /* 卡片的三套计数格都必须含「已排除」（Trae 走默认六格、Qoder 走 QODER_POOL_TILES）。
+     ⚠️ 这里用**文本扫描**而不是 `loadTs`：卡片是 `.tsx`，含 JSX ⇒ `loadTs` 的
+     `transpileModule`（未开 jsx 选项）会抛 `Unexpected token '>'`。
+     计数格是**字面量常量**，文本扫描足够硬 —— 真要防「有人把 excluded 从数组里删掉」，
+     正则匹配到的那段数组文本里就必须有它。 */
+  const cardSrc = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/components/gateway/account-pool-card.tsx"), "utf8"),
+  );
+  for (const [name, constName] of [
+    ["Trae（默认格）", "DEFAULT_POOL_TILES"],
+    ["Qoder", "QODER_POOL_TILES"],
+    ["WorkBuddy", "WB_POOL_TILES"],
+  ]) {
+    const block = new RegExp(`export const ${constName}[^=]*=\\s*\\[([\\s\\S]*?)\\]`).exec(cardSrc);
+    if (!block) throw new Error(`找不到 ${constName} 的计数格定义`);
+    if (!/"excluded"/.test(block[1])) {
+      throw new Error(`${name} 的计数格缺「已排除」—— 排除是互斥第六态，必须有自己的一格`);
+    }
+  }
+  return "三平台归一化都带 excluded / excludedNote，摘要都有 excluded 计数，三套计数格都含「已排除」";
+});
+
 check("★ 策略哨兵值前后端逐字一致（否则下拉是假开关）", () => {
   /* 三个哨兵（`__auto__` / `__max_credits__` / `__random__`）在**前端常量**里定义一次、
      在**后端 `PREFERRED_*`** 里再定义一次。任何一处漂移的后果都不是报错，而是
@@ -8541,6 +8687,20 @@ check("★ B5-程序位：卡片 = 注册表 ∪ {WorkBuddy 主位}（刻意例�
   for (const id of ids) {
     if (!rust.includes(`id: "${id}"`)) {
       throw new Error(`后端 PROGRAMS 缺少程序位 \`${id}\` —— 两侧注册表漂移`);
+    }
+  }
+  // ★ 安全审计「流程 20」：**必须双向**。
+  //
+  // 改造前只校「前端 → 后端」。于是后端加第 6 个程序位（`programs.rs` 加一行 + 一个
+  // adapter）后：编译绿、本条绿、P5-⑤ 绿（它当时只认写死的 3 个）—— 而前端没有这一格
+  // ⇒ 新程序位在 UI 里**完全不可见**，也没有任何测试或门禁会红。
+  // 这与 `background.rs::both_hosts_register_every_task_kind`（读两侧源码做双向校验）
+  // 是同一套思路。
+  for (const id of programSlotIds(rust)) {
+    if (!ids.includes(id)) {
+      throw new Error(
+        `后端 PROGRAMS 有程序位 \`${id}\`，但前端 \`WORKBUDDY_PROGRAMS\` 没有镜像 —— UI 里看不到它`,
+      );
     }
   }
   // 卡片必须有主位控件（公式的另一半）。

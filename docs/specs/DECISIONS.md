@@ -1,4 +1,4 @@
-# 决策清单（D1–D54）—— **✅ 全部已确认**
+# 决策清单（D1–D56）—— **✅ 全部已确认**
 
 > ⚠️ **另有一组决策只在 `UNIFIED-GATEWAY-ARCH.md` §10（P16 统一入口，8 条，AI 定稿）**，
 > 尚未并入本文件编号；索引见本文 **K 段**。
@@ -970,7 +970,55 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
 - **选反方案的代价**：保留倒计时标签 ⇒ 继续与 WB / Qoder 分叉；改成「临期」无天数词
   仍是一枚 Trae 独有的状态标签，信息与下行日期重复。
 
-### D54 换号手感对齐 WorkBuddy：**关闭/重开客户端由工具代劳**，但守卫语义不降级 —— ✅ **已落地（2026-10-31）**
+### D54 Anthropic 出口的 `input_tokens` = **估算占位 + 末帧校正**，不写 0 —— ✅ **已落地（2026-10-30，issue #139）**
+
+**结论**：`/v1/messages` 的 `message_start.usage.input_tokens` 用**请求体估算值**
+（`protocol::anthropic::estimate_input_tokens`），`message_delta.usage` 用上游真实
+`prompt_tokens` 覆盖；WB / Trae / Qoder 三条产品线的 Anthropic 出口全部接线。
+另外 `handle_delta` 把 `capture_usage` 提到 `ensure_started` **之前** —— 上游若在首帧
+就报用量，`message_start` 直接是真实值，估算不生效。
+
+**理由**：Anthropic 协议要求 `message_start` **当场**给 `usage.input_tokens`，而上游
+（OpenAI 兼容）只在**流末**报 `prompt_tokens` —— 时序上不可能同时满足。
+
+- **不写 0 的代价**（即改造前的行为）：客户端（dsh / Claude Code）拿 `input_tokens`
+  当上下文长度 ⇒ 占用率恒为 **0%**，用户看不出何时该 compact（#139 的全部体感）；
+  `message_delta` 只给 `output_tokens` 时，连「本轮消耗」也只剩输出侧。
+- **不引 tokenizer 的代价**：CJK 1 token/字、其余 3 字符/token 的估算误差约 ±15%。
+  它只服务「要不要压缩」这个判断，**不是计费口径** —— 计费仍走上游 `usage`
+  （`UsageTap` 那条路完全没动），所以估歪了不会算错钱。
+- **不推迟 `message_start` 的理由**：那等于把整条流缓存到末帧，流式就没了；
+  首帧带 usage 的情形已由上面的顺序调整免费覆盖。
+- **为什么同时补 `cache_read_input_tokens`**：客户端把「缓存读取」单列一行，缺字段
+  与「确实没命中」长得一模一样（都是 0）；四种上游写法
+  （`prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` /
+  `cache_read_input_tokens` / `cached_tokens`）收在 `cached_tokens_of` 一处。
+
+### D55 管理面（`/api/*`）默认只接受**回环 Host**，远程访问必须显式白名单 —— ✅ **已落地（2026-10-27，安全审计 P0-1）**
+
+**结论**：`buddy-switch-server` 的 `/api/*` 挂一层来源校验（`api_guard`）：`Host` 必须是
+`127.0.0.1` / `localhost` / `::1`，或列在 `BUDDY_SWITCH_ALLOWED_HOSTS`（逗号分隔，
+可带端口）；`Origin` 存在时必须与 `Host` 同源；写请求必须是 `application/json`。
+静态资源与网关树不受影响 —— 前者是公开的，后者自带 Bearer 鉴权且跑在独立端口。
+
+**理由**：管理面背后是全部明文凭据 —— `POST /api/accounts/export` 直接返回
+`access_token` / `refresh_token`，`export-to-path` 还能写任意绝对路径。改造前它**一个
+中间件都没有**，默认绑回环时的唯一屏障是「外部网页读不到回环端口」，而 **DNS
+rebinding 正好绕过它**（恶意页把 `attacker.com` 解析到 `127.0.0.1`，浏览器视
+`http://attacker.com:57890` 为同源，能读回响应）。
+
+- **为什么防线是 Host 而不是 Origin**：rebinding 下 `Origin` 与 `Host` 同源
+  （都是 `attacker.com`），「同源」这条判据天然通过。唯一有效的是**要求 Host 本身可信**。
+- **定了会动什么**：`api_guard.rs`（新增，四条判据收敛成一个纯函数）、`api.rs` 的
+  `.layer(...)`（必须挂在 `merge` **之前**，只作用于 `/api/*`）、`main.rs` 启动时装载
+  策略并打印配置指引、`docs/guides/DOCKER.md` 与 `docker-compose.yml` 的跨机访问说明。
+- **选反方案（默认放开远程）的代价**：安全态变成「要配置才能达到」，而不配就是默认
+  暴露 —— 与「暴露管理面应当是一次显式决定」相反。
+
+> ⚠️ 这是**刻意**的破坏性变更：升级后从局域网 IP / 域名访问会 403（`host_not_allowed`）。
+> 白名单放开的只是来源校验，**不是鉴权** —— webui 仍然没有登录。
+
+### D56 换号手感对齐 WorkBuddy：**关闭/重开客户端由工具代劳**，但守卫语义不降级 —— ✅ **已落地（2026-10-31）**
 
 **结论**：Qoder 的「切换账号」新增 `restart` 选项（默认 `false`，界面默认勾选 true）：
 

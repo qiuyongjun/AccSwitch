@@ -130,7 +130,7 @@ enum LlmEndpoint {
 }
 
 impl LlmEndpoint {
-    /// 该端点在 Trae 分区是否可用。`/v1/responses` 只有 WorkBuddy 有。
+    /// 该端点在 Trae 分区是否可用。`/v1/responses` 只有 WorkBuddy 与 Qoder 有。
     fn supports_trae(self) -> bool {
         !matches!(self, LlmEndpoint::Responses)
     }
@@ -200,6 +200,24 @@ async fn relay_llm(
         return endpoint_error(endpoint, endpoint_not_supported_for(spec.id));
     }
 
+    /* ③' ★ issue #76：把本网关的 Key 收敛成 `KeyActor`，**带进目标产品线的中继**。
+
+       这一步是「统一网关双口径」的关键：中继层（`chat_for_region` / `chat_for_variant`）
+       只认 `KeyActor`（id + 策略 + 账本），不认具体 Key 类型 ⇒ 第四套台账的 Key
+       也能享受与三条产品线**完全相同**的配额判定、账号白名单与 token 记账。
+
+       - 配额：`actor.policy` 是统一网关的 Key 的策略；`actor.usage` 是**统一网关的账本**
+         （`gateway_unified_key_usage.json`）⇒ 用量记在这里，不会被算到产品线的 Key 上。
+       - 白名单：`actor.policy.scope_accounts` 的 uid 按**目标产品线**的账号库展开 ——
+         中继层展开时读的就是它要转发到的那条产品线的账号库，uid 空间自然对齐。
+       - token：中继层的流式 / 非流式记账都会调 `actor.record_tokens` ⇒ **token 口径真生效**。 */
+    let actor = std::sync::Arc::new(crate::apikey::KeyActor::new(
+        record.id.clone(),
+        record.policy(),
+        state.key_usage.clone(),
+        "unified",
+    ));
+
     // ④ 把 body 里的 `model` 改写成**裸名**（中继与「模型禁用」判定都用裸名；
     //    留着前缀会让上游看到 `wb-cn:deepseek-…` 这种它不认识的模型名）
     let rewritten = Bytes::from(crate::model_route::rewrite_body_model(&raw, bare));
@@ -216,6 +234,8 @@ async fn relay_llm(
                         headers,
                         rewritten,
                         AlreadyResolved,
+                        // ★ 统一网关的 Key 带进去：配额 / 白名单 / 记账全生效。
+                        Some(actor.clone()),
                     )
                     .await
                 }
@@ -226,6 +246,7 @@ async fn relay_llm(
                         headers,
                         rewritten,
                         AlreadyResolved,
+                        Some(actor.clone()),
                     )
                     .await
                 }
@@ -236,6 +257,7 @@ async fn relay_llm(
                         headers,
                         rewritten,
                         AlreadyResolved,
+                        Some(actor.clone()),
                     )
                     .await
                 }
@@ -245,10 +267,22 @@ async fn relay_llm(
             let trae = <crate::trae::TraeGateway as crate::GatewayProduct>::shared_state();
             match endpoint {
                 LlmEndpoint::Chat => {
-                    crate::trae::routes::chat_for_variant(trae, variant, rewritten).await
+                    crate::trae::routes::chat_for_variant(
+                        trae,
+                        variant,
+                        rewritten,
+                        Some(actor.clone()),
+                    )
+                    .await
                 }
                 LlmEndpoint::Messages => {
-                    crate::trae::routes::messages_for_variant(trae, variant, rewritten).await
+                    crate::trae::routes::messages_for_variant(
+                        trae,
+                        variant,
+                        rewritten,
+                        Some(actor.clone()),
+                    )
+                    .await
                 }
                 // 防御性兜底（上面第 ③ 步已拦）：**穷举、无 `_ =>`** ⇒ 新增端点时编译失败，
                 // 而不是静默走到别的分派分支。这里返回同一份可诊断错误，不 panic。
@@ -269,6 +303,7 @@ async fn relay_llm(
                         region,
                         rewritten,
                         crate::qoder::routes::Protocol::OpenAi,
+                        Some(actor.clone()),
                     )
                     .await
                 }
@@ -278,28 +313,37 @@ async fn relay_llm(
                         region,
                         rewritten,
                         crate::qoder::routes::Protocol::Anthropic,
+                        Some(actor.clone()),
                     )
                     .await
                 }
-                // `/v1/responses` 对 Qoder 分区无意义（上游没有等价协议）——
-                // 明确 501，不许 404（那是「路径写错了」的语义）。
+                // `/v1/responses` 对 Qoder 分区同样成立（入站翻译成 chat、出站转 Responses
+                // 事件流/对象，见 `qoder::routes::Protocol::Responses`）。
                 LlmEndpoint::Responses => {
-                    endpoint_error(endpoint, endpoint_not_supported_for(spec.id))
+                    crate::qoder::routes::chat_for_region(
+                        qoder,
+                        region,
+                        rewritten,
+                        crate::qoder::routes::Protocol::Responses,
+                        Some(actor.clone()),
+                    )
+                    .await
                 }
             }
         }
     }
 }
 
-/// `/v1/responses` + Trae 命名空间的可诊断错误（**唯一构造点**，上面两处共用）。
+/// `/v1/responses` + **Trae** 命名空间的可诊断错误（`endpoint_not_supported_for_namespace`
+/// 的**唯一构造点**；Qoder 分区已支持该端点，不在这里）。
 fn endpoint_not_supported_for(namespace: &str) -> HttpError {
     HttpError {
         status: StatusCode::NOT_IMPLEMENTED,
         kind: "invalid_request_error",
         code: "endpoint_not_supported_for_namespace",
         message: format!(
-            "该分区没有 /v1/responses 端点（只有 WorkBuddy 有），而 `{namespace}` 不是 WorkBuddy 命名空间。\
-             请改用 /v1/chat/completions 或 /v1/messages，或把模型前缀换成 wb-cn: / wb-global:。"
+            "Trae 分区没有 /v1/responses 端点（WorkBuddy 与 Qoder 有），而 `{namespace}` 是 Trae 命名空间。\
+             请改用 /v1/chat/completions 或 /v1/messages，或把模型前缀换成 wb-cn: / wb-global: / qoder-cn: 等。"
         ),
     }
 }
@@ -413,6 +457,13 @@ pub async fn biz(
         Ok(record) => record,
         Err(error) => return error,
     };
+    // ★ issue #76：收敛成 `KeyActor`（业务转发同样要判请求数配额）。
+    let actor = std::sync::Arc::new(crate::apikey::KeyActor::new(
+        record.id.clone(),
+        record.policy(),
+        state.key_usage.clone(),
+        "unified",
+    ));
 
     // ① 该 Key 必须显式指定业务转发命名空间
     let Some(namespace) = record.biz_namespace.clone() else {
@@ -497,7 +548,8 @@ pub async fn biz(
 
     // ⑤ 分派（复用既有的白名单 + `relay` 治理层，**不另写轮换逻辑**）
     let wb = <crate::WbGateway as crate::GatewayProduct>::shared_state();
-    crate::routes::biz::biz_for_region(wb, region, path, body, biz_method).await
+    // ★ 业务转发同样带 Key（**否则它是配额的绕过口**）。
+    crate::routes::biz::biz_for_region(wb, region, path, body, biz_method, Some(actor)).await
 }
 
 /// 按端点选**错误体形状**：`/v1/messages` 用 Anthropic 形状，其余用 OpenAI 形状。

@@ -1632,13 +1632,60 @@ export interface GatewayPoolAccount {
    * Trae / Qoder 侧暂无该字段 ⇒ 归一化缺省 `{}`（老后端 / 演示站不炸）。
    */
   modelCoolings?: Record<string, number>;
+  /**
+   * 同一份冷却数据的**带来源**版本（issue #88 缺口 4.1）。
+   *
+   * `modelCoolings` 只给解冻时刻，用户分不清那是**上游声明的**还是**本仓兜底猜的**
+   * （拿不到上游墙钟时冷 `probe_fallback_ms`，默认 10 分钟）—— 两者对排查的含义相反：
+   * 前者该等，后者该怀疑是不是配大了。
+   *
+   * Trae / Qoder 侧暂无该字段 ⇒ 缺省 `{}`，徽标回落 `modelCoolings`。
+   */
+  modelCooldownDetails?: Record<
+    string,
+    {
+      /** 解冻时刻（ms）。 */
+      untilMs: number;
+      /** 上游声明的重置时刻（ms）；`0` = 上游没给。 */
+      resetAtMs: number;
+      /** 由 `resetAtMs === 0` 推出：`true` = 本仓兜底时长，不是上游说的。 */
+      fallback: boolean;
+      reason: string;
+      /** `11102` 封禁的累计次数（退避指数）；`6004` 限流恒 0。 */
+      hits: number;
+    }
+  >;
 }
 
 /** API Key 记录（列表脱敏返回，绝不含明文）。字段名与后端 masked() 输出一致。 */
+/* ─────────── 密钥策略（issue #76）───────────
+   定义放在 `types.ts` 而非 `api.ts`：`api.ts` 已经 import 本文件（单向），
+   反向 import 会成环。两项策略：**用量配额**（单位 × 周期）与
+   **可访问账号**（全部 / 指定白名单，账号 uid 与分组 id 取并集）。 */
+
+/** 配额模式：不限额 / 限额（默认不限额 = 改造前行为）。 */
+export type QuotaMode = "unlimited" | "limited";
+/** 计量单位：token（LLM）/ 请求数（业务代理没有 token 可计）。 */
+export type QuotaUnit = "token" | "request";
+/** 重置周期：不重置（累计）/ 每日 / 每周 / 自然月。 */
+export type QuotaPeriod = "none" | "daily" | "weekly" | "monthly";
+/** 账号范围：全部 / 指定白名单。 */
+export type ScopeMode = "all" | "selected";
+
 export interface ApiKeyRecord {
   id: string;
   name: string;
   region: Region;
+  /* ── 策略（issue #76）—— 全部可选 ⇒ **旧台账零迁移**：
+       缺字段按「改造前的行为」解读（不限额 / 全部账号）。
+       前端不猜：调用方一律先过 `normalizeKeyPolicy` 补默认值。 ── */
+  quotaMode?: QuotaMode;
+  quotaLimit?: number;
+  quotaUnit?: QuotaUnit;
+  quotaPeriod?: QuotaPeriod;
+  scopeMode?: ScopeMode;
+  scopeAccounts?: string[];
+  scopeGroups?: string[];
   /** 可辨识前缀，如 "sk-wb-a1b2"。 */
   prefix: string;
   /**
@@ -1757,6 +1804,8 @@ export type ModelProbeState =
   | "auth_dead"
   | "model_unavailable"
   | "upstream_error"
+  /** 上游排队（Qoder `10605`/`isQueued`）：等一下就好，**不是限流、不是凭据失效**。 */
+  | "upstream_queued"
   | "transport_error"
   | "skipped";
 
@@ -1859,6 +1908,22 @@ export interface GatewayLogEntry {
   endpoint: string;
   method: string;
   region: Region;
+  /**
+   * ★ issue #76：调用方的 API Key id。
+   *
+   * - `null` = 无 Key 的调用（本地直连 / 管理面探测）；
+   * - **`undefined` = 升级前写入的老条目**（那时还没有这个键）——
+   *   两者语义不同：前者「确实没有 Key」，后者「不知道」。统计时不要把 `undefined`
+   *   合并进「无 Key」，否则历史数据会凭空多出一批「匿名调用」。
+   */
+  keyId?: string | null;
+  /**
+   * ★ `keyId` 属于哪套台账（`"wb"` / `"trae"` / `"qoder"` / `"unified"`）。
+   *
+   * 统一网关转发来的请求，日志里记的是**网关那把 Key** —— 与本产品线的 Key id
+   * 混在同一字段。`null` = 老条目 / 无 Key；`undefined` = 升级前的日志。
+   */
+  keyScope?: string | null;
   account: string | null;
   model: string | null;
   status: number;

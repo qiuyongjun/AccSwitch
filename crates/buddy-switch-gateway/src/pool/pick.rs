@@ -108,6 +108,11 @@ pub struct PickInput<'a> {
     pub tried: &'a HashSet<String>,
     /// 用户显式排除的 uid（**硬约束**：自动选号、兜底、偏好一律跳过）。
     pub excluded: &'a HashSet<String>,
+    /// ★ 本密钥的**允许名单**（issue #76）：`None` = 全部账号（不过滤）；
+    /// `Some(set)` = 只有集合内的 uid 可被选中。与 `excluded` **同层**（都是硬约束），
+    /// 但来源不同：`excluded` 是用户对账号池的全局排除，`allowed` 是**这一把 Key**
+    /// 的授权范围。分组已在调用方展开成 uid（池条目不认识分组，见 `relay::select_account`）。
+    pub allowed: Option<&'a HashSet<String>>,
     /// 选号策略。
     pub mode: PickMode,
     /// 抽签种子（生产用时间戳+序号，测试用固定值以保证可复现）。
@@ -298,6 +303,8 @@ impl<'a> PickInput<'a> {
             model,
             tried,
             excluded: no_exclusions(),
+            // 便捷构造 = 「无排除、无白名单」的最小输入（测试与简单场景用）。
+            allowed: None,
             mode: PickMode::Weighted,
             seed,
         }
@@ -322,7 +329,19 @@ fn entry_usable<E: PoolEntryLike>(
     entry.healthy_for_request(now_ms, model) && !in_flight_full(entry, policy, now_ms)
 }
 
-/// 「此刻能不能被选中」= 健康 ∧ 未占满在途 ∧ **不在排除名单里**。
+/// 白名单判定（`None` = 全部账号 ⇒ 放行）。
+///
+/// ★ 与 [`selectable`] 的 `excluded` 判据**并排**：两条都是硬约束，
+///   任一不过就整体不可选 —— 否则「自动选号跳过了、偏好/兜底没跳过」这类缺陷
+///   一定会出现（且不报错）。
+fn in_allowed(input: &PickInput<'_>, uid: &str) -> bool {
+    match input.allowed {
+        None => true,
+        Some(allowed) => allowed.contains(uid),
+    }
+}
+
+/// 「此刻能不能被选中」= 健康 ∧ 未占满在途 ∧ **不在排除名单里** ∧ **在允许名单里**。
 ///
 /// 排除与「健康」正交：前者是**用户意图**（不想让网关用它），后者是账号状态。
 /// 但两者对选号的后果相同 —— 都不能选。因此必须收敛到**同一个谓词**上，
@@ -333,8 +352,11 @@ fn selectable<E: PoolEntryLike>(
     now_ms: i64,
     model: &str,
     excluded: &HashSet<String>,
+    allowed: Option<&HashSet<String>>,
 ) -> bool {
-    !excluded.contains(entry.uid()) && entry_usable(entry, policy, now_ms, model)
+    !excluded.contains(entry.uid())
+        && allowed.map(|set| set.contains(entry.uid())).unwrap_or(true)
+        && entry_usable(entry, policy, now_ms, model)
 }
 
 /// 指定 uid 此刻是否可用于该请求（**与 [`pick`] 同一套判据**，见 [`selectable`]）。
@@ -348,10 +370,11 @@ pub fn is_usable<E: PoolEntryLike>(
     now_ms: i64,
     model: &str,
     excluded: &HashSet<String>,
+    allowed: Option<&HashSet<String>>,
 ) -> bool {
     entries
         .get(uid)
-        .map(|entry| selectable(entry, policy, now_ms, model, excluded))
+        .map(|entry| selectable(entry, policy, now_ms, model, excluded, allowed))
         .unwrap_or(false)
 }
 
@@ -372,6 +395,75 @@ pub(crate) fn in_flight_full<E: PoolEntryLike>(
     //   请求被 drop 时会泄漏；裸计数会让账号被永久判成「在途已满」而再也选不中，
     //   界面上却仍显示「可用」—— 正是「账号看着正常、请求一直失败」的一种。
     limit > 0 && entry.in_flight_now(now_ms) >= limit
+}
+
+/// 选号失败时的判据：**是不是「该模型在全部可试账号上都被限流」**（issue #134）。
+///
+/// 返回 `Some((最晚解冻时刻, 参与判定的账号数))`，当且仅当：
+///
+/// 1. 至少有一个账号**除了该模型的冷却之外**完全可试（未 tried / 域匹配 / 未被排除 /
+///    在名单内 / 账号级健康 / 未在途占满）；
+/// 2. 这些账号**全部**在 `model` 上有未到期的冷却。
+///
+/// ## 为什么需要它
+///
+/// `#125` 把闸门的开闸判据改成「窗口内**去重账号数** ≥ `gate_threshold`（默认 2）」
+/// —— 正确的方向，但留下一个边界：**池里只有 1 个账号时闸门永远不开**（去重上限就是 1）。
+/// 于是模型限流时走的是「选号失败」这条兜底，而兜底只有 `pool_busy`(503) 与
+/// `no_credential`(401) 两个出口，前者判据（可用号全在途满）不成立 ⇒ **401**。
+/// 客户端把 401 归为 AUTH、不可重试 ⇒ 整轮会话终止，正是 #106 修掉的那个症状又回来了。
+///
+/// 判据不能只看 `PoolSummary::model_cooling == available`：那个计数是「有**任意**模型
+/// 冷却的账号数」，与本次请求的模型无关（一个号被 A 模型罚、请求 B 模型时它也算进去）。
+/// 必须**逐账号问该模型的截止时刻**，所以这里重走一遍选号判据。
+///
+/// ## 为什么「在途占满」要否决
+///
+/// 在途满的号并没有被该模型限流，它只是**忙**。把它算进「全部冷却」会说谎
+/// （用户看到「该模型在 3 个账号上都被限流」，其实其中 1 个只是排队）——
+/// 那种情形维持原来的 401/PoolBusy 判定，别在这里扩语义。
+pub fn model_cooling_until<E: PoolEntryLike>(
+    entries: &BTreeMap<String, E>,
+    policy: &PickPolicy,
+    now_ms: i64,
+    input: &PickInput<'_>,
+) -> Option<(i64, usize)> {
+    if input.model.is_empty() {
+        return None;
+    }
+    let mut cooled = 0usize;
+    let mut latest = 0i64;
+    for entry in entries.values() {
+        if input.tried.contains(entry.uid()) {
+            continue;
+        }
+        if input
+            .realm
+            .map(|wanted| entry.realm() == Some(wanted))
+            .unwrap_or(true)
+            == false
+        {
+            continue;
+        }
+        if input.excluded.contains(entry.uid()) {
+            continue;
+        }
+        // ⚠️ 上游此处还有一道 `input.allowed`（密钥白名单）过滤，属 issue #76；
+        //    本分支没有白名单模型 ⇒ 该维度恒不生效，故不设此参数。
+        //    （`PickInput` 也就没有 `allowed` 字段 —— 移植 #76 时一并补回。）
+        // 「除了该模型的冷却之外」是否可试：账号级健康 + 未在途占满。
+        if !entry.account_healthy(now_ms) || in_flight_full(entry, policy, now_ms) {
+            continue;
+        }
+        let until = entry.model_cool_expiry_ms(input.model);
+        if until <= now_ms {
+            // 有一个号其实能服务这个模型 ⇒ 不是「整体被限流」。
+            return None;
+        }
+        cooled += 1;
+        latest = latest.max(until);
+    }
+    (cooled > 0).then_some((latest, cooled))
 }
 
 /// 从池中选出一个账号；返回被选中账号的 uid。
@@ -396,7 +488,7 @@ pub fn pick<E: PoolEntryLike>(
         .values()
         .filter(|entry| {
             !input.tried.contains(entry.uid())
-                && selectable(*entry, policy, now_ms, input.model, input.excluded)
+                && selectable(*entry, policy, now_ms, input.model, input.excluded, input.allowed)
                 && input
                     .realm
                     .map(|wanted| entry.realm() == Some(wanted))
@@ -580,7 +672,7 @@ pub fn pick_with_preference<E: PoolEntryLike>(
 ) -> Option<String> {
     if let Some(uid) = preferred_uid {
         let preferred_usable = !input.tried.contains(uid)
-            && is_usable(entries, policy, uid, now_ms, input.model, input.excluded)
+            && is_usable(entries, policy, uid, now_ms, input.model, input.excluded, input.allowed)
             && input
                 .realm
                 .map(|wanted| entries.get(uid).and_then(|entry| entry.realm()) == Some(wanted))
@@ -628,6 +720,16 @@ fn draw_weighted<'a>(items: &[&'a Candidate], rng: &mut Pcg32) -> Option<&'a Can
 /// 约束：非 `tried`、realm 匹配、非禁用、**未被排除**、**排除仍在有效硬冷却中的账号**
 /// （硬冷却意味着余额不足，强试必然再失败且浪费一次上游调用）。
 /// 不推进 `used_seq`（它只是「试一下」，不应影响 LRU 语义）。
+///
+/// 「解冻时刻」取**账号级与模型级的较大者**（[`effective_cool_expiry_ms`]）：
+/// 只被模型级冷落的账号同样值得一次半开试探，否则「只有这个模型被限流」会让
+/// 整个池直接放弃（issue #106 §2.3）。
+fn effective_cool_expiry_ms<E: PoolEntryLike>(entry: &E, model: &str) -> i64 {
+    entry
+        .cool_expiry_ms()
+        .max(entry.model_cool_expiry_ms(model))
+}
+
 fn pick_earliest_expiry<E: PoolEntryLike>(
     entries: &mut BTreeMap<String, E>,
     policy: &PickPolicy,
@@ -640,6 +742,7 @@ fn pick_earliest_expiry<E: PoolEntryLike>(
             if input.tried.contains(entry.uid())
                 || entry.is_disabled()
                 || input.excluded.contains(entry.uid())
+                || !in_allowed(input, entry.uid())
             {
                 return false;
             }
@@ -655,9 +758,20 @@ fn pick_earliest_expiry<E: PoolEntryLike>(
             if entry.is_hard_cooled(now_ms) {
                 return false;
             }
-            entry.cool_expiry_ms() > 0
+            // ★ issue #106 §2.3：判据必须包含**该模型**的冷却。
+            //
+            // 改造前只看 `cool_expiry_ms()`（账号级冷却 + 熔断），完全不含
+            // `model_cooldowns` ⇒ 「池里唯一的问题就是这个模型被限流」时兜底一个号
+            // 都给不出来，调用方落到 `last == None` ⇒ 对外 401「凭据无效」。
+            // 这是与闸门短路并列的第二条 19ms 空账号 401 路径。
+            effective_cool_expiry_ms(*entry, input.model) > 0
         })
-        .min_by_key(|entry| (entry.cool_expiry_ms(), entry.uid().to_string()))
+        .min_by_key(|entry| {
+            (
+                effective_cool_expiry_ms(*entry, input.model),
+                entry.uid().to_string(),
+            )
+        })
         .map(|entry| entry.uid().to_string())?;
 
     if let Some(entry) = entries.get_mut(&candidate) {
@@ -726,6 +840,165 @@ mod tests {
         )
     }
 
+    // -----------------------------------------------------------------------
+    // 安全审计 P1-6：`allowed` / `excluded` 是**授权边界**，必须在选号层有断言
+    // -----------------------------------------------------------------------
+    //
+    // 改造前：测试简写把 `allowed` 硬写成 `None`、`excluded` 用 `no_exclusions()`，
+    // 全仓 `PickInput { allowed: Some(_) }` **零出现** ⇒ 把 `selectable()` 里的
+    // `allowed` 判据和 `pick_earliest_expiry` 里的 `!in_allowed(...)` 一起删掉，
+    // 测试仍然全绿。症状是最难查的那种：限定到 A 的 Key 被 B 服务、去刷 B 的额度，
+    // 而池卡同时显示「A 可用」（`summary` 是另一套过滤，它绿着）。
+
+    fn entries_of(uids: &[&str]) -> BTreeMap<String, PoolEntry> {
+        uids.iter()
+            .map(|uid| (uid.to_string(), base_entry(uid)))
+            .collect()
+    }
+
+    fn uid_set(uids: &[&str]) -> HashSet<String> {
+        uids.iter().map(|uid| uid.to_string()).collect()
+    }
+
+    /// 四种模式在**同一份输入**下都必须只选白名单内的号。
+    ///
+    /// 变异验证：去掉 `selectable()` 里的 `allowed` 判据 ⇒ 至少一个模式会选出 `b`。
+    #[test]
+    fn every_pick_mode_honours_the_allowlist() {
+        for mode in [
+            PickMode::Weighted,
+            PickMode::MaxCredits,
+            PickMode::Random,
+        ] {
+            let mut entries = entries_of(&["a", "b"]);
+            let allowed = uid_set(&["a"]);
+            let tried = HashSet::new();
+            let input = PickInput {
+                realm: None,
+                model: "m",
+                tried: &tried,
+                excluded: no_exclusions(),
+                allowed: Some(&allowed),
+                mode,
+                seed: 7,
+            };
+            let mut seq = 0;
+            let picked = super::pick(&mut entries, &mut seq, &policy(), NOW, &input);
+            assert_eq!(
+                picked.as_deref(),
+                Some("a"),
+                "{mode:?} 必须只选白名单内的账号（b 不在名单里）"
+            );
+        }
+    }
+
+    /// 偏好（`pinned` / 会话粘性）**不能越权**：指定的号在名单外时回落到名单内。
+    ///
+    /// 变异验证：把 `pick_with_preference` 里对 `is_usable(...allowed)` 的传参改成
+    /// `None` ⇒ 本用例选出 `b`、红。
+    #[test]
+    fn preference_cannot_escape_the_allowlist() {
+        let mut entries = entries_of(&["a", "b"]);
+        let allowed = uid_set(&["a"]);
+        let tried = HashSet::new();
+        let input = PickInput {
+            realm: None,
+            model: "m",
+            tried: &tried,
+            excluded: no_exclusions(),
+            allowed: Some(&allowed),
+            mode: PickMode::Weighted,
+            seed: 3,
+        };
+        let mut seq = 0;
+        let picked =
+            super::pick_with_preference(&mut entries, &mut seq, &policy(), NOW, &input, Some("b"));
+        assert_eq!(
+            picked.as_deref(),
+            Some("a"),
+            "偏好指向名单外的号时必须回落到名单内，而不是照办"
+        );
+    }
+
+    /// ★ 兜底（`pick_earliest_expiry`）**不得跳到名单外**。
+    ///
+    /// 这是「受限 Key 不许兜底到名单外」的唯一防线：名单内唯一的号在冷却时，
+    /// 正确行为是**放弃**（返回 `None`），而不是「先借一个名单外的号用着」。
+    #[test]
+    fn fallback_never_jumps_outside_the_allowlist() {
+        let mut entries = entries_of(&["a", "b"]);
+        let allowed = uid_set(&["a"]);
+        // 两个号都在冷却（`pick_earliest_expiry` 的语义就是「从冷却中的号里挑最早到期的
+        // 去强试」），且 b 更早到期 ⇒ 它天然是兜底首选，而它**不在**名单里。
+        entries.get_mut("a").unwrap().until_ms = NOW + 60_000;
+        entries.get_mut("b").unwrap().until_ms = NOW + 30_000;
+
+        let tried = HashSet::new();
+        let input = PickInput {
+            realm: None,
+            model: "m",
+            tried: &tried,
+            excluded: no_exclusions(),
+            allowed: Some(&allowed),
+            mode: PickMode::Weighted,
+            seed: 11,
+        };
+        let picked = super::pick_earliest_expiry(&mut entries, &policy(), NOW, &input);
+        assert_ne!(
+            picked.as_deref(),
+            Some("b"),
+            "兜底绝不能越过白名单 —— 那等于用别人的账号刷额度"
+        );
+        // 反向对照：名单**包含两者**时，b 是合法兜底目标（证明上面的断言不是因为
+        // 「兜底根本选不出东西」而假绿）。
+        let both = uid_set(&["a", "b"]);
+        let input_both = PickInput {
+            allowed: Some(&both),
+            ..input
+        };
+        let picked = super::pick_earliest_expiry(&mut entries, &policy(), NOW, &input_both);
+        assert_eq!(picked.as_deref(), Some("b"), "白名单放宽后兜底应当能选中 b");
+    }
+
+    /// `excluded` 同样要在**三条路径**上生效：通用选号 / 偏好 / 兜底。
+    #[test]
+    fn exclusions_apply_on_every_selection_path() {
+        let mut entries = entries_of(&["a", "b"]);
+        let excluded = uid_set(&["a"]);
+        let tried = HashSet::new();
+        let input = PickInput {
+            realm: None,
+            model: "m",
+            tried: &tried,
+            excluded: &excluded,
+            allowed: None,
+            mode: PickMode::Weighted,
+            seed: 5,
+        };
+        let mut seq = 0;
+
+        // ① 通用选号
+        let picked = super::pick(&mut entries, &mut seq, &policy(), NOW, &input);
+        assert_eq!(picked.as_deref(), Some("b"), "被排除的号不得被自动选中");
+
+        // ② 偏好（用户显式指定了被排除的号 —— 硬排除语义优先）
+        let picked =
+            super::pick_with_preference(&mut entries, &mut seq, &policy(), NOW, &input, Some("a"));
+        assert_eq!(
+            picked.as_deref(),
+            Some("b"),
+            "被排除的号即使被显式指定也不可用（硬排除）"
+        );
+
+        // ③ 兜底
+        let picked = super::pick_earliest_expiry(&mut entries, &policy(), NOW, &input);
+        assert_ne!(
+            picked.as_deref(),
+            Some("a"),
+            "兜底同样受排除约束（改造前这条路径就查 excluded，此处钉住它别被删）"
+        );
+    }
+
     /// 同上，用于 `is_usable`（不排除任何账号）。
     fn is_usable(
         entries: &BTreeMap<String, PoolEntry>,
@@ -734,7 +1007,7 @@ mod tests {
         now_ms: i64,
         model: &str,
     ) -> bool {
-        super::is_usable(entries, policy, uid, now_ms, model, no_exclusions())
+        super::is_usable(entries, policy, uid, now_ms, model, no_exclusions(), None)
     }
 
     /// ★ O6：**分模型** EMA —— 账号级 EMA 相同，但「在 A 模型上老失败」不能拖累
@@ -1276,10 +1549,20 @@ mod tests {
         );
     }
 
+    /// ★ issue #106 §2.3：模型级冷却必须让账号**不可路由**，但**不得**让整个池
+    /// 直接放弃 —— 兜底要能对它做一次半开试探。
+    ///
+    /// 改造前 `pick_earliest_expiry` 的判据是 `cool_expiry_ms() > 0`，只看账号级冷却，
+    /// 于是「池里唯一的问题就是这个模型被限流」时一个号都给不出来 ⇒ 调用方落到
+    /// `last == None` ⇒ 对外 **401 `no_credential`**（19ms、无上游往返、账号列为空）。
+    /// 这正是报障里「9 个号、五项计数全 0，却说 0 个可用」的来源。
+    ///
+    /// 反向对照（同批钉住）：硬冷却（余额不足）**仍然**不得被兜底强试 ——
+    /// 见 `hard_cooled_accounts_are_excluded_from_expiry_fallback`。
     #[test]
-    fn model_cooldown_excludes_only_that_model() {
+    fn model_cooldown_falls_back_to_a_probe_instead_of_giving_up() {
         let mut entry = base_entry("a");
-        entry.cooldown_model(NOW, "glm-5.2", 0, 60_000, "6004");
+        entry.cooldown_model(NOW, "glm-5.2", 0, 60_000, "6004", false);
         let mut pool = pool_of(vec![entry]);
         let mut seq = 0;
         assert_eq!(
@@ -1293,9 +1576,12 @@ mod tests {
                 &HashSet::new(),
                 1
             ),
-            None,
-            "触发限流的模型应被跳过"
+            Some("a".to_string()),
+            "只剩模型级冷却时必须给出一个半开试探号，而不是整池放弃（那会变成 401）"
         );
+        // 但它在**择优**阶段仍被视为不可用：冷却未到期时不会因为「健康」被选中。
+        // （上面那次是兜底 `pick_earliest_expiry`，走的是 `mark_probed`，不推进 `used_seq`。）
+        assert_eq!(pool["a"].used_seq, 0, "兜底强试不得推进 LRU 序号");
         assert_eq!(
             pick(
                 &mut pool,
@@ -1437,6 +1723,7 @@ mod tests {
                 reset_at_ms: 0,
                 reason: String::new(),
                 hits: 0,
+                from_upstream: false,
             },
         );
         let map = pool_of(vec![blocked]);
@@ -1471,6 +1758,7 @@ mod tests {
                 reset_at_ms: 0,
                 reason: String::new(),
                 hits: 1,
+                from_upstream: false,
             },
         );
         let map = pool_of(vec![recovered.clone()]);
@@ -1496,6 +1784,124 @@ mod tests {
             )
             .as_deref(),
             Some("recovered")
+        );
+    }
+
+    /// ★ issue #134 的判据本身：**该模型**在全部可试账号上都冷却才算成立。
+    ///
+    /// 变异：把实现改成读 `PoolSummary::model_cooling`（有**任意**模型冷却的账号数）
+    /// ⇒ `..._ignores_other_models` 红（A 模型冷却、请求 B 模型时会误报 503）。
+    fn cooling_entry(uid: &str, model: &str, until_ms: i64) -> PoolEntry {
+        let mut entry = base_entry(uid);
+        entry.model_cooldowns.insert(
+            model.to_string(),
+            ModelCooldown {
+                until_ms,
+                reset_at_ms: 0,
+                reason: String::new(),
+                hits: 0,
+                from_upstream: true,
+            },
+        );
+        entry
+    }
+
+    fn cooling_input<'a>(
+        model: &'a str,
+        tried: &'a HashSet<String>,
+        excluded: &'a HashSet<String>,
+    ) -> PickInput<'a> {
+        PickInput {
+            realm: None,
+            model,
+            tried,
+            excluded,
+            allowed: None,
+            mode: PickMode::MaxCredits,
+            seed: 0,
+        }
+    }
+
+    #[test]
+    fn model_cooling_until_reports_every_cooled_account() {
+        let policy = policy();
+        let entries = pool_of(vec![
+            cooling_entry("a", "m1", NOW + 60_000),
+            cooling_entry("b", "m1", NOW + 120_000),
+        ]);
+        let (tried, excluded) = (HashSet::new(), HashSet::new());
+        let input = cooling_input("m1", &tried, &excluded);
+        assert_eq!(
+            model_cooling_until(&entries, &policy, NOW, &input),
+            Some((NOW + 120_000, 2)),
+            "最晚截止 + 账号数都要给对（前者进 Retry-After，后者进文案）"
+        );
+    }
+
+    #[test]
+    fn model_cooling_until_returns_none_when_one_account_is_free() {
+        let policy = policy();
+        let entries = pool_of(vec![
+            cooling_entry("a", "m1", NOW + 60_000),
+            base_entry("b"),
+        ]);
+        let (tried, excluded) = (HashSet::new(), HashSet::new());
+        let input = cooling_input("m1", &tried, &excluded);
+        assert_eq!(
+            model_cooling_until(&entries, &policy, NOW, &input),
+            None,
+            "还有号能用 ⇒ 不是「整体限流」，不能报 503"
+        );
+    }
+
+    /// ★ 这条钉住「不能用 `summary.model_cooling == available` 当判据」：
+    /// 账号被 **A** 模型罚了，请求 **B** 模型时必须照常选号（这里断言判据不成立）。
+    #[test]
+    fn model_cooling_until_ignores_other_models() {
+        let policy = policy();
+        let entries = pool_of(vec![
+            cooling_entry("a", "m1", NOW + 60_000),
+            cooling_entry("b", "m1", NOW + 60_000),
+        ]);
+        let (tried, excluded) = (HashSet::new(), HashSet::new());
+        let input = cooling_input("m2", &tried, &excluded);
+        assert_eq!(
+            model_cooling_until(&entries, &policy, NOW, &input),
+            None,
+            "冷却的是 m1，请求的是 m2 ⇒ 与本次请求无关，不许报 503"
+        );
+    }
+
+    #[test]
+    fn model_cooling_until_skips_excluded_and_tried_accounts() {
+        let policy = policy();
+        let entries = pool_of(vec![
+            cooling_entry("a", "m1", NOW + 60_000),
+            // 唯一「没冷却」的号被排除 / 已试 ⇒ 不参与判定，判据仍成立。
+            base_entry("b"),
+        ]);
+        let mut excluded = HashSet::new();
+        excluded.insert("b".to_string());
+        let tried = HashSet::new();
+        let input = cooling_input("m1", &tried, &excluded);
+        assert_eq!(
+            model_cooling_until(&entries, &policy, NOW, &input),
+            Some((NOW + 60_000, 1)),
+            "被排除的号不算「可用账号」—— 否则永远报 401"
+        );
+
+        let entries2 = pool_of(vec![
+            cooling_entry("a", "m1", NOW + 60_000),
+            base_entry("b"),
+        ]);
+        let mut tried = HashSet::new();
+        tried.insert("b".to_string());
+        let excluded2 = HashSet::new();
+        let input2 = cooling_input("m1", &tried, &excluded2);
+        assert_eq!(
+            model_cooling_until(&entries2, &policy, NOW, &input2),
+            Some((NOW + 60_000, 1)),
+            "本轮已试过的号同样不算"
         );
     }
 }

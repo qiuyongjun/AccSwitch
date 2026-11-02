@@ -30,7 +30,7 @@
 | 新增一个平台 / 产品线 | [`specs/P5-ARCH.md`](specs/P5-ARCH.md) + [`specs/UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) §11 |
 | 改账号库的读写 / 续期回写 / 软删除 | [`specs/ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md)（**写路径必须进事务**） |
 | 用词拿不准（region / scope / 作用域…） | [`specs/VOCABULARY.md`](specs/VOCABULARY.md)（**冻结，不许自创**） |
-| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D54） |
+| 想知道某功能当初为什么这么做 | [`specs/DECISIONS.md`](specs/DECISIONS.md)（D1–D56） |
 | 加新交互（先原型、后代码） | [`prototype/`](prototype/) → `index.html` 可直接打开 |
 | 查这版改了什么 | [`releases/`](releases/) |
 
@@ -45,7 +45,7 @@
 | 文档 | 内容 | 状态 |
 |:--|:--|:--|
 | [`PLAN.md`](specs/PLAN.md) | 架构与交互重构总方案 v2.8（P0–P16 分期表、交互规范、Playbook） | 现行 · P0–P16 已落地 |
-| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D54，逐条有结论 | 现行 · 已拍板 |
+| [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D56，逐条有结论 | 现行 · 已拍板 |
 | [`VOCABULARY.md`](specs/VOCABULARY.md) | 词汇表（P0 冻结）。**新代码只许用「新词汇」** | 现行 · 冻结 |
 | [`COVERAGE-REPORT.md`](specs/COVERAGE-REPORT.md) | 原型 112 条行为 vs 真实应用的覆盖度实测 | 现行 · 随原型更新 |
 | [`ACCOUNTS-TXN.md`](specs/ACCOUNTS-TXN.md) | 账号库写事务：并发丢更新 / 跨进程覆盖 / 容错读抹库的收敛与使用纪律 | 现行 · 2026-10-28 落地 |
@@ -81,6 +81,7 @@
 |:--|:--|
 | [`UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) | 统一网关：单入口 + 命名空间模型（含新增平台契约 §11） |
 | [`UNIFIED-GATEWAY-UI.md`](specs/UNIFIED-GATEWAY-UI.md) | 统一入口的交互规格：三张卡 / 状态矩阵 / 危险动作分档 |
+| [`KEY-PERMISSION-UI-DESIGN.md`](specs/KEY-PERMISSION-UI-DESIGN.md) | 密钥访问权限管理（issue #76）：每把 Key 的配额与账号白名单，数据契约见 §6–§8 |
 | [`QODER-PLATFORM.md`](specs/QODER-PLATFORM.md) | Qoder 平台事实与建模决策 |
 | [`QODER-INTEGRATION-PLAN.md`](specs/QODER-INTEGRATION-PLAN.md) | Qoder 集成的模块 / 接口 / 依赖梳理 |
 | [`trae-parity-design.md`](specs/trae-parity-design.md) | Trae / Qoder 对齐 WorkBuddy；§11 为账号界面修复方案（2026-10-27，规划：T01–T08） |
@@ -116,6 +117,8 @@
 | [`reference-changexbc-workbuddy-switch.md`](history/reference-changexbc-workbuddy-switch.md) | 外部同产品实现的调研记录 |
 | [`reference-workbuddy-manager.md`](history/reference-workbuddy-manager.md) | 外部同栈项目的调研记录 |
 | [`CLEANUP-2026-10-13.md`](history/CLEANUP-2026-10-13.md) | 上一轮工作区清理报告（含当时的引用扫描证据） |
+| [`upstream-triage-2026-11-02.md`](history/upstream-triage-2026-11-02.md) | 上游 254 提交的分流结论：挑了哪 17 个、哪些要手工移植、哪些明确不取 |
+| [`upstream-merge-closure-2026-11-02.md`](history/upstream-merge-closure-2026-11-02.md) | 本轮合并的收尾记录：收尾判据、69 个提交覆盖了什么、剩余项为何不做、以后从哪起 |
 
 ---
 

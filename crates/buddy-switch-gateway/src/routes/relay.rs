@@ -101,6 +101,23 @@ pub struct RelayRequest {
     pub conversation_id: Option<String>,
     /// 调用方 trace id。
     pub trace_id: Option<String>,
+    /// ★ 这把 API Key 的策略（issue #76；`None` = 无 Key 的调用，如本地直连）。
+    ///
+    /// 带它进来只为两件事：**配额判定**（超限 ⇒ 429，不进换号循环）与
+    /// **账号白名单**（选号候选过滤）。身份字段（hash / prefix）一概不带 ——
+    /// 中继层不需要知道 Key 长什么样。
+    pub key_policy: Option<crate::apikey::KeyPolicy>,
+    /// 用量账本的键（= Key id）。与 `key_policy` **同生同空**：
+    /// 没带 Key 的调用（本地直连）两个都是 `None` ⇒ 不记账、不判配额。
+    pub key_id: Option<String>,
+}
+
+impl RelayRequest {
+    /// 账本键：无 Key 的调用给一个**稳定的空键**（`""`）而不是 `Option` ——
+    /// 调用点（`record_request`）不想为「没有 Key」再分一支。
+    fn key_id_for_policy(&self) -> &str {
+        self.key_id.as_deref().unwrap_or("")
+    }
 }
 
 /// 中继结果。
@@ -204,12 +221,45 @@ pub async fn body_text_with_prefix(
     text
 }
 
+/// 进程内的请求序号（半开探针票的归属标识，不需要密码学随机）。
+static PROBE_TAG_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_probe_tag() -> String {
+    format!(
+        "req-{}",
+        PROBE_TAG_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 #[allow(clippy::result_large_err)]
 // `RelayFailure` 承载完整上游响应与诊断上下文，装箱会丢掉「一次就能定位」的可读性。
 /// 把一次请求送到上游；内含换号轮换与失败治理。
+///
+/// ## 为什么外面还包一层（安全审计 P1-3）
+///
+/// 半开探针票必须**有归还路径**。领票的请求可能根本没得到模型级结论（选不出号、
+/// 在途满、参数错、上游回账号级 429/5xx…），而 `relay_inner` 内部有十几个 `?`
+/// 提前返回点 —— 在每个分支各写一次归还不现实、也迟早漏。
+///
+/// 所以把「归还」放在**唯一出口**：`relay_inner` 返回后无条件调一次
+/// [`Pool::release_probe`]（幂等：票若已被 `note_model_success` / `note_model_failure`
+/// 结算，这里什么都不做）。
 pub async fn relay(
     state: &GatewayState,
     request: RelayRequest,
+) -> Result<RelayOutcome, RelayFailure> {
+    let probe_tag = next_probe_tag();
+    let model = request.model.clone();
+    let outcome = relay_inner(state, request, &probe_tag).await;
+    state.pool.write().await.release_probe(&model, &probe_tag);
+    outcome
+}
+
+#[allow(clippy::result_large_err)]
+async fn relay_inner(
+    state: &GatewayState,
+    request: RelayRequest,
+    probe_tag: &str,
 ) -> Result<RelayOutcome, RelayFailure> {
     let mut now_ms = timeutil::now_ms();
     let realm = realm_of(request.region);
@@ -227,6 +277,41 @@ pub async fn relay(
         let mut pool = state.pool.write().await;
         pool.sync_accounts(&accounts, Some(realm));
         pool.sync_exclusions(scope, &exclusions::load_for(scope));
+    }
+
+    // ★ issue #76：**配额判定在选号之前**（规范 §6.2）——
+    //   超限的请求不占用在途额度、不触发换号，一步都不发。
+    //   放在这里（账号同步后、粘性前）是因为：判定要用 `state.key_usage`，
+    //   而记账口径（period）要跟账号库无关地按 Key 自己的策略走。
+    if let Some(policy) = request.key_policy.as_ref() {
+        let now = timeutil::now_ms();
+        let key_id = request.key_id_for_policy();
+        // ★★ 安全审计 P2-17：**判定与记账必须是同一个原子操作**，且**超限不记账**。
+        //
+        // 改造前是「`used_for` 判 → `record_request` 记 → 再判」—— 两个问题：
+        // ① **被拒的请求仍然计入分母**（用户会看到 101/100 这种越界数字，且分母被
+        //    持续抬高，越拒越难通过）；② 读-判-写不在同一把锁里，并发会同时通过判定
+        //    并丢计数（`KeyUsageStore::check_and_record` 的文档已就此论证过）。
+        //
+        // `check_and_record` 本来就实现了正确口径（同一把锁、超限不记），
+        // `KeyActor::check_quota_and_count` 也一直用它 —— 只有这条主路径是手写的两步版。
+        if let Some((used, limit, unit, period)) =
+            state.key_usage.check_and_record(&key_id, policy, now)
+        {
+            return Err(RelayFailure {
+                error: GatewayError::KeyQuotaExceeded {
+                    used,
+                    limit,
+                    unit,
+                    period,
+                },
+                // 配额拒绝发生在**选号之前** ⇒ 没有账号可报（与模型闸门短路同一形状）。
+                account: String::new(),
+                uid: String::new(),
+                upstream_message: String::new(),
+                sanitized: false,
+            });
+        }
     }
 
     // 会话粘性键；客户端没给会话 id 时为 `None`（整段跳过粘性，保持原行为）。
@@ -252,6 +337,15 @@ pub async fn relay(
     // （方案 §9.4：继续把第 3 次重试撞在同一堵墙上只会烧配额）。
     let mut model_failures = 0usize;
 
+    // ★ issue #76：本密钥的允许名单（`None` = 不限额）。
+    //
+    // **整轮只算一次**：分组展开要读一次账号库，而名单在一次请求内不会变 ——
+    // 放进循环只是白读 N 次。更关键的是循环外的失败兜底也要用它算名单口径。
+    let allowed = request
+        .key_policy
+        .as_ref()
+        .and_then(|policy| allowed_uids_for(policy, request.region));
+
     for attempt in 0..tries {
         // ★ 每轮重取时间：冷却靠**墙钟**到期，而重试之间真的会过去几十毫秒~几秒。
         //   用入口那个快照会让「刚到期」的号在这一轮里仍被判为冷却中。
@@ -260,22 +354,58 @@ pub async fn relay(
         //
         // 与下面的「本轮第 2 个账号失败即停」是两个层次：那条只能挽回**当前**这一轮，
         // 这条让**后续请求**也直接快速失败 —— 否则每个新请求都要重新撞一遍同样的墙。
-        if let Some(block) = state.pool.write().await.admit_model(&request.model, now_ms) {
+        if let Some(block) = state
+            .pool
+            .write()
+            .await
+            .admit_model(&request.model, now_ms, probe_tag)
+        {
+            // ★★ issue #106：闸门短路必须**自带错误**，不能落到下面 `last == None` 的兜底。
+            //
+            // 改造前这里只 push 一条 attempt 就 `break`，于是 `last` 仍是 `None` ⇒ 走
+            // `pool_unavailable_error`，而 `PoolBusy` 的判据（可用号全在途满）在这种场景
+            // 不成立 ⇒ 一律 **401 `no_credential`**。客户端把 401 归为 `AUTH`、不可重试、
+            // 渲染成「API 密钥无效」⇒ 整轮会话终止。实测证据：那次耗时 19ms、账号列为空。
+            //
+            // 语义上这是「上游此刻对该模型整体限流」= 可重试的临时不可用 ⇒ 503 + Retry-After。
+            let remain_secs = (block.remain_ms.max(0) as u64).div_ceil(1000);
+            // ★ 安全审计 P1-3：`remain_ms` 现在给的是**探针租约的真实剩余**（不再是 0），
+            //   所以两种情形可以分开说清 —— 且都不再撒谎。
+            let reason = if block.failures > 0 {
+                format!(
+                    "{} 整体暂停（窗口内已失败 {} 次，剩 {}s）",
+                    block.model, block.failures, remain_secs
+                )
+            } else {
+                format!(
+                    "{} 半开试探中：另一个请求正在探路，最多再等 {}s",
+                    block.model, remain_secs
+                )
+            };
             attempts.push(UpstreamAttempt {
                 account: String::new(),
                 uid: String::new(),
                 status: 0,
-                reason: if block.remain_ms > 0 {
-                    format!(
-                        "{} 整体暂停（剩 {}s，已在 {} 个账号上被限流）",
-                        block.model,
-                        block.remain_ms / 1000,
-                        block.accounts
-                    )
-                } else {
-                    format!("{} 半开试探名额已被其它请求占用", block.model)
-                },
+                reason,
             });
+            // 本轮**一次都没打到上游**时才用它：否则用户更需要看的是「第 1 轮为什么失败」
+            // （那条错误自身已经带着完整的 `attempts`）。
+            if last.is_none() {
+                last = Some(RelayFailure {
+                    error: GatewayError::ModelGatePaused {
+                        model: block.model,
+                        remain_secs,
+                        failures: block.failures,
+                        // 闸门路径：成因是「窗口内失败次数够了」，不是「没号可换」。
+                        cooled_accounts: 0,
+                        attempts: attempts.clone(),
+                    },
+                    account: String::new(),
+                    uid: String::new(),
+                    upstream_message: String::new(),
+                    sanitized: request.sanitized,
+                });
+            }
             break;
         }
         // 粘性只是**偏好**：查不到就按原逻辑选号（读锁，不占选号要用的写锁）。
@@ -288,6 +418,7 @@ pub async fn relay(
                 .map(str::to_string),
             None => None,
         };
+        // ★ issue #76：本密钥的允许名单（循环外已算好，见函数上方注释）。
         let selected = select_account(
             state,
             request.region,
@@ -297,6 +428,7 @@ pub async fn relay(
             now_ms,
             attempt,
             preferred_uid.as_deref(),
+            allowed.as_ref(),
         )
         .await;
 
@@ -554,14 +686,49 @@ pub async fn relay(
         //   **不可能有用**的事（报障人：切换过多个账号、桌面端和 Buddy Switch 都试过）。
         //   池快照就在手边，把事实摆出来即可。
         None => {
-            let summary = {
+            let (summary, scoped, model_cooling) = {
                 let pool = state.pool.read().await;
-                pool.summary(now_ms, Some(realm))
+                let summary = pool.summary(now_ms, Some(realm));
+                // ★ issue #76：白名单生效时再取一份**名单口径**快照（同一个读锁，
+                //   不多占锁）。白名单用户看到的必须是「他允许用的那几个号」的状态。
+                let scoped = allowed
+                    .as_ref()
+                    .map(|uids| pool.summary_of(uids, now_ms, Some(realm)));
+                // ★★ issue #134：`summary.model_cooling` 是「有**任意**模型冷却的账号数」，
+                //   与本次请求的模型无关 ⇒ 不能拿它判「这个模型整体被限流」。
+                //   必须逐账号问该模型的截止时刻（与选号同一套硬约束），见
+                //   `pool::pick::model_cooling_until`。
+                //
+                //   为什么这条判据必须存在：`#125` 把闸门开闸判据改成「去重账号数 ≥ 2」
+                //   ⇒ **单账号池里闸门永远不会开**，模型限流于是落回这里的兜底，
+                //   而兜底只有 `pool_busy`(503) / `no_credential`(401)，前者判据不成立
+                //   ⇒ 401 ⇒ 客户端判 AUTH、整轮终止（正是 #106 修掉的那个症状）。
+                let model_cooling = pool.model_cooling_until(
+                    now_ms,
+                    Some(realm),
+                    &request.model,
+                    &tried,
+                    allowed.as_ref(),
+                );
+                (summary, scoped, model_cooling)
             };
-            RelayFailure {
+            let error = match model_cooling {
+                // 该模型在**全部**可试账号上都在冷却 ⇒ 与闸门暂停同语义（503 + Retry-After）。
+                Some((until_ms, accounts)) => GatewayError::ModelGatePaused {
+                    model: request.model.clone(),
+                    remain_secs: (until_ms.saturating_sub(now_ms).max(0) as u64)
+                        .div_ceil(1000)
+                        .max(1),
+                    failures: 0,
+                    cooled_accounts: accounts,
+                    attempts: attempts.clone(),
+                },
                 // ★ 不要再写死 `NoCredential`：全部健康只是在途占满时那是 401 误报，
                 //   会让客户端去重建登录态（见 `pool_unavailable_error`）。
-                error: pool_unavailable_error(request.region, &summary),
+                None => pool_unavailable_error(request.region, &summary, scoped.as_ref()),
+            };
+            RelayFailure {
+                error,
                 account: String::new(),
                 uid: String::new(),
                 upstream_message: String::new(),
@@ -766,6 +933,26 @@ async fn acquire_with_wait(
     None
 }
 
+/// 把 Key 策略的**账号范围**展开成 uid 集合（`None` = 全部账号，不过滤）。
+///
+/// 分组在这里展开成 uid：池条目不认识「分组」这个概念（`PoolEntryLike` 没有
+/// `group()`，为它加一个 trait 方法会波及三条产品线的实现方与全部测试 fake）。
+/// 账号库就在手边（`load_accounts_for`），展开一次的成本低于为分组改 trait。
+///
+/// ★ 展开**只增不删**：`scope_accounts` 里的 uid 即使账号库已删除也保留 ——
+///   那是用户显式写进去的，删掉会让「改完策略发现少一个号」无从解释。
+fn allowed_uids_for(policy: &crate::apikey::KeyPolicy, region: Region) -> Option<HashSet<String>> {
+    // ★ 安全审计 P1-7：判定与展开由 `apikey::scope_allows` **唯一提供**。
+    //   这里只负责「从 WB 账号库取 (uid, 分组)」—— 分组字段是自由文本 `groupName`。
+    let accounts = account::load_accounts_for(region)
+        .into_iter()
+        .filter_map(|account| {
+            let uid = account::get_str(&account, "uid")?;
+            Some((uid, account::get_str(&account, "groupName")))
+        });
+    crate::apikey::allowed_uids_for_policy(policy, accounts)
+}
+
 /// 选号：优先账号池（有治理状态），池给不出时回落既有策略。
 /// 由请求推导**会话粘性键**；客户端未给会话 id ⇒ `None`（整段跳过粘性）。
 ///
@@ -794,6 +981,7 @@ async fn select_account(
     now_ms: i64,
     attempt: usize,
     sticky_uid: Option<&str>,
+    allowed: Option<&HashSet<String>>,
 ) -> Option<Value> {
     // 偏好与策略**都来自同一个枚举** `AccountStrategy`，因此这里一次算清：
     // - `Pinned`    ⇒ 加权选号 + 偏好 uid（指定是偏好，不是约束）；
@@ -811,28 +999,40 @@ async fn select_account(
         _ => (PickMode::Weighted, sticky_uid),
     };
 
-    let (picked_uid, pool_empty) = {
-        let mut pool = state.pool.write().await;
-        if pool.is_empty() {
-            (None, true)
-        } else {
-            let seed = (now_ms as u64)
-                .wrapping_mul(31)
-                .wrapping_add(attempt as u64)
-                .wrapping_add(0x9E37_79B9_7F4A_7C15);
-            // 偏好不可用时由 `pick_with_preference` 自行回落到自动择优；
-            // 排除项由池自己持有（`sync_exclusions`），无需在这里传。
-            (
-                pool.pick_account(now_ms, Some(realm), model, tried, mode, seed, preferred),
-                false,
-            )
-        }
-    };
-
-    if let Some(uid) = picked_uid {
-        // 池里存在但账号库已删除 → 该 uid 无凭据可用，落回策略选择。
-        if let Some(account_value) = account::find_account_for(region, &uid) {
-            return Some(account_value);
+    // 账号删除后池条目仍在（`sync_accounts` 增量 upsert），而 `find_account_for`
+    // 只查账号库 ⇒ 选中它取不到凭据。逐个验证，无凭据的记入 `skipped` 后重选。
+    let mut skipped: HashSet<String> = tried.clone();
+    let pool_empty = state.pool.read().await.is_empty();
+    if !pool_empty {
+        loop {
+            let picked_uid = {
+                let mut pool = state.pool.write().await;
+                let seed = (now_ms as u64)
+                    .wrapping_mul(31)
+                    .wrapping_add(attempt as u64)
+                    .wrapping_add(skipped.len() as u64)
+                    .wrapping_add(0x9E37_79B9_7F4A_7C15);
+                // 偏好不可用时由 `pick_with_preference` 自行回落到自动择优；
+                // 排除项由池自己持有（`sync_exclusions`），无需在这里传。
+                pool.pick_account(
+                    now_ms,
+                    Some(realm),
+                    model,
+                    &skipped,
+                    mode,
+                    seed,
+                    preferred,
+                    allowed,
+                )
+            };
+            // 池里存在但账号库已删除 → 该 uid 无凭据可用，记入 `skipped` 后重选。
+            // 改造前这里是 `if let Some(uid) = picked_uid { … }`，选不出就落到下面的
+            // 兜底 —— 于是一条没凭据的池条目就能让**整个区域**选不出号。
+            let Some(uid) = picked_uid else { break };
+            if let Some(account_value) = account::find_account_for(region, &uid) {
+                return Some(account_value);
+            }
+            skipped.insert(uid);
         }
     }
 
@@ -891,6 +1091,7 @@ fn no_credential_cause_of(summary: &PoolSummary) -> NoCredentialCause {
             zero_credits: summary.zero_credits,
             excluded: summary.excluded,
             in_flight_full: summary.in_flight_full,
+            model_cooling: summary.model_cooling,
         }
     }
 }
@@ -910,19 +1111,46 @@ fn no_credential_cause_of(summary: &PoolSummary) -> NoCredentialCause {
 /// 所以条件是「非排除的号全都健康且都在途满」——
 /// `available > 0 && in_flight_full == available && total == available + excluded`，
 /// 一旦有禁用/冷却/零余额混进来就退回 401（此时「去账号池看逐号原因」才是有效指引）。
-fn pool_unavailable_error(region: Region, summary: &PoolSummary) -> GatewayError {
-    let only_excluded_are_absent = summary.available + summary.excluded == summary.total;
+/// `scoped` 是**名单口径**的同一份快照（issue #76；白名单未生效时为 `None`）。
+///
+/// 有它时**一切判定按它来**：白名单用户看到的数字必须是他**允许用的那几个号**
+/// 的状态。用全池口径会告诉他「12 个号都不可用」，把他推去修一堆本来就不许用的
+/// 账号 —— 而真正的解是放宽名单或恢复名单里那几个。
+fn pool_unavailable_error(
+    region: Region,
+    summary: &PoolSummary,
+    scoped: Option<&PoolSummary>,
+) -> GatewayError {
+    let effective = scoped.unwrap_or(summary);
+    let only_excluded_are_absent = effective.available + effective.excluded == effective.total;
     let all_usable_are_in_flight_full =
-        summary.available > 0 && summary.in_flight_full == summary.available;
+        effective.available > 0 && effective.in_flight_full == effective.available;
     if only_excluded_are_absent && all_usable_are_in_flight_full {
         return GatewayError::PoolBusy {
             region,
-            total: summary.total,
+            total: effective.total,
         };
     }
-    GatewayError::NoCredential {
-        region,
-        cause: no_credential_cause_of(summary),
+    let cause = match scoped {
+        Some(scoped) => scope_empty_cause(summary.total, scoped),
+        None => no_credential_cause_of(summary),
+    };
+    GatewayError::NoCredential { region, cause }
+}
+
+/// 名单口径快照 → [`NoCredentialCause::ScopeEmpty`]（issue #76）。
+///
+/// `pool_total` 取自**全池**快照，只用来表达「名单覆盖了 12 个中的 2 个」；
+/// 其余计数一律名单口径（与 `no_credential_cause_of` 同源，只是换了分母）。
+fn scope_empty_cause(pool_total: usize, scoped: &PoolSummary) -> NoCredentialCause {
+    NoCredentialCause::ScopeEmpty {
+        pool_total,
+        allowed: scoped.total,
+        disabled: scoped.disabled,
+        cooling: scoped.cooling,
+        zero_credits: scoped.zero_credits,
+        excluded: scoped.excluded,
+        in_flight_full: scoped.in_flight_full,
     }
 }
 
@@ -938,11 +1166,25 @@ pub fn realm_of(region: Region) -> RealmTag {
 ///
 /// 账本是「免费/便宜的账号优先」的依据，只在拿到真实 token 数时才写入——
 /// 宁可不写，也不要写 0 成本样本把好账号误标成免费。
-pub async fn record_ledger(state: &GatewayState, uid: &str, model: &str, credit: f64, tokens: i64) {
+pub async fn record_ledger(
+    state: &GatewayState,
+    uid: &str,
+    model: &str,
+    credit: f64,
+    tokens: i64,
+    // ★ issue #76：非流式路径的按密钥 token 记账（流式走 `stream_sinks` 的 KeyUsageSink）。
+    key: Option<&crate::apikey::KeyActor>,
+) {
+    let now_ms = timeutil::now_ms();
+    if let Some(actor) = key {
+        // `record_tokens` 内部已判 `total == 0` 跳过（不写 0 样本）。
+        if tokens > 0 {
+            actor.record_tokens(tokens as u64, now_ms);
+        }
+    }
     if uid.is_empty() {
         return;
     }
-    let now_ms = timeutil::now_ms();
     state
         .pool
         .write()
@@ -1119,7 +1361,38 @@ pub fn pool_usage_sink(
     }))
 }
 
-/// 流式路径的 sink 组合：**请求日志**（必写）+ **成本账本**（有真实用量才写）。
+/// 按密钥的 token 记账 sink（issue #76）。
+///
+/// 与 [`PoolUsageSink`] 同一性质：**账本类** ⇒ `usage == None` 时**跳过**
+/// （写一个 0 会污染「本周期已用」，让配额提前或延后触发，比不记更糟）。
+///
+/// ★ 只记 token 口径：请求数在 `relay` 入口（进入网关后）就记了 ——
+///   两条路径记两件事，互不重叠（账本里两个口径也各自独立，见 `key_usage`）。
+struct KeyUsageSink {
+    usage: std::sync::Arc<crate::key_usage::KeyUsageStore>,
+    key_id: String,
+    period: crate::apikey::QuotaPeriod,
+}
+
+impl crate::protocol::usage_tap::UsageSink for KeyUsageSink {
+    fn finish(&self, report: Option<crate::protocol::usage_tap::UsageReport>) {
+        // ★ 账本类 sink：拿不到用量就**跳过**（不写 0 样本）。
+        let Some(report) = report else { return };
+        let tokens = report.total_tokens();
+        if tokens <= 0 {
+            return;
+        }
+        self.usage.record_tokens(
+            &self.key_id,
+            tokens as u64,
+            self.period,
+            crate::timeutil::now_ms(),
+        );
+    }
+}
+
+/// 流式路径的 sink 组合：**请求日志**（必写）+ **成本账本**（有真实用量才写）
+/// + **按密钥用量**（issue #76；有真实用量才写）。
 ///
 /// ## 为什么日志也走 sink（而不是在路由里就地写）
 ///
@@ -1137,6 +1410,9 @@ pub fn stream_sinks(
     started: std::time::Instant,
     uid: &str,
     model: &str,
+    // ★ issue #76：调用方的 `KeyActor`（`None` = 无 Key 的调用 ⇒ 不记按密钥用量）。
+    //   用 actor 而不是具体 Key 类型：统一网关的 Key 是第四套台账，也能带进来。
+    key: Option<&crate::apikey::KeyActor>,
 ) -> Vec<std::sync::Arc<dyn crate::protocol::usage_tap::UsageSink>> {
     let mut sinks: Vec<std::sync::Arc<dyn crate::protocol::usage_tap::UsageSink>> =
         vec![std::sync::Arc::new(crate::logging::StreamingLogSink::new(
@@ -1146,6 +1422,13 @@ pub fn stream_sinks(
         ))];
     if let Some(ledger) = pool_usage_sink(state, uid, model) {
         sinks.push(ledger);
+    }
+    if let Some(actor) = key {
+        sinks.push(std::sync::Arc::new(KeyUsageSink {
+            usage: actor.usage.clone(),
+            key_id: actor.key_id.clone(),
+            period: actor.policy.quota_period,
+        }));
     }
     sinks
 }
@@ -1189,6 +1472,7 @@ mod tests {
                 excluded: 0,
                 zero_credits: 0,
                 in_flight_full: 0,
+                model_cooling: 0,
             },
             "有号但全不可用 ⇒ 必须带上分类计数，不能退化成「未登录」"
         );
@@ -1206,7 +1490,7 @@ mod tests {
             in_flight_full: 1,
             ..PoolSummary::default()
         };
-        let error = pool_unavailable_error(Region::Global, &busy);
+        let error = pool_unavailable_error(Region::Global, &busy, None);
         assert_eq!(
             error.status(),
             503,
@@ -1227,7 +1511,7 @@ mod tests {
             in_flight_full: 1,
             ..PoolSummary::default()
         };
-        let error = pool_unavailable_error(Region::Cn, &mixed);
+        let error = pool_unavailable_error(Region::Cn, &mixed, None);
         assert_eq!(
             error.status(),
             401,
@@ -1248,16 +1532,82 @@ mod tests {
             ..PoolSummary::default()
         };
         assert_eq!(
-            pool_unavailable_error(Region::Cn, &excluded_and_busy).status(),
+            pool_unavailable_error(Region::Cn, &excluded_and_busy, None).status(),
             503,
             "排除项不该把「只是忙」降级成「未登录」"
         );
 
         // ④ 一个号都没有 ⇒ 绝对不能说「占满」，那是两码事。
         assert_eq!(
-            pool_unavailable_error(Region::Cn, &PoolSummary::default()).status(),
+            pool_unavailable_error(Region::Cn, &PoolSummary::default(), None).status(),
             401,
             "空池必须仍然是 no_credential / StoreEmpty"
+        );
+    }
+
+    /// issue #76：白名单生效 ⇒ 报**名单口径**的 `ScopeEmpty`，不是全池的 `PoolExhausted`。
+    ///
+    /// 阳性对照：去掉 `pool_unavailable_error` 里的 `scoped` 分支（退回全池口径）⇒
+    /// 第一条断言必红。这条正是「白名单用户被告诉『12 个号都不可用』」的根。
+    #[test]
+    fn scoped_pool_reports_scope_empty_with_allowlist_counts() {
+        // 全池 12 个号：10 个禁用 + 名单允许的那 2 个此刻都在冷却。
+        let pool_wide = PoolSummary {
+            total: 12,
+            disabled: 10,
+            cooling: 2,
+            ..PoolSummary::default()
+        };
+        // 名单口径：只有那 2 个，全冷却。
+        let scoped = PoolSummary {
+            total: 2,
+            cooling: 2,
+            ..PoolSummary::default()
+        };
+        let error = pool_unavailable_error(Region::Cn, &pool_wide, Some(&scoped));
+        match &error {
+            GatewayError::NoCredential { cause, .. } => assert_eq!(
+                *cause,
+                NoCredentialCause::ScopeEmpty {
+                    pool_total: 12,
+                    allowed: 2,
+                    disabled: 0,
+                    cooling: 2,
+                    zero_credits: 0,
+                    excluded: 0,
+                    in_flight_full: 0,
+                },
+                "白名单生效时必须报名单口径，不能把全池 12 个号摆给用户"
+            ),
+            other => panic!("应为 no_credential，实际 {other:?}"),
+        }
+        // 状态码契约不变：仍是 401（`type_name` 恒 `no_credential`）。
+        assert_eq!(error.status(), 401);
+
+        // 名单覆盖 0 个（名单里的 uid 都不在本区域池）⇒ 同样 ScopeEmpty，allowed = 0。
+        let error = pool_unavailable_error(Region::Cn, &pool_wide, Some(&PoolSummary::default()));
+        assert!(
+            matches!(
+                error,
+                GatewayError::NoCredential {
+                    cause: NoCredentialCause::ScopeEmpty { allowed: 0, .. },
+                    ..
+                }
+            ),
+            "名单没覆盖本区域时要明说，而不是报「账号库为空」"
+        );
+
+        // 名单内全在途满 ⇒ 503 `pool_busy`（判定同样按名单口径，不是全池）。
+        let busy_scoped = PoolSummary {
+            total: 2,
+            available: 2,
+            in_flight_full: 2,
+            ..PoolSummary::default()
+        };
+        assert_eq!(
+            pool_unavailable_error(Region::Cn, &pool_wide, Some(&busy_scoped)).status(),
+            503,
+            "名单内只是并发占满 ⇒ 让客户端退避，别去改登录态"
         );
     }
 
@@ -1358,6 +1708,9 @@ mod tests {
             conversation_request_id: "turn-1".to_string(),
             conversation_id: conversation_id.map(str::to_string),
             trace_id: None,
+            // ★ issue #76：既有粘性测试都不带 Key ⇒ `None`（不判配额、不记账、不过滤）。
+            key_policy: None,
+            key_id: None,
         }
     }
 

@@ -143,6 +143,10 @@ export const en = {
   "shared.gateway.probe.done": "Done",
   "shared.gateway.probe.cancelled": "Remaining cancelled (partial results below)",
   "shared.gateway.probe.adoptResult": "adopted set {added} / cleared {cleared}",
+  // issue #88: "N cells rate-limited but 0 adopted" is exactly the case that needs
+  // an explanation — the old build rendered nothing at all.
+  "shared.gateway.probe.adoptNone":
+    "{n} cell(s) came back rate-limited, but no cooldown was written: those accounts may no longer be in the pool, may be disabled, or already have a later cooldown (it is never shortened).",
   // Adoption details (§5.3 "adoption feedback" bar → expandable): account / model / set-or-cleared / until when.
   "shared.gateway.probe.adoptedDetail": "{n} cooldowns adopted · details",
   "shared.gateway.probe.adoptedAdded": "Cooldown set",
@@ -242,6 +246,15 @@ export const en = {
   // Qoder-only tile: upstream 429 is reported per model, so an account can be usable
   // while individual models cool down.
   "shared.gateway.pool.tile.modelCooling": "Model cooling",
+  // Model-cooling badge (issue #88): the thaw time is mandatory — "N models
+  // rate-limited" without a time tells the user nothing actionable.
+  "shared.gateway.pool.modelCoolingBadge": "{count} model(s) rate-limited · thaw at {time}",
+  "shared.gateway.pool.modelCoolingHint":
+    "{models} is/are cooling at the model level (only those models are affected; the account still serves others). Earliest thaw at {time}.",
+  // Per-model tooltip rows (issue #88 gap 4.2): name · remaining · fallback marker.
+  "shared.gateway.pool.modelCoolingRow": "{model} · {remaining} left{fallback}",
+  // "fallback" = upstream gave no wall clock; we guessed probe_fallback_ms (10 min).
+  "shared.gateway.pool.modelCoolingFallback": " (fallback)",
   "shared.gateway.pool.empty": "The pool is empty. Add accounts under Accounts first.",
   "shared.gateway.pool.credits": "{credits} credits",
   "shared.gateway.pool.diagnoseNote": "When a request reports \"no available account\", check these reasons one by one:",

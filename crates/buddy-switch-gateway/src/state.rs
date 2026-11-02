@@ -272,19 +272,29 @@ impl GatewayStatusView {
     }
 }
 
-/// 用**账号库**对齐池（增量 upsert，不删条目、不动治理状态）。
+/// 用**账号库** + **排除表**对齐池（增量 upsert，不删条目、不动治理状态）。
 ///
 /// ★ 为什么管理面读状态前必须先对齐一次：池条目平时只在有请求经过
 /// （[`crate::routes::relay::relay`]）时才同步，于是「刚导入账号、还没发过请求」
 /// 时池是空的 —— 用户打开管理页会看到「账号池为空」，而账号管理页明明列着好几个号。
 ///
-/// 与请求路径同款（同一函数），因此不会引入第二套对齐语义。
+/// ★★ **排除表必须一起同步**（2026-10-22 修 bug）：池内的 `excluded` 快照原先只在
+/// ①真实 relay 请求（`routes/relay.rs`）②`pool_admin::set` 两处被填充。于是进程刚启动、
+/// 还没发生过任何网关请求时，管理面 `status_list` 的 `excluded` 恒为 `false`：
+/// 已经在排除表里的账号在 UI 上显示成「排除」按钮，用户点它只会**再排除一次**
+/// （`excluded=true` 幂等），永远走不到「取消排除」——症状就是「点了排除却取消不掉，
+/// 账号一直被排除在外」，刷新页面也不恢复（只有发过一次请求才会「突然正常」）。
+///
+/// 与请求路径同款（同一函数 + 同一 `scope_key`），因此不会引入第二套对齐语义。
 pub fn sync_pool_with_accounts(pool: &mut Pool) {
     for (region, realm) in [
         (Region::Cn, RealmTag::Cn),
         (Region::Global, RealmTag::Global),
     ] {
         pool.sync_accounts(&account::load_accounts_for(region), Some(realm));
+        // 按 scope 替换（`sync_exclusions` 只动该 scope 的条目），两个 region 各一次正好覆盖全池。
+        let scope = crate::routes::relay::scope_key(region);
+        pool.sync_exclusions(scope, &crate::pool::exclusions::load_for(scope));
     }
 }
 
@@ -319,6 +329,10 @@ pub fn body_limit_bytes(max_body_mb: usize) -> usize {
 pub struct GatewayState {
     pub config: Arc<RwLock<GatewayConfig>>,
     pub keys: Arc<ApiKeyStore>,
+    /// ★ 按密钥的用量账本（issue #76）：与 Key 台账**分文件** ——
+    /// 台账低频写（创建/吊销/改策略），用量每请求写；合并在一个文件里
+    /// 既放大写放大，也让「改策略」与「记一笔」在锁上打架。
+    pub key_usage: Arc<crate::key_usage::KeyUsageStore>,
     pub catalogs: Arc<CatalogStore>,
     pub strategies: Arc<RwLock<HashMap<Region, AccountStrategy>>>,
     /// 用户禁用的模型（P11）：**两个出口共用**（`/v1/models` 过滤 + 调用拒绝）。
@@ -360,6 +374,9 @@ impl GatewayState {
     /// 依据配置构造一份完整运行状态。
     pub fn new(config: GatewayConfig) -> Self {
         let keys = Arc::new(ApiKeyStore::new(region::gateway_keys_file()));
+        let key_usage = Arc::new(crate::key_usage::KeyUsageStore::new(
+            region::gateway_key_usage_file(),
+        ));
         let catalogs = Arc::new(CatalogStore::new());
         let log = Arc::new(RequestLog::new(
             gateway_log_file(),
@@ -399,6 +416,7 @@ impl GatewayState {
         Self {
             config: Arc::new(RwLock::new(config.clone())),
             keys,
+            key_usage,
             catalogs,
             strategies,
             disabled: crate::disabled_models::shared(),

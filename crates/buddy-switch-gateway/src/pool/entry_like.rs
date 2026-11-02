@@ -127,12 +127,37 @@ pub trait PoolEntryLike {
     /// 全冷却兜底会排除这类账号；软冷却不排除（值得再试一次）。
     fn is_hard_cooled(&self, now_ms: i64) -> bool;
 
+    /// **该模型维度**的冷却解冻时刻（毫秒；`0` = 该模型没有冷却）。
+    ///
+    /// ★ issue #106 §2.3：全冷却兜底（[`crate::pool::pick`] 的 `pick_earliest_expiry`）
+    /// 原本只看账号级冷却（[`Self::cool_expiry_ms`]）。于是「池里唯一的问题就是**这个
+    /// 模型**被限流」时兜底一个号都给不出来，落到 `last == None` ⇒ 对外 401 ——
+    /// 与闸门短路那条并列的第二条「19ms 空账号 401」路径。
+    ///
+    /// 默认 `0`（该产品线不做模型级冷却）。WorkBuddy 覆写成读 `model_cooldowns`。
+    fn model_cool_expiry_ms(&self, _model: &str) -> i64 {
+        0
+    }
+
     /// 该账号此刻是否可用于这个模型（账号级可用 + 模型级冷却）。
     ///
     /// ★ 这是可用性的**唯一判据**：候选过滤与偏好短路都必须走它。
     /// 两处若分家，偏好就会把请求钉到一个算法认为不可用的账号上 ——
     /// 症状是「明明有别的号可用却一直失败」，且**不报错**。
     fn healthy_for_request(&self, now_ms: i64, model: &str) -> bool;
+
+    /// **账号级**健康 —— 刻意**不看**模型级冷却（issue #134）。
+    ///
+    /// 用途只有一个：选号失败时判断「是不是**全部**账号都只是被这个模型卡住」。
+    /// 那时必须把「该模型的冷却」从判据里摘掉再问一遍「这个号本来能不能用」，
+    /// 否则问出来的永远是「不能用」，判据恒成立。
+    ///
+    /// 默认实现走 [`Self::healthy_for_request`] 的空模型分支：三个产品线的实现里
+    /// `model` 为空都等价于「只看账号维度」（WB 的 `healthy` / Qoder 不查
+    /// `model_cooldowns[""]` / Trae 本就忽略模型）。
+    fn account_healthy(&self, now_ms: i64) -> bool {
+        self.healthy_for_request(now_ms, "")
+    }
 
     /// 惰性清理已过期的模型级冷却。无模型级冷却的实现可为空操作。
     fn prune_model_cooldowns(&mut self, now_ms: i64);

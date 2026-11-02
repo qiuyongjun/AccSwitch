@@ -366,6 +366,9 @@ pub fn probe_state_of_qoder(status: u16) -> ProbeState {
                 ProbeState::UpstreamError
             }
         }
+        // 探测只看状态码、拿不到 body ⇒ 认不出 401/403 里的排队信号；
+        // 真到了这一档（`classify_http` 不会返回它）也按上游错误处理，不算账号死。
+        QoderErrKind::Queued => ProbeState::UpstreamError,
     }
 }
 
@@ -393,8 +396,12 @@ pub fn probe_state_of_trae(kind: TraeErrKind) -> ProbeState {
         TraeErrKind::SoftRate => ProbeState::RateLimitedModel,
         // 套餐额度用尽（1005 / 含 plan）：**不是限流**，独立成 `no_credits`。
         TraeErrKind::PlanLimit => ProbeState::NoCredits,
-        // 会话失效（401，Trae 侧为永久禁用）。
-        TraeErrKind::SessionDead => ProbeState::AuthDead,
+        // 会话失效（带 `12153` 标记）与「凭据被拒」（裸 401/403）都归 `AuthDead`：
+        // 对用户来说下一步都是「去把这个号重新登录一次」，区别只在自动自愈的概率。
+        // ★ issue #108：此前 401 一律进 SessionDead，因此这里只有一条分支；
+        // 现在分类拆开了，**两条都必须映射**，否则 `AuthRejected` 会掉进
+        // `UpstreamError`，把「去重新登录」误报成「上游抖动」。
+        TraeErrKind::SessionDead | TraeErrKind::AuthRejected => ProbeState::AuthDead,
         // 404：该账号看不到 / 不支持这个模型。
         TraeErrKind::NotFound => ProbeState::ModelUnavailable,
         // 5xx / 4xx / 业务码 / 「不归因于账号」（如 code 0 断流、4001 模型配置为空）：
@@ -1305,7 +1312,7 @@ async fn probe_cell_trae(
             let state_key = if status == 0 {
                 ProbeState::TransportError
             } else {
-                probe_state_of_trae(trae_classify_http(status))
+                probe_state_of_trae(trae_classify_http(status, &detail))
             };
             return ProbeCell {
                 uid: uid.to_string(),
@@ -1359,6 +1366,21 @@ async fn probe_cell_trae(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 串行化「碰进程级静态」的用例（作业槽 / 取消位 / 作业位）。
+    ///
+    /// ⚠️ 实测 flake（1/8 概率）：`status_wire_shape_is_stable` 与
+    /// `global_flags_round_trip_and_reset` 并行跑时会互相 `reset_for_test()` /
+    /// `set_job_for_test()` ⇒「cancel() 仍应置取消位」「作业在跑时不得释放」随机红。
+    /// 这两条都必须先拿这把锁 —— 全局状态 + 并行测试只能靠串行化，不靠"小心"。
+    static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 拿全局状态锁（被毒化也继续：断言失败的信息比中毒更重要）。
+    fn lock_global_state() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_STATE_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
 
     fn soft(model_scoped: bool) -> UpstreamEvent {
         UpstreamEvent::SoftRate {
@@ -1679,6 +1701,7 @@ mod tests {
     /// 变异：把 `status()` 的 idle 分支改成 `Value::Null` ⇒ red（前端 `job.phase` 直接炸）。
     #[test]
     fn status_wire_shape_is_stable() {
+        let _guard = lock_global_state();
         reset_for_test();
         assert_eq!(status()["phase"], json!("idle"));
 
@@ -1715,6 +1738,7 @@ mod tests {
     ///   但作业**真在跑**时**绝不**释放（否则双作业并发写同一槽）。
     #[test]
     fn global_flags_round_trip_and_reset() {
+        let _guard = lock_global_state();
         reset_for_test();
         assert!(!cancel_flag().load(Ordering::SeqCst));
         assert!(!busy_flag().load(Ordering::SeqCst));

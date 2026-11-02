@@ -119,13 +119,17 @@ runner，再由 merge job 拼 manifest）。手动触发该工作流只产出 `e
 
 ---
 
-## 配置：三个环境变量
+## 配置：四个环境变量
 
 | 变量 | 默认 | 说明 |
 |:---|:---|:---|
 | `BUDDY_SWITCH_HOME` | `/data`（镜像内置） | **数据根目录**。账号库、网关 Key、签到/积分记录、备份都在它下面。 |
 | `BUDDY_SWITCH_HOST` | `0.0.0.0`（镜像内置） | 监听地址。CLI 原生默认是 `127.0.0.1`，容器里必须改成 `0.0.0.0` 才能从宿主访问。 |
 | `BUDDY_SWITCH_PORT` | `57890` | 监听端口。 |
+| `BUDDY_SWITCH_ALLOWED_HOSTS` | 空（**只接受回环 Host**） | 管理面额外接受的 `Host`，逗号分隔、可带端口（如 `192.168.1.5:57890,nas.local:57890`）。不配时浏览器只能用 `127.0.0.1` / `localhost` / `::1` 打开 webui，用其他地址访问会得到 **403**。`*` 不被当作通配符（会被忽略）。理由见「[安全](#安全)」。 |
+
+> ⚠️ `BUDDY_SWITCH_ALLOWED_HOSTS` 放开的只是**来源校验**，不是鉴权 —— webui 本身
+> 仍然没有登录。跨机访问的正确姿势见「[安全](#安全)」，白名单只用于让反代那条路能通。
 
 优先级：**命令行参数 > 环境变量 > 内置默认值**。即 `docker run … buddy-switch serve --port 8080`
 会覆盖 `BUDDY_SWITCH_PORT`。
@@ -189,9 +193,51 @@ docker run --rm -v buddy-switch-data:/data -v "$PWD:/backup" alpine \
 - 服务端在监听**非回环**地址时会打印一条显式警告。
 - 要跨机访问，二选一：
   1. **SSH 隧道**（推荐）：`ssh -L 57890:127.0.0.1:57890 <host>`，然后本地开
-     `http://127.0.0.1:57890`。**不要**改 compose 的端口映射。
-  2. **反代加鉴权**：Nginx / Caddy + Basic Auth 或 mTLS，再把映射改成 `"57890:57890"`。
+     `http://127.0.0.1:57890`。**不要**改 compose 的端口映射，也不需要配白名单。
+  2. **反代加鉴权**：Nginx / Caddy + Basic Auth 或 mTLS，把映射改成 `"57890:57890"`，
+     **并同时配置 `BUDDY_SWITCH_ALLOWED_HOSTS`**（见下）。
 - **不要**在无鉴权的情况下把 `57890` 直接暴露到公网或不可信局域网。
+
+### 改映射后为什么还要配 `BUDDY_SWITCH_ALLOWED_HOSTS`
+
+管理面（`/api/*`）带**来源校验**：`Host` 必须是回环，或者列在
+`BUDDY_SWITCH_ALLOWED_HOSTS` 里；`Origin` 存在时必须与 `Host` 同源；写请求必须是
+`application/json`。
+
+这条防线针对的是 **DNS rebinding**：恶意页面把 `attacker.com` 解析到 `127.0.0.1`，
+浏览器就认为 `http://attacker.com:57890` 与该端口同源，于是能读回
+`/api/accounts/export` 的明文 token。「Origin 与 Host 同源」挡不住它 —— rebinding 时
+两者本来就同源，唯一有效的是 **Host 本身可信**。
+
+所以按 `"57890:57890"` 映射后，从 `http://192.168.1.5:57890` 打开 webui 会被拒，
+响应体里是 `host_not_allowed`。放开写法：
+
+```yaml
+    environment:
+      BUDDY_SWITCH_ALLOWED_HOSTS: "192.168.1.5:57890,nas.local:57890"
+```
+
+只写你**确实会用**的地址。`*` 会被忽略（不支持通配符）。
+
+**反代这一条容易踩**：反代必须**原样透传** `Host` 与 `Origin`，才能通过同源校验 ——
+而透传之后 `Host` 就是域名，所以白名单那一步省不掉。二者要一起做：
+
+```nginx
+# ⚠️ 必须用 $http_host（带端口），不能用 $host（去掉端口）：
+#    服务端要拿 Host 与浏览器发来的 Origin（形如 http://nas.local:57890）比同源，
+#    少了端口就不同源，请求仍会被拒。
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_pass http://127.0.0.1:57890;
+```
+
+```yaml
+      BUDDY_SWITCH_ALLOWED_HOSTS: "nas.local:57890"
+```
+
+> ⚠️ 白名单只是**来源校验**，不是鉴权。配了 `BUDDY_SWITCH_ALLOWED_HOSTS` 的 webui
+> 仍然没有登录，任何能连到该端口的人照样能读写账号库与网关 Key。反代上的
+> Basic Auth / mTLS 那一层不能省。
 
 容器内的加固已经做了：非 root 用户（uid `10001`）运行、只装 `ca-certificates` 与 `curl`、
 `/data` 由 `buddy` 持有。
@@ -252,6 +298,7 @@ runtime  (debian:12) →  二进制 + ca-certificates + curl
 | 镜像版本与 tag 对不上 | 用了 `latest`，而它不是这次的 tag | 显式拉 `ghcr.io/nextagentx/buddy-switch:<版本>` |
 | 容器起来后**立刻退出**，日志说「拒绝启动」 | `BUDDY_SWITCH_HOME` 不存在 / 非绝对路径 / 无写权限 | 检查卷挂载与属主（见「数据持久化」） |
 | 宿主访问不到 `57890` | 容器内仍绑 `127.0.0.1` | 确认 `BUDDY_SWITCH_HOST=0.0.0.0` 已生效 |
+| 页面能开，但**所有操作都报 403** | 管理面来源校验拒绝了当前 `Host` —— 用 IP / 域名访问却没配白名单 | 见「[改映射后为什么还要配 `BUDDY_SWITCH_ALLOWED_HOSTS`](#改映射后为什么还要配-buddy_switch_allowed_hosts)」；只走 SSH 隧道不会出现这一条 |
 | 页面 **404** 或空白 | 前端没编进二进制 | 检查构建顺序；`docker build` 有无跳过阶段 1 |
 | 页面能开但**内容是旧的** | 宿主机旧 `dist/` 进了上下文 | 确认 `.dockerignore` 里有 `dist` |
 | 网关请求全 **502** | 缺 CA 证书 | 镜像已装 `ca-certificates`；若自定义基础镜像需自行安装 |
