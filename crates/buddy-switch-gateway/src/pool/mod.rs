@@ -1093,6 +1093,7 @@ impl Pool {
         realm: Option<RealmTag>,
         model: &str,
         tried: &HashSet<String>,
+        allowed: Option<&HashSet<String>>,
     ) -> Option<(i64, usize)> {
         let excluded = self.excluded_keys();
         let input = PickInput {
@@ -1100,7 +1101,7 @@ impl Pool {
             model,
             tried,
             excluded: &excluded,
-            // ⚠️ 上游此处还传 `allowed`（密钥白名单，issue #76）；本分支没有该维度。
+            allowed,
             // 只做判定，不选号：策略与种子不参与。
             mode: PickMode::MaxCredits,
             seed: 0,

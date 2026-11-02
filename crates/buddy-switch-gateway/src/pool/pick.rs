@@ -1657,6 +1657,7 @@ mod tests {
             model,
             tried,
             excluded,
+            allowed: None,
             mode: PickMode::MaxCredits,
             seed: 0,
         }

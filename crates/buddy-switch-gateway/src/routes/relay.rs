@@ -302,6 +302,16 @@ pub async fn relay(
     // （方案 §9.4：继续把第 3 次重试撞在同一堵墙上只会烧配额）。
     let mut model_failures = 0usize;
 
+    // ★ issue #76：本密钥的允许名单 —— **循环外算一次**。
+    //
+    // 它只取决于 Key 策略与 region，与「第几轮」无关；更关键的是下面的
+    // `let failure = match last { … }` 在循环**之外**，那条兜底路径也要用它
+    // 才能报出名单口径。放在循环里会让那段拿不到（上游同款位置）。
+    let allowed = request
+        .key_policy
+        .as_ref()
+        .and_then(|policy| allowed_uids_for(policy, request.region));
+
     for attempt in 0..tries {
         // ★ 每轮重取时间：冷却靠**墙钟**到期，而重试之间真的会过去几十毫秒~几秒。
         //   用入口那个快照会让「刚到期」的号在这一轮里仍被判为冷却中。
@@ -364,12 +374,6 @@ pub async fn relay(
                 .map(str::to_string),
             None => None,
         };
-        // ★ issue #76：本密钥的允许名单（每轮重算很便宜：分组展开只在
-        //   `scope_groups` 非空时读一次账号库；无白名单的 Key 走 `None` 快路）。
-        let allowed = request
-            .key_policy
-            .as_ref()
-            .and_then(|policy| allowed_uids_for(policy, request.region));
         let selected = select_account(
             state,
             request.region,
@@ -649,15 +653,12 @@ pub async fn relay(
                 //   ⇒ **单账号池里闸门永远不会开**，模型限流于是落回这里的兜底，
                 //   而兜底只有 `pool_busy`(503) / `no_credential`(401)，前者判据不成立
                 //   ⇒ 401 ⇒ 客户端判 AUTH、整轮终止（正是 #106 修掉的那个症状）。
-                //
-                // ⚠️ 本分支现状（2026-11-02）：没有 #76 的密钥白名单 ⇒
-                //   `model_cooling_until` 比上游少一个 `allowed` 参数（上游传
-                //   `allowed.as_ref()`），判据不按名单过滤。移植 #76 时补回。
                 let model_cooling = pool.model_cooling_until(
                     now_ms,
                     Some(realm),
                     &request.model,
                     &tried,
+                    allowed.as_ref(),
                 );
                 (summary, model_cooling)
             };
