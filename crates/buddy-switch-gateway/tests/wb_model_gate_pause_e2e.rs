@@ -293,8 +293,6 @@ async fn single_account_model_cooldown_returns_503_instead_of_401() {
 /// 变异验证：把 `relay()` 外层那句 `release_probe` 删掉 ⇒ 本条红。
 #[tokio::test]
 async fn abandoned_probe_is_returned_when_the_request_has_no_model_verdict() {
-    use buddy_switch_gateway::pool::{RealmTag, UpstreamEvent};
-
     let _guard = guard();
     let home = isolated_home("probe-release");
     // 把退避压到 1ms，好让「暂停到期 → 半开」在测试里立刻发生。
