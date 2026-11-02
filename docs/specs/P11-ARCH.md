@@ -289,6 +289,44 @@ pub enum GatewayError {
 // openai_body() / anthropic_body() 复用既有实现（不新造）。
 ```
 
+### 3.2.1 **503 的两条来源（`ModelGatePaused`）**
+
+`GatewayError::ModelGatePaused` → **503 + `Retry-After`**，`type_name = "model_gate_paused"`。
+两条**成因不同、对外语义相同**的路径共用它：
+
+| 成因 | 判据 | `failures` | `cooled_accounts` |
+|:--|:--|:--|:--|
+| 闸门暂停 | 窗口内失败次数 / 去重账号数达标 | > 0 | 0 |
+| 全账号冷却 | **该模型**在全部可试账号上都有模型级冷却 | 0 | > 0 |
+
+```rust
+ModelGatePaused {
+    model: String,
+    remain_secs: u64,          // 本进程算出的确定值 ⇒ 可以给 Retry-After
+    failures: usize,           // 仅闸门路径有意义
+    cooled_accounts: usize,    // > 0 ⇒ 全账号冷却路径
+    attempts: Vec<UpstreamAttempt>,
+}
+```
+
+**为什么不能是 401**：客户端把 401 / 403 固定归为 `AUTH`、标记**不可重试**、并渲染成
+「API 密钥无效」。而这两条成因都是「上游此刻对该模型整体限流、稍后自愈、与凭据无关」，
+一个临时容量问题被翻译成「你的凭据坏了」会让整轮会话终止（issue #106 的报障现场：
+19 ms、账号列为空、零上游往返）。
+
+**为什么「全账号冷却」这条必须单独存在**：闸门开闸判据是「窗口内**去重账号数** ≥
+`gate_threshold`（默认 2）」。单账号池的去重上限就是 1 ⇒ **闸门永远不会开**，模型限流
+只会落到 `pool_unavailable_error` 的兜底，而兜底只有 `pool_busy`(503) / `no_credential`(401)，
+前者判据（可用号全在途满）不成立 ⇒ 401（issue #134）。
+
+**判据不能用 `PoolSummary::model_cooling`**：那是「有**任意**模型冷却的账号数」，
+与本次请求的模型无关 ⇒ 请求 B 模型时会误报 503。必须逐账号问该模型的截止时刻
+（`pool::pick::model_cooling_until`，与选号同一套硬约束）。
+
+> ⚠️ 本分支（2026-11-02）的两处已知缺口，均因上游对应批次与 issue #76 的密钥白名单
+> 耦合而未移植：① `model_cooling_until` 没有 `allowed`（白名单）这一维；② 半开探针票
+> 尚未按请求归属（`ModelGate.probe_owner` 不存在，`/status` 也不输出该字段）。
+
 ### 3.3 后端：命令（两宿主同步）
 
 ```rust
