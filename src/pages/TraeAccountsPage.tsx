@@ -750,6 +750,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       emit(message, { description: verdict.description });
       await loadAll();
     } catch (e) {
+      /* 失败也可能落盘：凭据刷新被上游拒绝时会写 `SessionDead` 冷却，卡片据此
+         显示「需重新登录」。不回读快照，这枚标识要等下一次刷新才出现。 */
+      await loadAll();
       toast.error(t("trae.page.accounts.actionFailed", { label }), { description: api.asError(e) });
     } finally {
       setBusy(null);
@@ -1542,6 +1545,12 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       /* 必须在积分落盘**之后**读快照；积分请求失败也要回读（部分成功的账号已更新）。 */
       const snapshotResult = await loadAllWithResult();
 
+      /* 失败原因一并带出：只报「刷新失败」时用户看不出下一步（凭据失效要重新登录）。 */
+      const creditsFailureReason =
+        credits.status === "rejected"
+          ? api.asError(credits.reason)
+          : credits.value.failures?.[0]?.error;
+
       const creditsOutcome: RefreshLayerOutcome =
         credits.status === "rejected"
           ? "fail"
@@ -1582,10 +1591,14 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       if (outcomes.every((outcome) => outcome === "ok")) {
         toast.success(t("trae.page.accounts.quickRefreshDone", { n: ids.length }));
       } else if (outcomes.every((outcome) => outcome === "fail")) {
-        toast.error(t("trae.page.accounts.quickRefreshFail"));
+        toast.error(t("trae.page.accounts.quickRefreshFail"), {
+          description: creditsFailureReason,
+        });
       } else {
         /* 部分失败：**不报成全部成功**，也不报成全部失败 —— 说清有一层没拿到。 */
-        toast.warning(t("trae.page.accounts.quickRefreshPartial", { n: ids.length }));
+        toast.warning(t("trae.page.accounts.quickRefreshPartial", { n: ids.length }), {
+          description: creditsFailureReason,
+        });
       }
       return true;
     } finally {
@@ -1902,8 +1915,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     };
     /* 桶的固定顺序 —— 与当前排序键解耦（见 `AccountListConfig.bucketCompare`）。 */
     const statusOrder = [
-      t("trae.page.accounts.toolbar.statusBucket.cooling"),
+      t("trae.page.accounts.toolbar.statusBucket.needsRelogin"),
       t("trae.page.accounts.toolbar.statusBucket.expired"),
+      t("trae.page.accounts.toolbar.statusBucket.cooling"),
       t("trae.page.accounts.toolbar.statusBucket.notCheckedIn"),
       t("trae.page.accounts.toolbar.statusBucket.normal"),
     ];
@@ -1936,6 +1950,10 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
           // 状态集**各平台自备**（决策 #8）：Trae 有「冷却」等独有状态，不强行与 WB 统一。
           // 签到态走 `checkinTodayOf`（与徽章同源）：只看快照的话，刷新过签到状态后
           // 行里的徽章说「已签到」、分桶却把它归进「未签到」。
+          // `SessionDead` 单独成桶：它不是等一会儿就会解开的冷却，只能重新登录。
+          if (account.cooldownType === "SessionDead") {
+            return t("trae.page.accounts.toolbar.statusBucket.needsRelogin");
+          }
           if (account.cooldownType) return t("trae.page.accounts.toolbar.statusBucket.cooling");
           if (account.jwtStatus === "expired") return t("trae.page.accounts.toolbar.statusBucket.expired");
           if (!checkinTodayOf(account)) return t("trae.page.accounts.toolbar.statusBucket.notCheckedIn");
@@ -2381,9 +2399,19 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const detailCredential: DetailCredential | null = detail
     ? {
         /* ★ 2026-10-29（用户要求与 WB / Qoder 统一）：状态词不再带剩余天数；
-           `warn`（≤24h）与 `ok` 同词「有效」，具体到期时刻在下面「凭据到期」行。 */
-        statusText: jwtStatusText(detail.jwtStatus, t),
-        tone: detail.jwtStatus === "expired" ? "bad" : detail.jwtStatus === "unknown" ? "warn" : "ok",
+           `warn`（≤24h）与 `ok` 同词「有效」，具体到期时刻在下面「凭据到期」行。
+           ★ 2026-11-01：上游拒绝凭据（SessionDead）时 JWT 可能尚未到期，
+           只看 `jwtStatus` 会显示「有效」—— 以冷却类型优先，写明「需重新登录」。 */
+        statusText:
+          detail.cooldownType === "SessionDead"
+            ? t("trae.comp.card.chip.needRelogin")
+            : jwtStatusText(detail.jwtStatus, t),
+        tone:
+          detail.cooldownType === "SessionDead" || detail.jwtStatus === "expired"
+            ? "bad"
+            : detail.jwtStatus === "unknown"
+              ? "warn"
+              : "ok",
         /* 第一行「凭据到期」是主时间；后两行是 Trae 有、WB 没有的字段。
            ⚠️ 不写 hint：WB 的 hint 是「可正常使用 / 建议续期」这类语气说明，
            Trae 的凭据状态已由徽章 + 到期行说清，再加一句就是同一件事说三遍。 */
@@ -2435,7 +2463,11 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    */
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detail) return [];
-    const credStatusText = jwtStatusText(detail.jwtStatus, t);
+    /* 上游拒绝凭据时 JWT 可能还没到期：不能用 `jwtStatus` 冒充「有效」。 */
+    const credentialNeedsRelogin = detail.cooldownType === "SessionDead";
+    const credStatusText = credentialNeedsRelogin
+      ? t("trae.comp.card.chip.needRelogin")
+      : jwtStatusText(detail.jwtStatus, t);
     /* 与卡片 / 表格同一份汇总：有包明细就报最急一批，没有就回落账号自带的到期时刻。 */
     const expiryForDetail = summarizeExpiry(detailPackages, { unit: "s", now });
     const totalForDetail = traeCreditTotal({ creditPackages: detailPackages });
@@ -2443,7 +2475,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     const soon = nextBatchForDetail
       ? isExpiryUrgent(nextBatchForDetail.expireAt, now)
       : detail.creditsExpireAt != null && isExpiryUrgent(detail.creditsExpireAt * 1000, now);
-    const credBad = detail.jwtStatus === "expired";
+    const credBad = detail.jwtStatus === "expired" || credentialNeedsRelogin;
 
     /* 签到：文案与概览行共用 `detailCheckinText`；这里只决定副行与 ⟳ ——
        被刷新过的账号用上游读数，没刷新过的如实标明来源是本地台账。 */
@@ -2802,9 +2834,12 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         })
       : null;
 
-  /* 页头作用域（原型 `viewAccounts`）复用上方的 `scope`；「需处理」= JWT 已过期，
+  /* 页头作用域（原型 `viewAccounts`）复用上方的 `scope`；「需处理」= 凭据不可用：
+     JWT 已过期，或上游已拒绝该凭据（`SessionDead`，JWT 本身可能还没到期）。
      与 WorkBuddy 侧的 `needsRelogin` 同一层语义。 */
-  const expiredCount = accounts.filter((account) => account.jwtStatus === "expired").length;
+  const pendingCount = accounts.filter(
+    (account) => account.jwtStatus === "expired" || account.cooldownType === "SessionDead",
+  ).length;
 
   /**
    * 页头一键动作的可用性 —— **做不了就禁用**，别让按钮点下去只弹一句「没活可干」。
@@ -2894,8 +2929,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
             <ScopeChip scope={scope} />
             <span>
               ·{" "}
-              {expiredCount > 0
-                ? t("pageHead.accounts.pending", { n: accounts.length, m: expiredCount })
+              {pendingCount > 0
+                ? t("pageHead.accounts.pending", { n: accounts.length, m: pendingCount })
                 : t("pageHead.accounts", { n: accounts.length })}
             </span>
           </p>

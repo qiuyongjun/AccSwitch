@@ -556,12 +556,19 @@ pub async fn refresh_credits_for(
 ///
 /// `refreshed` 是既有字段（前端与后台调用方已在读），`total` / `failed` 是本次新增：
 /// 只有成功数时，「部分失败」与「全部成功」在返回值上完全同形。
+/// `failures` 带逐账号原因 —— 凭据失效时前端要能直接提示「请重新登录」，
+/// 而不是只给一个没有下文的「刷新失败」。
 fn refresh_all_report(summary: credits::RefreshAllSummary) -> Value {
     json!({
         "scope": "all",
         "refreshed": summary.succeeded,
         "total": summary.total,
         "failed": summary.failed,
+        "failures": summary
+            .failures
+            .iter()
+            .map(|(user_id, error)| json!({ "userId": user_id, "error": error }))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -1073,17 +1080,35 @@ mod tests {
             total: 5,
             succeeded: 3,
             failed: 2,
+            failures: vec![
+                ("u1".into(), "凭据已失效".into()),
+                ("u2".into(), "超时".into()),
+            ],
         });
         assert_eq!(value.get("scope").and_then(Value::as_str), Some("all"));
         assert_eq!(value.get("refreshed").and_then(Value::as_u64), Some(3));
         assert_eq!(value.get("total").and_then(Value::as_u64), Some(5));
         assert_eq!(value.get("failed").and_then(Value::as_u64), Some(2));
+        let failures = value
+            .get("failures")
+            .and_then(Value::as_array)
+            .expect("failures 必须下发");
+        assert_eq!(failures.len(), 2);
+        assert_eq!(
+            failures[0].get("userId").and_then(Value::as_str),
+            Some("u1")
+        );
+        assert_eq!(
+            failures[0].get("error").and_then(Value::as_str),
+            Some("凭据已失效")
+        );
 
         // 全部失败也必须给得出（不是「没有字段」）。
         let all_failed = refresh_all_report(credits::RefreshAllSummary {
             total: 2,
             succeeded: 0,
             failed: 2,
+            failures: vec![("u1".into(), "凭据已失效".into())],
         });
         assert_eq!(all_failed.get("refreshed").and_then(Value::as_u64), Some(0));
         assert_eq!(all_failed.get("failed").and_then(Value::as_u64), Some(2));
@@ -1097,6 +1122,7 @@ mod tests {
         assert_eq!(summary.total, 0);
         assert_eq!(summary.succeeded, 0);
         assert_eq!(summary.failed, 0);
+        assert!(summary.failures.is_empty());
     }
 
     /// ★★ 回归护栏：**区域标识**必须解析到本区域的**合并版**客户端。

@@ -2938,6 +2938,8 @@ export function traeRefreshCredits(
   total?: number;
   /** 批量作用域：失败（跳过）的账号数。 */
   failed?: number;
+  /** 批量作用域：失败账号的 `(userId, 错误消息)`，供页面如实提示原因。 */
+  failures?: { userId: string; error: string }[];
 }> {
   return call("trae_refresh_credits", { userId: userId ?? null, variant: variant ?? null });
 }

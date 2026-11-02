@@ -629,14 +629,17 @@ pub fn import_local_for(variant: TraeVariant) -> Result<RawAccount, String> {
     // ★ 读客户端登录态是纯 IO、不碰账号库，放在事务外：持锁期间不要做与账号库
     //   无关的读盘 / 解析（那会把别处的写操作一并拖住）。
     let login = crate::modules::trae::profile::import_local_login_for(variant)?;
-    accounts_txn(variant, || {
+    let record = accounts_txn(variant, || {
         import_local_inner(
             variant,
             &login.user_id,
             &login.authorization,
             login.device_id.as_deref(),
         )
-    })
+    })?;
+    // 导入的是客户端**当前**登录态，旧凭据造成的冷却同样不再适用。
+    let _ = crate::modules::trae::credits::clear_cooldown_for(variant, &login.user_id);
+    Ok(record)
 }
 
 fn import_local_inner(
@@ -1723,7 +1726,7 @@ pub fn login_with_exchanged_tokens_for(
         .filter(|uid| !uid.trim().is_empty())
         .ok_or("无法从新 JWT 解析 UserID，已拒绝写库")?;
 
-    accounts_txn(variant, || {
+    let result = accounts_txn(variant, || {
         login_with_exchanged_inner(
             variant,
             &uid,
@@ -1732,7 +1735,11 @@ pub fn login_with_exchanged_tokens_for(
             display_name.as_deref(),
             device_id,
         )
-    })
+    })?;
+    // 新登录 = 新会话：上一份凭据造成的 SessionDead 等冷却不再适用。
+    // 不清掉会让这个账号在签到计划里被永久跳过（SessionDead 的 until 恒定到永久）。
+    let _ = crate::modules::trae::credits::clear_cooldown_for(variant, &uid);
+    Ok(result)
 }
 
 fn login_with_exchanged_inner(
@@ -1895,6 +1902,9 @@ async fn refresh_jwt_inner(variant: TraeVariant, user_id: &str) -> Result<String
     ensure_refreshed_uid_matches(user_id, info.user_id.as_deref())?;
 
     apply_refreshed_tokens_for(variant, user_id, &new_jwt, exchanged.refresh_token)?;
+
+    // 换到新 JWT 即恢复会话：上一份凭据触发的永久冷却要一并解除。
+    let _ = crate::modules::trae::credits::clear_cooldown_for(variant, user_id);
 
     store::append_log(
         &paths::checkin_log_file_for(variant),

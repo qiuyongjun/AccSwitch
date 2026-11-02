@@ -127,6 +127,7 @@ export const zh = {
   "trae.page.accounts.toolbar.statusBucket.normal": "正常",
   "trae.page.accounts.toolbar.statusBucket.notCheckedIn": "今日未签到",
   "trae.page.accounts.toolbar.statusBucket.expired": "凭据已过期",
+  "trae.page.accounts.toolbar.statusBucket.needsRelogin": "需重新登录",
   "trae.page.accounts.toolbar.statusBucket.cooling": "冷却中",
   "trae.page.accounts.toolbar.programBucket.unbound": "未登录任何程序位",
   "trae.page.accounts.toolbar.groupBucket.default": "未分组",

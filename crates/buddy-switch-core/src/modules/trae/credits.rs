@@ -733,6 +733,55 @@ fn round2(value: f64) -> f64 {
 // 剩余积分
 // ---------------------------------------------------------------------------
 
+/// 使用量接口是否明确拒绝当前凭据。
+///
+/// 上游对失效会话有两种表现：HTTP 401，或 HTTP 200 + 业务码 1001
+/// （`not able to authenticate you`）。两者都必须按「凭据失效」处理，
+/// **不能**落进正常解析路径 —— 那样空包列表会被当成「剩余 0 积分」。
+fn credential_rejected(status: u16, body: &Value) -> bool {
+    status == 401 || body.get("code").and_then(Value::as_i64) == Some(1001)
+}
+
+/// 单账号积分查询的失败原因。
+///
+/// 必须把「上游拒绝凭据」与其它失败分开：前者要落 `SessionDead` 冷却，
+/// 账号卡才会**持续**显示「需重新登录」；若只在一次 toast 里报错，
+/// 用户关掉提示后页面看起来一切正常，实际上账号已经用不了了。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalcCreditsError {
+    /// 上游明确拒绝当前凭据（HTTP 401 / 业务码 1001）。
+    CredentialRejected(String),
+    /// 网络失败、响应结构异常、其它业务错误。
+    Other(String),
+}
+
+impl CalcCreditsError {
+    /// 是否属于「凭据失效，必须重新登录」。
+    pub fn is_credential_rejected(&self) -> bool {
+        matches!(self, Self::CredentialRejected(_))
+    }
+}
+
+impl std::fmt::Display for CalcCreditsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CredentialRejected(message) | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
+impl From<String> for CalcCreditsError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<&str> for CalcCreditsError {
+    fn from(message: &str) -> Self {
+        Self::Other(message.to_string())
+    }
+}
+
 /// 查询某账号的剩余积分。
 ///
 /// 返回 `(剩余积分, 最早过期时间戳, 今日购买获得积分, 逐包明细)`。
@@ -747,9 +796,17 @@ fn round2(value: f64) -> f64 {
 /// - 逐包明细（第 4 个返回值）由 [`parse_credit_packages`] 统一解析，供账号卡进度条。
 pub async fn calc_remaining_credits(
     jwt_value: &str,
-) -> Result<(f64, Option<i64>, f64, Vec<CreditPackage>), String> {
+) -> Result<(f64, Option<i64>, f64, Vec<CreditPackage>), CalcCreditsError> {
     let device = device_for_jwt(jwt_value)?;
-    let (_status, body) = post_json_parsed(TRAE_ENTITLEMENT_PATH, jwt_value, &device).await?;
+    let (status, body) = post_json_parsed(TRAE_ENTITLEMENT_PATH, jwt_value, &device).await?;
+
+    // 凭据被上游吊销时，响应体的 `user_entitlement_pack_list` 是**空数组**而不是缺键，
+    // 若继续按正常路径解析，会把「认证失败」误当成「剩余 0 积分」并覆盖缓存。
+    if credential_rejected(status, &body) {
+        return Err(CalcCreditsError::CredentialRejected(
+            "凭据已失效，请重新登录该账号（上游未通过认证）".into(),
+        ));
+    }
 
     let packs = body
         .get("user_entitlement_pack_list")
@@ -887,7 +944,19 @@ pub async fn refresh_remaining_for_variant(
     user_id: &str,
 ) -> Result<f64, String> {
     let account = crate::modules::trae::account::find_for(variant, user_id).ok_or("账号不存在")?;
-    let (credits, expire_at, _purchased, packages) = calc_remaining_credits(&account.jwt).await?;
+    let (credits, expire_at, _purchased, packages) =
+        match calc_remaining_credits(&account.jwt).await {
+            Ok(value) => value,
+            Err(error) => {
+                /* 凭据被上游拒绝时要落**持久**状态：只弹一次 toast，用户关掉后
+                卡片上没有任何痕迹，等于什么都没发生。`SessionDead` 会让卡片
+                显示「需重新登录」，重新登录 / JWT 换新成功后由登录路径清除。 */
+                if error.is_credential_rejected() {
+                    save_cooldown_for(variant, user_id, "SessionDead", -1, &error.to_string());
+                }
+                return Err(error.to_string());
+            }
+        };
     let mut remaining = load_remaining_for(variant);
     remaining.credits.insert(user_id.to_string(), credits);
     if let Some(expire_at) = expire_at {
@@ -904,8 +973,9 @@ pub async fn refresh_remaining_for_variant(
 /// 批量刷新剩余积分的结果汇总。
 ///
 /// 只回「成功数」时，前端无法区分「全部成功」与「部分失败」—— 失败账号被跳过、
-/// 返回 `refreshed: 0` 也会被当成成功。这里把**总数**一并带回，判定交给调用方。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 返回 `refreshed: 0` 也会被当成成功。这里把**总数**与**逐账号失败原因**一并带回，
+/// 判定与提示交给调用方（凭据失效时前端要能直接说「请重新登录」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshAllSummary {
     /// 本轮尝试刷新的账号数（该变体账号库里的全部账号）。
     pub total: usize,
@@ -913,6 +983,8 @@ pub struct RefreshAllSummary {
     pub succeeded: usize,
     /// 失败（被跳过）的账号数。
     pub failed: usize,
+    /// 失败账号的 `(userId, 错误消息)`，按遍历顺序。
+    pub failures: Vec<(String, String)>,
 }
 
 /// 批量刷新所有账号的剩余积分，返回成功账号数（默认变体，兼容壳）。
@@ -935,6 +1007,8 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
     let mut succeeded = 0usize;
     let mut thawed = 0usize;
     let mut purchased_today = 0.0_f64;
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut cooldowns_dirty = false;
 
     for (uid, account) in &accounts {
         match calc_remaining_credits(&account.jwt).await {
@@ -968,14 +1042,26 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
                 }
             }
             Err(error) => {
+                let reason = error.to_string();
+                /* 凭据被上游拒绝 ⇒ 落永久冷却，让账号卡持续显示「需重新登录」。
+                否则批量刷新只回一行失败数，页面关掉提示后看不出哪个账号坏了。
+                ⚠️ 写**内存里的** `cooldowns`，与自动解冻共用末尾那一次落盘 ——
+                中途单独 `save_cooldown_for` 会被后面的解冻写回覆盖掉。 */
+                if error.is_credential_rejected() {
+                    cooldowns
+                        .cooldowns
+                        .insert(uid.clone(), session_dead_entry(&reason));
+                    cooldowns_dirty = true;
+                }
                 store::append_log(
                     &paths::app_log_file(),
                     &format!(
-                        "获取剩余积分失败 [{} / {}]: {error}",
+                        "获取剩余积分失败 [{} / {}]: {reason}",
                         variant.display_name(),
                         account.name
                     ),
                 );
+                failures.push((uid.clone(), reason));
             }
         }
     }
@@ -984,7 +1070,7 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
     let _ = save_remaining_for(variant, &remaining);
     record_daily_snapshot_for(variant, purchased_today);
 
-    if thawed > 0 {
+    if thawed > 0 || cooldowns_dirty {
         cooldowns.updated_at = Some(store::now_iso());
         let _ = store::write_json(&paths::cooldowns_file_for(variant), &cooldowns);
     }
@@ -992,6 +1078,7 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
         total,
         succeeded,
         failed: total.saturating_sub(succeeded),
+        failures,
     }
 }
 
@@ -1009,6 +1096,11 @@ pub fn classify_error(http_status: u16, code: Option<i64>) -> (&'static str, i64
     // 200 + 业务码 1005：套餐额度限制，半天内不会有变化。
     if http_status == 200 && code == Some(1005) {
         return ("PlanLimit", 43_200);
+    }
+    // 业务码 1001：上游明确拒绝认证（也可能以 HTTP 200 携带）。
+    // 与 401 同义 —— 按 SessionDead 永久冷却，避免反复重试已失效的凭据。
+    if code == Some(1001) {
+        return ("SessionDead", -1);
     }
     match http_status {
         429 => ("SoftRate", 60),
@@ -1035,6 +1127,18 @@ pub fn save_cooldown(user_id: &str, error_type: &str, cooldown_seconds: i64, rea
         cooldown_seconds,
         reason,
     )
+}
+
+/// 构造一条 `SessionDead` 的永久冷却记录。
+///
+/// `until = 9_999_999_999` 与 [`save_cooldown_for`] 的 `-1` 语义一致。
+fn session_dead_entry(reason: &str) -> CooldownEntry {
+    CooldownEntry {
+        error_type: "SessionDead".into(),
+        until: 9_999_999_999,
+        reason: reason.to_string(),
+        error_count: 0,
+    }
 }
 
 /// 写入/更新账号冷却状态（按变体分家）。
@@ -1381,8 +1485,41 @@ mod tests {
         assert_eq!(classify_error(503, None), ("Server", 600));
         assert_eq!(classify_error(400, None), ("Client", 600));
         assert_eq!(classify_error(200, Some(7)), ("BusinessError", 300));
+        assert_eq!(classify_error(200, Some(1001)), ("SessionDead", -1));
         assert_eq!(classify_error(200, Some(0)), ("Unknown", 0));
         assert_eq!(classify_error(200, None), ("Unknown", 0));
+    }
+
+    #[test]
+    fn session_dead_entry_is_permanent_and_carries_reason() {
+        let entry = session_dead_entry("凭据已失效");
+        assert_eq!(entry.error_type, "SessionDead");
+        assert_eq!(entry.until, 9_999_999_999);
+        assert_eq!(entry.reason, "凭据已失效");
+    }
+
+    #[test]
+    fn calc_credits_error_distinguishes_credential_rejection() {
+        let rejected = CalcCreditsError::CredentialRejected("凭据已失效".into());
+        assert!(rejected.is_credential_rejected());
+        assert_eq!(rejected.to_string(), "凭据已失效");
+        assert!(!CalcCreditsError::from("网络超时").is_credential_rejected());
+    }
+
+    #[test]
+    fn credential_rejected_detects_401_and_business_code_1001() {
+        assert!(credential_rejected(401, &serde_json::json!({})));
+        assert!(credential_rejected(401, &serde_json::json!({"code": 1001})));
+        // 真实形态：HTTP 200 + 空包列表 + code 1001
+        assert!(credential_rejected(
+            200,
+            &serde_json::json!({"code": 1001, "user_entitlement_pack_list": []})
+        ));
+        assert!(!credential_rejected(
+            200,
+            &serde_json::json!({"code": 0, "user_entitlement_pack_list": []})
+        ));
+        assert!(!credential_rejected(200, &serde_json::json!({})));
     }
 
     #[test]

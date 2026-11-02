@@ -112,6 +112,7 @@ export const en = {
   "trae.page.accounts.toolbar.statusBucket.normal": "Normal",
   "trae.page.accounts.toolbar.statusBucket.notCheckedIn": "Not checked in today",
   "trae.page.accounts.toolbar.statusBucket.expired": "Credentials expired",
+  "trae.page.accounts.toolbar.statusBucket.needsRelogin": "Needs re-login",
   "trae.page.accounts.toolbar.statusBucket.cooling": "Cooling down",
   "trae.page.accounts.toolbar.programBucket.unbound": "Not signed in to any program slot",
   "trae.page.accounts.toolbar.groupBucket.default": "Ungrouped",
