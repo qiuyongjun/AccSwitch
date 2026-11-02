@@ -81,6 +81,7 @@
 |:--|:--|
 | [`UNIFIED-GATEWAY-ARCH.md`](specs/UNIFIED-GATEWAY-ARCH.md) | 统一网关：单入口 + 命名空间模型（含新增平台契约 §11） |
 | [`UNIFIED-GATEWAY-UI.md`](specs/UNIFIED-GATEWAY-UI.md) | 统一入口的交互规格：三张卡 / 状态矩阵 / 危险动作分档 |
+| [`KEY-PERMISSION-UI-DESIGN.md`](specs/KEY-PERMISSION-UI-DESIGN.md) | 密钥访问权限管理（issue #76）：每把 Key 的配额与账号白名单，数据契约见 §6–§8 |
 | [`QODER-PLATFORM.md`](specs/QODER-PLATFORM.md) | Qoder 平台事实与建模决策 |
 | [`QODER-INTEGRATION-PLAN.md`](specs/QODER-INTEGRATION-PLAN.md) | Qoder 集成的模块 / 接口 / 依赖梳理 |
 | [`trae-parity-design.md`](specs/trae-parity-design.md) | Trae / Qoder 对齐 WorkBuddy；§11 为账号界面修复方案（2026-10-27，规划：T01–T08） |

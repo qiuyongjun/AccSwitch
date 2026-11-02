@@ -323,9 +323,12 @@ ModelGatePaused {
 与本次请求的模型无关 ⇒ 请求 B 模型时会误报 503。必须逐账号问该模型的截止时刻
 （`pool::pick::model_cooling_until`，与选号同一套硬约束）。
 
-> ⚠️ 本分支（2026-11-02）的两处已知缺口，均因上游对应批次与 issue #76 的密钥白名单
-> 耦合而未移植：① `model_cooling_until` 没有 `allowed`（白名单）这一维；② 半开探针票
-> 尚未按请求归属（`ModelGate.probe_owner` 不存在，`/status` 也不输出该字段）。
+> ⚠️ 本分支（2026-11-02）的已知缺口：**半开探针票尚未按请求归属** —— `ModelGate.probe_owner`
+> 不存在，`/status` 也不输出该字段。它随上游 43e6926 引入，那个提交同时重写 `try_probe`
+> 的签名与四个调用点，本分支未移植。
+>
+> 白名单维度（`model_cooling_until` 的 `allowed` 形参）**已随 #76 批次补齐**：名单内
+> 全不可用时走 `NoCredentialCause::ScopeEmpty` 报「名单口径」，不再报全池口径。
 
 ### 3.3 后端：命令（两宿主同步）
 
