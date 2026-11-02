@@ -970,7 +970,7 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
 - **选反方案的代价**：保留倒计时标签 ⇒ 继续与 WB / Qoder 分叉；改成「临期」无天数词
   仍是一枚 Trae 独有的状态标签，信息与下行日期重复。
 
-### D53 Anthropic 出口的 `input_tokens` = **估算占位 + 末帧校正**，不写 0 —— ✅ **已落地（2026-10-30，issue #139）**
+### D54 Anthropic 出口的 `input_tokens` = **估算占位 + 末帧校正**，不写 0 —— ✅ **已落地（2026-10-30，issue #139）**
 
 **结论**：`/v1/messages` 的 `message_start.usage.input_tokens` 用**请求体估算值**
 （`protocol::anthropic::estimate_input_tokens`），`message_delta.usage` 用上游真实
@@ -993,6 +993,30 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
   与「确实没命中」长得一模一样（都是 0）；四种上游写法
   （`prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` /
   `cache_read_input_tokens` / `cached_tokens`）收在 `cached_tokens_of` 一处。
+
+### D55 管理面（`/api/*`）默认只接受**回环 Host**，远程访问必须显式白名单 —— ✅ **已落地（2026-10-27，安全审计 P0-1）**
+
+**结论**：`buddy-switch-server` 的 `/api/*` 挂一层来源校验（`api_guard`）：`Host` 必须是
+`127.0.0.1` / `localhost` / `::1`，或列在 `BUDDY_SWITCH_ALLOWED_HOSTS`（逗号分隔，
+可带端口）；`Origin` 存在时必须与 `Host` 同源；写请求必须是 `application/json`。
+静态资源与网关树不受影响 —— 前者是公开的，后者自带 Bearer 鉴权且跑在独立端口。
+
+**理由**：管理面背后是全部明文凭据 —— `POST /api/accounts/export` 直接返回
+`access_token` / `refresh_token`，`export-to-path` 还能写任意绝对路径。改造前它**一个
+中间件都没有**，默认绑回环时的唯一屏障是「外部网页读不到回环端口」，而 **DNS
+rebinding 正好绕过它**（恶意页把 `attacker.com` 解析到 `127.0.0.1`，浏览器视
+`http://attacker.com:57890` 为同源，能读回响应）。
+
+- **为什么防线是 Host 而不是 Origin**：rebinding 下 `Origin` 与 `Host` 同源
+  （都是 `attacker.com`），「同源」这条判据天然通过。唯一有效的是**要求 Host 本身可信**。
+- **定了会动什么**：`api_guard.rs`（新增，四条判据收敛成一个纯函数）、`api.rs` 的
+  `.layer(...)`（必须挂在 `merge` **之前**，只作用于 `/api/*`）、`main.rs` 启动时装载
+  策略并打印配置指引、`docs/guides/DOCKER.md` 与 `docker-compose.yml` 的跨机访问说明。
+- **选反方案（默认放开远程）的代价**：安全态变成「要配置才能达到」，而不配就是默认
+  暴露 —— 与「暴露管理面应当是一次显式决定」相反。
+
+> ⚠️ 这是**刻意**的破坏性变更：升级后从局域网 IP / 域名访问会 403（`host_not_allowed`）。
+> 白名单放开的只是来源校验，**不是鉴权** —— webui 仍然没有登录。
 
 ---
 
