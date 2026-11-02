@@ -116,6 +116,7 @@
 | [`reference-changexbc-workbuddy-switch.md`](history/reference-changexbc-workbuddy-switch.md) | 外部同产品实现的调研记录 |
 | [`reference-workbuddy-manager.md`](history/reference-workbuddy-manager.md) | 外部同栈项目的调研记录 |
 | [`CLEANUP-2026-10-13.md`](history/CLEANUP-2026-10-13.md) | 上一轮工作区清理报告（含当时的引用扫描证据） |
+| [`upstream-triage-2026-11-02.md`](history/upstream-triage-2026-11-02.md) | 上游 254 提交的分流结论：挑了哪 17 个、哪些要手工移植、哪些明确不取 |
 
 ---
 
