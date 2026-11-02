@@ -182,9 +182,6 @@ const SCOPE_PARAMETERIZED = new Set([
   "qoder_gateway_status",
   "get_qoder_gateway_models",
   "create_qoder_api_key",
-  /* ✅ 2026-10-21：限额护栏视图 —— **生来参数化**。计数落盘是 `qoder/gateway_usage.{region}.json`
-     （两区两本文件），缺 scope 就无从判断该读哪一本（没有「默认区域」可回落）。 */
-  "qoder_gateway_quota",
   /* ✅ 2026-10-16：限流探测三条 —— **作用域参数化**。原签名收 `region`（`cn` / `global`），
      分不出 `wb-cn` 与 `qoder-cn` ⇒ 升级为 `scope`（`Scope::parse` fail-closed）。
      `probe_start` 的 scope 决定探测目标（WB / Qoder 的账号库与目录）；`probe_status` /
