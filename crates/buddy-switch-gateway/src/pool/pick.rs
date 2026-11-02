@@ -1310,7 +1310,7 @@ mod tests {
     #[test]
     fn model_cooldown_falls_back_to_a_probe_instead_of_giving_up() {
         let mut entry = base_entry("a");
-        entry.cooldown_model(NOW, "glm-5.2", 0, 60_000, "6004");
+        entry.cooldown_model(NOW, "glm-5.2", 0, 60_000, "6004", false);
         let mut pool = pool_of(vec![entry]);
         let mut seq = 0;
         assert_eq!(
@@ -1471,6 +1471,7 @@ mod tests {
                 reset_at_ms: 0,
                 reason: String::new(),
                 hits: 0,
+                from_upstream: false,
             },
         );
         let map = pool_of(vec![blocked]);
@@ -1505,6 +1506,7 @@ mod tests {
                 reset_at_ms: 0,
                 reason: String::new(),
                 hits: 1,
+                from_upstream: false,
             },
         );
         let map = pool_of(vec![recovered.clone()]);
