@@ -339,10 +339,12 @@ pub async fn chat_for_region(
     // 非 OpenAI 入口先转成 OpenAI chat 形态（中继内部只认一份形态）。
     let openai_payload = match protocol {
         Protocol::OpenAi => parsed.clone(),
-        // ⚠️ 缺口（2026-11-02）：上游此处用 `to_upstream_request_with_images`，
-        //   把 Anthropic 的 `image` block 转成多模态 part（否则图片被整条丢弃）。
-        //   该函数属图片链路，本分支尚未移植 ⇒ 仍走不含图片的版本。
-        Protocol::Anthropic => crate::protocol::anthropic::to_upstream_request(&parsed),
+        // ★ Qoder 上游只读 message content 里的结构化 `image_url` parts ⇒
+        //   Anthropic 的 `image` block 必须转成多模态 part（否则图片被整条丢弃）。
+        //   Trae / WB 未实测上游是否吃 parts，仍走 `adaptive`（默认丢图并在文本留痕）。
+        Protocol::Anthropic => {
+            crate::protocol::anthropic::to_upstream_request_with_images(&parsed)
+        }
         Protocol::Responses => payload::responses_to_chat(&parsed),
     };
     let wants_stream = payload::wants_stream(&parsed);
