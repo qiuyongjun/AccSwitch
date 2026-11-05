@@ -63,7 +63,7 @@ flowchart LR
 | 会话副本 | 仅 WorkBuddy：内容指纹、谁落后谁分叉、加法同步、记忆与连接器合并 |
 | 额度网关 | 四条独立监听 + 统一网关；OpenAI / Anthropic 兼容接口与 SSE 流式；账号池选号与模型限流 |
 | 应用能力 | 主题与语言、开机启动、托盘、自动更新；全局备份恢复；Skill 管理；客户端 `settings.json` 托管；会话悬浮窗与 hook |
-| 三种形态 | 桌面 App、webui（源码构建）、Docker headless（只跑服务端，不切换本机客户端） |
+| 三种形态 | 桌面 App、webui（源码构建）、Docker headless（镜像 `ghcr.io/qiuyongjun/accswitch`，只跑服务端，不切换本机客户端） |
 | 数据与隐私 | 全部数据落 `~/.buddy-switch/`；导出默认不含 token；网关 Key 只存哈希与前缀 |
 
 端口固定为 `5789x` 一段：`57890` 界面 · `57891` WorkBuddy 网关 · `57892` 统一网关 · `57893` 会话 hook · `57894` Trae 网关 · `57895` Qoder 网关。
