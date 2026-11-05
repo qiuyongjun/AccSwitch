@@ -535,6 +535,20 @@ jobs:
           echo "--- after drop ---"
           ls -1 artifacts
 
+      # CLI 裸二进制在 Release 里改用 AccSwitch 品牌名。
+      # npm 平台包那边仍按 `buddy-switch-<tag>` 取文件（`npm/scripts/install.js` 的 FILE 表写死），
+      # 所以**只改Release 这一层**，不动 artifact 与 npm 链路。
+      # ⚠️ 必须排在 Drop npm-only CLI payloads 之后：那一步按 `buddy-switch-` 前缀剔除。
+      - name: Rename CLI payloads for release
+        run: |
+          for f in buddy-switch-darwin-arm64 buddy-switch-darwin-x64 \
+                   buddy-switch-linux-x64 buddy-switch-linux-arm64 buddy-switch-win32-x64.exe; do
+            if [ -f "artifacts/$f" ]; then
+              mv "artifacts/$f" "artifacts/AccSwitch-${f#buddy-switch-}"
+            fi
+          done
+          ls -1 artifacts
+
       - name: Merge updater manifests
         run: python3 scripts/merge-update-manifests.py artifacts
 
