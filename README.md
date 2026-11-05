@@ -13,38 +13,133 @@
   <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Windows%20%7C%20Linux-2ea043" />
   <a href="https://github.com/qiuyongjun/AccSwitch/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/qiuyongjun/AccSwitch?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC" /></a>
   <a href="./LICENSE"><img alt="许可" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-PolyForm%20Noncommercial-4c8bf5" /></a>
-  <a href="https://github.com/qiuyongjun/AccSwitch/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/qiuyongjun/AccSwitch?style=social" /></a>
+  <a href="https://github.com/NextAgentX/AccSwitch"><img alt="上游" src="https://img.shields.io/badge/%E4%B8%8A%E6%B8%B8-NextAgentX%2FAccSwitch-8b5cf6" /></a>
 </p>
 
-<p align="center">
-  <strong>简体中文</strong> ·
-  <a href="README.en.md">English</a> ·
-  <a href="README.ja.md">日本語</a> ·
-  <a href="README.ko.md">한국어</a> ·
-  <a href="README.ru.md">Русский</a> ·
-  <a href="README.fr.md">Français</a> ·
-  <a href="README.es.md">Español</a> ·
-  <a href="README.pt.md">Português</a>
-</p>
+> **非官方第三方工具**（source-available，PolyForm Noncommercial 许可）。与 WorkBuddy / CodeBuddy / TraeWork / Qoder 及其权利人不存在隶属、授权或背书关系。它会读写本机客户端的认证数据、按你的配置自动发起请求，并可通过本地端口转发额度。使用前请读完 **[免责声明](docs/policies/DISCLAIMER.md)**。
 
-一个**本地运行**的多账号工作台：把 **WorkBuddy / CodeBuddy / TraeWork / Qoder** 四条产品线、**6 个作用域**的账号收在一处——扫码登录、一键切号、签到与积分、用量统计、会话副本同步，并把模型额度以 OpenAI / Anthropic 兼容接口开放给本机其它 AI 工具。所有数据只放在你自己的机器上。
+## 仓库来源（Fork 说明）
 
-|  |  |
+本仓是 [NextAgentX/AccSwitch](https://github.com/NextAgentX/AccSwitch)（曾用名 `NextAgentX/qoder-trae-workbuddy-switch`）的衍生分支：保留上游的「本地多账号工作台」底座，在其上做品牌独立、信息架构与账号工作台重构，并独立构建与发布桌面安装包。
+
+| 项 | 说明 |
 | --- | --- |
-| 🪪 **6 个作用域一屏管完** | 三条产品线 × 国内 / 国际，各有独立账号库；切号带实时进度，写失败自动回滚 |
-| 📊 **用量与限流看得见** | Token、积分、账号 × 模型限流、会话副本谁落后谁分叉，全在一屏 |
-| 🔌 **额度还能喂给别的工具** | 一键暴露成 OpenAI / Anthropic 兼容接口，直接配进 Cursor、Claude Code、OpenWebUI |
+| 上游 | [NextAgentX/AccSwitch](https://github.com/NextAgentX/AccSwitch)，本项目由其分叉而来 |
+| 本仓 | [qiuyongjun/AccSwitch](https://github.com/qiuyongjun/AccSwitch)，非官方衍生版本，独立维护与发布 |
+| 关系 | 不属于上游官方发行版；上游与本仓各自独立演进，功能不保证对齐 |
+| 数据目录 | 仍为 `~/.buddy-switch/`，旧版账号库、网关 Key、签到与用量记录可直接沿用，无需迁移 |
+| 版本线 | 本仓独立（`2026.11.x`），与上游版本号不连续；安装包与自动更新只认本仓 Releases |
+| 许可 | PolyForm Noncommercial 1.0.0；原始版权与 Required Notice 保留在 [LICENSE](./LICENSE) |
 
-<p align="center">
-  <a href="https://github.com/qiuyongjun/AccSwitch/releases/latest"><img alt="下载安装包" src="https://img.shields.io/badge/%E2%AC%87%20%E4%B8%8B%E8%BD%BD%E5%AE%89%E8%A3%85%E5%8C%85-Releases-2ea043?style=for-the-badge" /></a>
-  <a href="https://github.com/qiuyongjun/AccSwitch/stargazers"><img alt="点个 Star" src="https://img.shields.io/badge/%E2%AD%90%20%E7%82%B9%E4%B8%AA%20Star-%E8%AE%A9%E4%BD%9C%E8%80%85%E7%9F%A5%E9%81%93%E6%9C%89%E4%BA%BA%E7%94%A8-f5c542?style=for-the-badge" /></a>
-  <a href="CONTRIBUTING.md"><img alt="参与贡献" src="https://img.shields.io/badge/%F0%9F%9B%A0%20%E5%8F%82%E4%B8%8E%E8%B4%A1%E7%8C%AE-PR%20%E6%AC%A2%E8%BF%8E-4c8bf5?style=for-the-badge" /></a>
-</p>
+```mermaid
+flowchart LR
+    U["NextAgentX/AccSwitch<br/>上游主线"] -->|分叉| F["本仓 dev<br/>AccSwitch 独立线"]
+    U -->|按需移植上游修复| F
+    F -->|构建与发布| R["Releases<br/>Windows / macOS / Linux"]
+    M["本仓 main<br/>上游同步线"] -.->|对照差异 / 取补丁| U
+```
 
-> ⚠️ **非官方第三方工具**（source-available，PolyForm Noncommercial 许可）。与上述产品及其权利人不存在隶属、授权或背书关系。它会读写本机客户端的认证数据、按你的配置自动发起请求，并可通过本地端口转发额度。使用前请读完 **[免责声明](docs/policies/DISCLAIMER.md)**。
+## 分支说明
+
+| 分支 | 角色 | 说明 |
+| --- | --- | --- |
+| `dev` | **开发主线 / 发布线** | 本仓全部改造、新增功能与上游修复移植都在这里；安装包与 Release 由它构建。日常开发与使用请认准这条分支 |
+| `main` | 上游同步线 | 跟随 NextAgentX 上游同步，用于对照差异、挑选可移植的修复；不承载本仓改造 |
+| `wip/pre-pull-*`、`wip/pre-merge-*` | 临时备份 | 拉取 / 合并前的一次性快照，不用于开发或发布 |
+
+同步策略是**只挑「修错」类提交移植，不做整块合并**；新功能按独立功能块评估，避免把两套信息架构混在一起。判据、已移植清单与剩余缺口见 [上游合并收尾记录](docs/history/upstream-merge-closure-2026-11-02.md)。
+
+## 基础功能（继承自上游）
+
+底座能力与上游一致：一个本地运行的工作台，把三条产品线 × 国内外两个区域的账号收在一处，所有数据只落在本机。
+
+| 能力 | 内容 |
+| --- | --- |
+| 6 个作用域 | WorkBuddy / TraeWork / Qoder × 国内 / 国际，各有独立账号库、客户端配置与网关 Key |
+| 账号与登录 | 扫码、网页登录、设备码、PAT、本机导入；卡片 / 表格双视图；程序位切换；回收站保留 30 天 |
+| 一键切号 | 先备份 → 关闭客户端 → 写入 → 校验 → 重启；写入失败自动回滚，客户端运行中默认拒写 |
+| 签到与积分 | 三平台签到、积分与套餐；WorkBuddy 自动旅行 / 自动轮换；计划任务支持分钟粒度与随机抖动 |
+| 用量统计 | Token、积分、账号 × 模型限流；趋势 / 模型 / 会话 / 积分四视图 |
+| 会话副本 | 仅 WorkBuddy：内容指纹、谁落后谁分叉、加法同步、记忆与连接器合并 |
+| 额度网关 | 四条独立监听 + 统一网关；OpenAI / Anthropic 兼容接口与 SSE 流式；账号池选号与模型限流 |
+| 应用能力 | 主题与语言、开机启动、托盘、自动更新；全局备份恢复；Skill 管理；客户端 `settings.json` 托管；会话悬浮窗与 hook |
+| 三种形态 | 桌面 App、webui（源码构建）、Docker headless（只跑服务端，不切换本机客户端） |
+| 数据与隐私 | 全部数据落 `~/.buddy-switch/`；导出默认不含 token；网关 Key 只存哈希与前缀 |
+
+端口固定为 `5789x` 一段：`57890` 界面 · `57891` WorkBuddy 网关 · `57892` 统一网关 · `57893` 会话 hook · `57894` Trae 网关 · `57895` Qoder 网关。
+
+## 本仓改动了什么
+
+相对上游分叉点，本仓改动集中在品牌、信息架构、账号工作台与可靠性；业务能力本身保持不变，新增能力见下一节。
+
+| 方面 | 上游基线 | 本仓现在的做法 |
+| --- | --- | --- |
+| 品牌与发布 | Buddy Switch，上游 identifier、更新签名与发布通道 | AccSwitch，独立 identifier（`com.qiuyongjun.accswitch`）、更新签名与 Release 通道；旧版无法应用内升级，需手动安装一次 |
+| 信息架构 | 三平台各 6 个目的地（含「概览」） | 收敛为 5 个：账号 · 用量 · 会话 · 网关 · 设置；概览页移除，`/token-stats`、`/credit-stats` 等旧路由重定向到统一用量页 |
+| 账号工作台 | 三平台各写一套，卡片 / 抽屉细节不一致 | 三平台同构重构：卡片、表格、抽屉统一口径；指标行固定为「积分 · 临期 · 优先」；抽屉改页签 + 指标块；「更多」动作收敛；分组 / 备注 / 批量操作 |
+| 账号库可靠性 | 整份 `load → save`，并发与跨进程会丢更新 | Trae / Qoder 账号库写路径事务化：文件级互斥 + 同线程重入 + 跨进程乐观重试，写路径读改为 fail-closed；见 [ACCOUNTS-TXN.md](docs/specs/ACCOUNTS-TXN.md) |
+| 设置入口 | 设置页 9 个分区，三个客户端页重复出现通用项 | 收窄为 7 个分区；通用与备份恢复移到顶栏「应用设置」抽屉；客户端设置改为顶层键就地编辑；移除打赏入口 |
+| Qoder 换号 | 要求用户先自行退出客户端 | 桌面版自动「关闭 → 写入 → 校验 → 重开」，失败把客户端拉回；CLI 仍不替用户杀终端会话（D56） |
+| 刷新与签到 | 批量失败只报数量 | Trae 一键刷新下发逐账号失败原因，凭据失效标记「需重新登录」；Qoder 额度改为有界并发、签到改「列表快照 + 本地台账 + 抽屉按需补取」 |
+| 发布渠道 | 提供 Docker 预构建镜像与在线演示 | 本仓只发布桌面安装包；Docker 预构建镜像与在线演示暂未启用，webui 仍可从源码构建 |
+| 刻意未纳入 | — | 上游的聚合账号页、P13 模型降级链、Qoder 逐资源包明细、CodeBuddy CLI 接入、探测 / 风控遥测等整块功能（截至 2026-11-02，理由见合并记录） |
+
+## 本仓新增了什么
+
+在分叉点之后新增或补齐的能力。标注「移植」的来自上游后续提交，本仓只取语义、不取上游的品牌与界面。
+
+| 能力 | 来源 | 说明 |
+| --- | --- | --- |
+| 成长任务中心 | 本仓 | WorkBuddy 国内版账号抽屉新增「任务」页签：任务列表、报名、行为事件点亮、回读、领奖；覆盖 11 个纯事件即可完成的任务，已领 / 已达标自动跳过 |
+| 密钥配额与账号白名单 | 移植（上游 #76） | 每把网关 Key 可设请求配额与账号白名单，白名单是选号硬约束；用量页可按密钥查看消耗与权限 |
+| 模型冷却与闸门 | 移植（上游 #88） | 冷却来源可辨、模型闸门暂停回 503 而非 401、探针票按请求归属并归还、`/status` 补齐诊断字段 |
+| Anthropic 出口用量 | 移植（上游 #139） | `/v1/messages` 的 `input_tokens` 不再写死 0，上下文占用与缓存命中可见 |
+| 图片链路 | 移植 | `/v1/messages` 图片转发开关（默认丢弃但留痕）；Qoder 带图消息保留多模态 `parts`，图片真正到达上游 |
+| Qoder Responses | 移植 | `/v1/responses` 做协议翻译，不再返回 501；支持 freeform / custom 工具，Codex 的 `apply_patch` 不再被静默丢弃 |
+| 工程门禁 | 本仓 | 新增 `check:rust`、`verify` 与「早退后调 hook」静态门禁，补上「前端全绿、Rust 编译不过」的盲区 |
+
+## 下载与安装
+
+| 平台 | 安装包 | 安装 |
+| --- | --- | --- |
+| macOS Apple Silicon（arm64） | `AccSwitch_<版本>_aarch64.dmg` | 打开 DMG，把 `AccSwitch.app` 拖进「应用程序」 |
+| macOS Intel（x86_64） | `AccSwitch_<版本>_x86_64.dmg` | 同上 |
+| Windows x64 | `AccSwitch_<版本>_x64-setup.exe` | 运行安装程序 |
+| Linux x64 | `AccSwitch_<版本>_amd64.deb` / `.AppImage` | 装 `.deb`，或给 AppImage 加执行权限后直接运行 |
+
+安装包统一在 [Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 下载。
+
+> **从上游旧版升级**：本仓更换了 updater 签名密钥与应用 identifier，旧版无法通过应用内自动更新升级到本版。请先退出旧版并手动安装新包；建议先卸载旧版再安装，避免两份应用同时运行并写入同一个 `~/.buddy-switch/` 数据目录。安装新版后，后续版本可在应用内直接升级。
+
+<details>
+<summary><b>macOS 提示「无法验证开发者」／切换时提示无权限</b></summary>
+
+- 无法验证开发者：Finder 里按住 Control 点击应用 → 「打开」，或到「系统设置 → 隐私与安全性」→「仍要打开」。
+- 切换账号需要写入客户端认证文件：在「系统设置 → 隐私与安全性」的 **App 管理**（或 **完全磁盘访问**）中授权 AccSwitch，然后重启应用。设置页的「权限检测」可随时验证。
+- webui 形态的权限跟随启动服务的终端进程。
+
+</details>
+
+## 从源码运行
+
+```bash
+npm install
+npm run tauri dev     # 桌面端开发
+npm run verify        # 提交前跑：前端门禁 + cargo check --workspace --all-targets
+```
+
+webui（前端产物在编译期被服务端嵌入，顺序不能反）：
+
+```bash
+npm install
+npm run build                                    # 1) 前端 → dist/
+cargo build --release -p buddy-switch-server     # 2) 编译服务端（把 dist/ 嵌进去）
+./target/release/buddy-switch                    # 3) 起服务并打开浏览器（默认 127.0.0.1:57890）
+```
+
+> `npm run build` 只跑前端门禁，不含 Rust 编译；改过 `crates/` 或 `src-tauri/` 时必须另跑 `npm run check:rust`（或直接 `npm run verify`）。
 
 ## 界面预览
-
 
 <table>
   <thead>
@@ -70,6 +165,9 @@
   </tbody>
 </table>
 
+<details>
+<summary><b>更多截图（网关 / 会话 / 设置 / TraeWork 账号 / Qoder 账号）</b></summary>
+
 <table>
   <thead>
     <tr><th>网关（浅色）</th><th>网关（深色）</th></tr>
@@ -93,9 +191,6 @@
     </tr>
   </tbody>
 </table>
-
-<details>
-<summary><b>更多截图（会话同步 / 设置 / TraeWork 账号 / Qoder 账号）</b></summary>
 
 <table>
   <thead>
@@ -149,309 +244,30 @@
 
 > 图由 `scripts/gen-readme-shots.mjs` 从演示构建（`VITE_DEMO_MODE=1`）自动生成，账号、积分与请求记录均为虚构数据；界面改版后重跑一次即可同步。
 
-## 全景
-
-```mermaid
-flowchart TB
-    subgraph SRC["3 条产品线 · 6 个作用域"]
-        direction LR
-        WB["WorkBuddy<br/>国内版 / 国际版"]
-        TR["TraeWork<br/>国内版 / 国际版"]
-        QD["Qoder<br/>国内版 / 国际版"]
-    end
-    subgraph CORE["本机核心 · ~/.buddy-switch/"]
-        direction LR
-        AC["账号库<br/>凭据 · 回收站"]
-        AU["自动化<br/>签到 · 保活 · 轮换"]
-        US["用量<br/>Token / 积分"]
-        SE["会话副本<br/>内容指纹 · 加法同步"]
-        GW["额度网关<br/>OpenAI / Anthropic 兼容"]
-    end
-    WB --> AC
-    TR --> AC
-    QD --> AC
-    AC --- AU --- US --- SE
-    US --> GW
-    GW --> OUT["本机其它 AI 工具<br/>Cursor · Claude Code · OpenWebUI"]
-```
-
-**三条硬纪律**，贯穿全部功能：数据只落本机、凭据只写客户端登录态（不代登录、不改上游协议）、任何写入前先备份。
-
-## 四种形态
-
-| 形态 | 获取方式 | 说明 |
-| --- | --- | --- |
-| **桌面 App** | [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 下载安装包 | Tauri 打包，推荐日常使用 |
-| **webui** | 从源码构建（见下） | 与桌面 App 同一份前端产物，走本地 HTTP 通道 |
-| **Docker** | 从源码构建（预构建镜像 `ghcr.io/qiuyongjun/accswitch` 尚未发布） | 容器内是 **headless 服务端**（webui + API 网关），**不是**桌面切换器；见 [Docker 部署](docs/guides/DOCKER.md) |
-| **本地演示** | `npm run dev:demo`（在线演示尚未部署） | 只读演示，账号与用量均为虚构数据 |
-
-> npm 包尚未发布，`npm i -g` 暂时装不到；webui 请按下面的源码构建。
->
-> Docker 形态只跑**服务端**：切换客户端登录态、启动客户端、托盘、悬浮窗这些依赖**同机图形客户端**的能力在容器里一律不可用（webui 上会显示为不可用/无数据）。
-
-## 快速开始
-
-**桌面 App**：从 Releases 下载对应平台的安装包。
-
-| 平台 | 安装包 | 安装 |
-| --- | --- | --- |
-| macOS Apple Silicon（arm64） | `AccSwitch_<版本>_aarch64.dmg` | 打开 DMG，把 `AccSwitch.app` 拖进「应用程序」 |
-| macOS Intel（x86_64） | `AccSwitch_<版本>_x86_64.dmg` | 同上 |
-| Windows x64 | `AccSwitch_<版本>_x64-setup.exe` | 运行安装程序 |
-| Linux x64 | `AccSwitch_<版本>_amd64.deb` / `.AppImage` | 装 `.deb`，或给 AppImage 加执行权限后直接运行 |
-
-**webui（源码构建）**：前端产物在**编译期**被服务端嵌入（`rust-embed`），所以顺序不能反。
-
-```bash
-npm install
-npm run build                                    # 1) 前端 → dist/
-cargo build --release -p buddy-switch-server     # 2) 编译服务端（把 dist/ 嵌进去）
-./target/release/buddy-switch                    # 3) 起服务并打开浏览器（默认 127.0.0.1:57890）
-```
-
-```bash
-buddy-switch              # 起服务 + 打开浏览器
-buddy-switch serve        # 只起服务（--port 指定端口）
-buddy-switch status       # 终端查看当前账号
-buddy-switch version      # 版本号
-```
-
-<details>
-<summary><b>macOS 提示「无法验证开发者」／切换时提示无权限</b></summary>
-
-- 无法验证开发者：Finder 里按住 Control 点击应用 → 「打开」，或到「系统设置 → 隐私与安全性」→「仍要打开」。
-- 切换账号需要写入客户端认证文件：在「系统设置 → 隐私与安全性」的 **App 管理**（或 **完全磁盘访问**）中授权 AccSwitch，然后重启应用。设置页的「权限检测」可随时验证。
-- webui 形态的权限跟随启动服务的终端进程。
-
-</details>
-
-## 6 个作用域（平台 × 区域）
-
-顶栏左上角的作用域选择器决定「现在管哪一套账号」。作用域写进 URL（`/s/wb-cn/accounts`），刷新、分享、前进后退都留在原地；`⌘K` / `Ctrl+K` 跨作用域搜索，`⌘1`–`⌘6` 直接切换。
-
-| 作用域 | 平台 | 区域 | 管理的客户端 |
-| --- | --- | --- | --- |
-| `wb-cn` | WorkBuddy | 国内版 | WorkBuddy 桌面端、CodeBuddy CN IDE / CLI、VS Code / JetBrains 的 CodeBuddy 插件 |
-| `wb-global` | WorkBuddy | 国际版 | 同上（国际版客户端） |
-| `trae-cn` | TraeWork | 国内版 | Trae CN |
-| `trae-global` | TraeWork | 国际版 | Trae |
-| `qoder-cn` | Qoder | 国内版 | Qoder CN 桌面版 / CLI |
-| `qoder-global` | Qoder | 国际版 | Qoder 桌面版 / CLI |
-
-六个作用域**彼此独立**：独立账号库、独立客户端、独立配置、独立网关 Key。Trae 的两条老程序线（TraeWork / TraeCode）已被官方合并成同一个客户端，旧标识仅作兼容。
-
-## 侧栏 5 个目的地
-
-三个平台**逐条同构**：**账号 · 用量 · 会话 · 网关 · 设置**。入口按**能力门控**（不是平台分支）：缺哪个能力就不画哪个入口，URL 直达时给结构化空态。
-
-| 目的地 | 一句话 |
-| --- | --- |
-| **账号** | 卡片 / 表格双视图、程序位切换、扫码或设备码登录、本机导入、签到、回收站（30 天）、客户端限流台账（WorkBuddy 专有） |
-| **用量** | 一个工作台四个视图：趋势 · 模型 · 会话 · 积分；参数条只有一条（范围 + 数据来源） |
-| **会话** | 同一份会话在各账号的副本：谁落后、谁分叉、同步给谁（**仅 WorkBuddy**） |
-| **网关** | 独立网关（每个作用域一套）与统一网关（跨作用域一个 provider） |
-| **设置** | 九个分区：通用 · 账号与登录 · 签到与积分 · 网关 · 计划任务 · 客户端 · 权限与诊断 · 日志 · 备份与恢复 |
-
-### 能力矩阵
-
-| 能力 | WorkBuddy | TraeWork | Qoder |
-| --- | :---: | :---: | :---: |
-| 账号库 / 登录 / 本机导入 | ✅ 扫码 + 导入 | ✅ 网页登录 + JWT | ✅ 设备码 + PAT |
-| 一键切程序位 | ✅ 5 个（4 可切换 + 1 只读探测） | ✅ 1 个（合并客户端） | ✅ 2 个（桌面版 / CLI） |
-| 签到 / 积分 | ✅ 含自动旅行、自动轮换 | ✅ | ✅ 每日活动领取（campaigns）+ 套餐 / 额度 |
-| 用量统计 | ✅ Token + 积分 | ✅ Token + 积分 | ⏳ 数据源待接入 |
-| 会话副本同步 | ✅ 内容指纹 + 加法同步 | — | — |
-| 模型额度网关 | ✅ `:57891` | ✅ `:57894` | ✅ `:57895` |
-
-## 切换账号是怎么做的
-
-```mermaid
-flowchart LR
-    A["选中账号"] --> B["备份当前登录态"] --> C["关闭客户端"] --> D["写入目标账号"] --> E["校验并重启"]
-    D -->|"可选"| F["附带：会话复制<br/>记忆与连接器合并"]
-```
-
-- **先备份后写入**：认证文件、Trae 登录态快照、会话覆盖前，都会先留一份可回滚的副本。
-- **写后校验**：写入失败自动还原；客户端运行中直接拒写，避免退出时把内存里的旧登录态写回覆盖。
-- **删除是软的**：账号先进回收站保留 30 天，可随时恢复；永久删除才连带清凭据与快照。
-
-## 模型额度网关
-
-把当前账号的额度以**兼容接口**暴露给本机工具：OpenAI 兼容（`/v1/models`、`/v1/chat/completions`、`/v1/responses`）+ Anthropic 兼容（`/v1/messages`），都支持 SSE 流式。默认只监听 `127.0.0.1`。
-
-```mermaid
-flowchart LR
-    C["本机 AI 工具"] -->|"sk-wb-…"| G1[":57891<br/>WorkBuddy 网关"]
-    C -->|"sk-trae-…"| G2[":57894<br/>Trae 网关"]
-    C -->|"sk-qoder-…"| G3[":57895<br/>Qoder 网关"]
-    C -->|"sk-uni-…"| G4[":57892<br/>统一网关"]
-    G1 --> P1["wb-cn / wb-global 账号池"]
-    G2 --> P2["trae-cn / trae-global 账号池"]
-    G3 --> P3["qoder-cn / qoder-global 账号池"]
-    G4 -->|"模型名带命名空间前缀"| P1
-    G4 --> P2
-    G4 --> P3
-```
-
-- **四条监听彼此独立**：端口按 **`5789x` 一段**排开——`57890` 界面 · `57891` WorkBuddy · `57892` 统一 · `57893` 会话 hook · `57894` Trae · `57895` Qoder；关掉统一网关不影响任何既有客户端。路由 `/v1/*` 逐字重叠，所以**不能**合成一个 Router。
-- **Key 前缀同族**：`sk-wb-` · `sk-trae-` · **`sk-qoder-`** · `sk-uni-`，看一眼前缀就知道该配哪个端口。
-- **Key 三态**：吊销 · 恢复 · 删除（仅已吊销可删）。明文只在创建时返回一次，库里只存 sha256 + 前 4 / 后 4 位。
-- **账号池**：按余额与限流状态挑账号，可排除不可用账号、可做「账号 × 模型」限流探测，恢复后一键复活。
-
-**统一网关**解决「同名模型在不同平台互相覆盖」：模型名写成 `<命名空间>:<模型id>`，命名空间由作用域注册表派生（当前 6 条：`wb-cn` / `wb-global` / `trae-cn` / `trae-global` / `qoder-cn` / `qoder-global`）。
-
-| 规则 | 行为 |
-| --- | --- |
-| 裸模型名（不带前缀） | **一律 400**，并列出可用前缀（不猜默认值，避免静默走错账号池） |
-| 命名空间解析 | **只做整段精确匹配**（`trae` / `traework` / `traecode` 互为前缀） |
-| 一把 Key 跨平台 | 同一个 `sk-uni-` Key 可同时授权多个平台 |
-| `trae-*` 的 `/v1/responses` | 返回 **501**，不静默降级到 chat |
-| 默认状态 | **默认关**，需在网关页「统一网关」分区手动启用 |
-
-> 架构与决策：[UNIFIED-GATEWAY-ARCH.md](docs/specs/UNIFIED-GATEWAY-ARCH.md) · 接入片段：[guides/GATEWAY-CLIENT-INTEGRATION.md](docs/guides/GATEWAY-CLIENT-INTEGRATION.md)
-
-## 自动化
-
-计划任务支持**分钟粒度**时点（如 `09:37`）、多个时点，以及**随机抖动**（±5/15/30 分钟）——让每天的实际触发时刻错开，而不是整点齐发。
-
-| 侧 | 任务 |
-| --- | --- |
-| WorkBuddy（6 类） | 签到 · 猫猫旅行 · 活跃地图 · Token 保活 · 开学季 · 夜猫子 |
-| Trae（2 类） | 签到 · JWT 自动续期 |
-| Qoder（2 类） | 签到 · 令牌保活 |
-
-<details>
-<summary><b>自动轮换策略（WorkBuddy，防积分过期）</b></summary>
-
-后台定时把 **CodeBuddy CLI 后续启动**的默认账号设为「最紧迫」的账号（最早到期且仍有剩余积分）。依次判定：
-
-1. 有效账号（查询成功、未过期、有剩余积分）
-2. 紧迫度检查（最紧迫的剩余超过 `min_urgency_hours`，默认 72h → 不切）
-3. 已是目标 → 不切
-4. 冷却期（`cooldown_minutes`，默认 120）
-5. 活跃保护（最近 `active_guard_minutes`，默认 30 内有对话 → 不切）
-6. 价值过滤（剩余积分低于 `min_remaining_credits` → 不值得切）
-7. 防抖动（差异小于 `min_gap_hours`，默认 24 → 不切）
-
-**生效边界**：只更新后续会话使用的默认账号，不热切换当前会话——需 ACP 重新加载会话或重启 CLI。
-
-</details>
-
-<details>
-<summary><b>应用级能力（六个作用域共用，不随作用域切换）</b></summary>
-
-| 能力 | 说明 |
-| --- | --- |
-| 应用设置（顶栏 ⚙） | 主题（浅 / 深 / 跟随系统）、界面语言（简体中文 / English）、开机静默启动、关闭窗口进托盘、自动更新 |
-| 全局备份与恢复 | 一次覆盖全部作用域，按账号 / 配置 / 网关分区勾选，**默认不含凭据** |
-| Skill 管理 | 扫描 `skills/*/SKILL.md`，逐项启停（行级重写、其余字节原样保留），支持跨区域搬迁与 zip 导入 |
-| 客户端设置托管 | 统一读写上游客户端自己的 `settings.json`：6 槽位规格表 + 格式指纹 + 字节级最小补丁 + 备份 / 恢复 / 差异对比 |
-| 会话悬浮窗（仅桌面端） | 独立小窗展示跨来源的任务状态，只读、可点回原会话 |
-| 客户端会话监听（默认关） | 在 WorkBuddy `settings.json` 装 hook，把任务状态实时送进悬浮窗（接收端 `127.0.0.1:57893`） |
-
-</details>
-
-## 数据与隐私
-
-- 全部数据落在本机 `~/.buddy-switch/`，不上传任何第三方服务；界面偏好只存本地。
-- 账号库按作用域分家（如 `accounts.json` / `accounts.global.json`、`trae/checkin_accounts*.json`）。
-- 导出备份**默认不含 token**；显式勾选并二次确认后才会写明文，页面同步警告该文件可直接用于登录。
-- 网关 Key 只存哈希与前缀；**仓库不提交本地数据**，发布前会扫描 token 模式。
-
-## 开发
-
-```mermaid
-flowchart TB
-    FE["src/ · React 19 + Vite<br/>5 目的地 · api.ts 双通道"] --> H["宿主：Tauri commands ｜ HTTP (axum)"]
-    H --> CORE["crates/buddy-switch-core<br/>账号 · 认证 · 签到 · 会话 · 作用域"]
-    H --> GW["crates/buddy-switch-gateway<br/>WB / Trae / Qoder / 统一"]
-    CORE --> DATA[("~/.buddy-switch/")]
-    GW --> DATA
-```
-
-```bash
-npm install
-npm run tauri dev     # 桌面端开发
-npm run build         # 前端构建 + 契约 / 作用域 / 平台门禁
-npm run check:api     # 只校验前端 API 契约
-npm run check:rust    # 只校验 Rust 全量编译（cargo check --workspace --all-targets）
-npm run verify        # 提交前跑这个：build + check:rust
-```
-
-> ⚠️ `npm run build` **不含** Rust 编译：Dockerfile 的 frontend 阶段是纯 node 镜像，
-> 把 cargo 塞进去会让镜像构建失败。因此改过 `crates/` / `src-tauri/` 时必须另跑
-> `npm run check:rust`（或直接 `npm run verify`）—— 否则「前端门禁全绿、后端编译不过」
-> 不会被发现。CI 的 `pr-check` 已有独立的 clippy / test job 兜底。
-
-```
-crates/
-  buddy-switch-core/     # 账号、认证、OAuth、进程、切换、会话、签到、区域、Trae / Qoder 模块
-  buddy-switch-gateway/  # OpenAI / Anthropic 兼容网关（四套：WB / Trae / Qoder / 统一）
-  buddy-switch-server/   # HTTP server + CLI（axum API + rust-embed 内嵌前端）
-src-tauri/               # 桌面宿主（Tauri command 薄包装 + 托盘 + 网关宿主）
-src/                     # 前端：components / pages / lib / locales
-npm/                     # npm 包（尚未发布）
-```
-
 ## 文档
 
-完整索引在 [docs/README.md](docs/README.md) —— 按生命周期分区：指南 / 现行规格 / 只读历史 / 原型。最常翻的几份：
+完整索引在 [docs/README.md](docs/README.md)。最常翻的几份：
 
 | 文档 | 讲什么 |
 | --- | --- |
 | [guides/DEVELOPMENT.md](docs/guides/DEVELOPMENT.md) | 环境要求、本地开发、门禁清单、发布流程、目录约定 |
-| [guides/DOCKER.md](docs/guides/DOCKER.md) | 容器部署：预构建镜像 / 源码构建、端口与安全、排障 |
+| [guides/DOCKER.md](docs/guides/DOCKER.md) | 容器部署：源码构建、端口与安全、排障 |
 | [guides/GATEWAY-CLIENT-INTEGRATION.md](docs/guides/GATEWAY-CLIENT-INTEGRATION.md) | 把 Codex / Claude Code / 其它客户端接到本机网关 |
 | [specs/](docs/specs/) | 现行架构与决策（改代码前该读的依据） |
-| [policies/](docs/policies/) | 许可与免责声明 |
+| [history/upstream-merge-closure-2026-11-02.md](docs/history/upstream-merge-closure-2026-11-02.md) | 与上游的差异、已移植清单与刻意未做的功能块 |
+| [releases/](docs/releases/) | 每版发布说明 |
 
-## 参与贡献
-
-**这个项目的形态就是被贡献推着长出来的**：Qoder 平台、统一网关、随机抖动、多语言 README，都来自 Issue 与 PR。不需要"很懂"才能参与：
-
-| 你可以做的事 | 起点 |
-| --- | --- |
-| 🐞 **报 Bug**（附版本 + 日志截图） | [新建 Issue](https://github.com/qiuyongjun/AccSwitch/issues/new) |
-| 🧩 **接新平台**（Galaxy / 其它 IDE） | 平台差异只在 `src/lib/platforms/registry.ts` 与 core 的 `product.rs` 各声明一次，页面组件不用改 |
-| 🌍 **修翻译 / 补语言** | 界面文案在 `src/locales/domains/*.zh.ts` ↔ `*.en.ts` 一一对应；README 八语种也欢迎校订 |
-| 📸 **更新截图** | `scripts/gen-readme-shots.mjs` 一条命令重拍全部浅/深色图（见文件头注释） |
-| 🧪 **补测试** | 仓里大量护栏测试都是贡献者补的；先读 `docs/guides/DEVELOPMENT.md` 的门禁清单 |
-
-完整指引（能做什么、PR 自检清单、代码约定）见 **[CONTRIBUTING.md](CONTRIBUTING.md)**（[English](CONTRIBUTING.en.md)）。
-
-## 支持这个项目
-
-- ⭐ **点个 Star** —— 这是最直接的帮助：它让更多人搜到这个工具，也让作者知道值得继续维护。
-- 🐛 **把问题说清楚** —— 一个能复现的 Issue 比十句"不好用"有用得多，通常下一版就修了。
+> `README.en.md` 等 7 个语言版本仍是上游原文，未同步本仓差异；以本文件为准。
 
 ## 致谢
 
-- 本项目基于 NextAgentX 的 AccSwitch 衍生开发（PolyForm Noncommercial 1.0.0）；原始版权与 Required Notice 保留在 [LICENSE](./LICENSE)。
+- 上游项目：**NextAgentX/AccSwitch**（PolyForm Noncommercial 1.0.0）。本仓基于其衍生开发，原始版权与 Required Notice 保留在 [LICENSE](./LICENSE)。
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — 借鉴 WorkBuddy 账号数据格式与多账号切换思路。
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — 借鉴把模型额度封装成 OpenAI 兼容接口的思路。
 
-以上项目各自遵循其自身许可；本项目为独立实现，与它们不存在隶属、合作或背书关系，相关名称与商标归各自权利人所有。
+以上项目各自遵循其自身许可；本仓为独立实现，与它们不存在隶属、合作或背书关系，相关名称与商标归各自权利人所有。
 
-## 免责声明
+## 免责声明与许可
 
-完整条款见 **[docs/policies/DISCLAIMER.md](docs/policies/DISCLAIMER.md)**（[English](docs/policies/DISCLAIMER.en.md)），共 6 条：非官方第三方工具、服务条款与合规自理、数据写入与备份、自动化行为风险、API 网关暴露风险、按「原样」提供。使用即表示已阅读并同意；如不同意，请立即停止使用并卸载。
-
-## 许可
-
-**[PolyForm Noncommercial License 1.0.0](./LICENSE)**：个人非商业使用允许，**商业使用不被授权**。
-
-- 条款全文：[LICENSE](./LICENSE)
-- 白话说明与常见问题：[docs/policies/LICENSING.md](docs/policies/LICENSING.md)（[English](docs/policies/LICENSING.en.md)）
-- 商业授权请通过本仓库 Issues 联系作者。
-
-## Star 趋势
-
-<a href="https://www.star-history.com/?repos=qiuyongjun%2FAccSwitch&type=date&legend=top-left">
-
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=qiuyongjun/AccSwitch&type=date&legend=top-left" />
- </picture>
-</a>
+- 使用前请读完 **[免责声明](docs/policies/DISCLAIMER.md)**：非官方第三方工具、服务条款与合规自理、数据写入与备份、自动化行为风险、API 网关暴露风险、按「原样」提供。
+- 许可为 **[PolyForm Noncommercial License 1.0.0](./LICENSE)**：个人非商业使用允许，**商业使用不被授权**。白话说明与常见问题见 [docs/policies/LICENSING.md](docs/policies/LICENSING.md)。
