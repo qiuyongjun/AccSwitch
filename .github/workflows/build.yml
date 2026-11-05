@@ -88,7 +88,7 @@ jobs:
                   "update_os": "linux",
                   "update_arch": "x86_64",
                   "update_bundle": "appimage",
-                  "update_archive_name": "AccSwitch-linux-x86_64.AppImage.tar.gz",
+                  "update_archive_name": "AccSwitch-linux-x86_64.AppImage",
               },
               {
                   # ⚠️ **只编 CLI，不编桌面 App**（`bundles` 为空 ⇒ 跳过 `Build desktop app`）。
@@ -368,13 +368,14 @@ jobs:
           ls -la "$BUNDLE_DIR" || true
           # createUpdaterArtifacts 产出的「可自更新归档」各平台后缀不同：
           #   macos   → <Product>_<ver>_<arch>.app.tar.gz
-          #   linux   → <Product>_<ver>_<arch>.AppImage.tar.gz（deb 不产 updater 归档）
+          #   linux   → <Product>_<ver>_<arch>.AppImage（tauri-bundler 2.11 起直接签名 AppImage，
+          #             updater 也支持直接写入 AppImage，见 tauri-plugin-updater install_appimage）
           #   windows → 直接用 nsis 安装包本身，路径可推导，不必 find
           if [ "$UPDATE_OS" = "windows" ]; then
             ARCHIVE="$BUNDLE_DIR/AccSwitch_${VER}_x64-setup.exe"
           else
             case "$UPDATE_OS" in
-              linux) ARCHIVE_GLOB='*.AppImage.tar.gz' ;;
+              linux) ARCHIVE_GLOB='*.AppImage' ;;
               *)     ARCHIVE_GLOB='*.app.tar.gz' ;;
             esac
             ARCHIVE="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name "$ARCHIVE_GLOB" | sort)"
