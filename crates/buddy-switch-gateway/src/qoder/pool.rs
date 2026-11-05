@@ -370,7 +370,7 @@ impl Drop for InflightGuard {
         // 防下溢：如果释放路径被意外走两次，也不能把计数减成天文数字。
         let _ = self
             .counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                 Some(current.saturating_sub(1))
             });
     }
