@@ -46,8 +46,9 @@ mv dist dist.old.$$ && npm run build:fast
 
 ## 发布新版本
 
-签名密钥（自动更新用）存放于 `~/.buddy-switch/buddy-switch-updater.key`，构建脚本通过
-`TAURI_SIGNING_PRIVATE_KEY` 注入。发布新版本时：
+签名密钥（自动更新用）存放于 `~/.buddy-switch/accswitch-updater.key`（密码默认 `accswitch-dev`），
+构建脚本通过 `TAURI_SIGNING_PRIVATE_KEY` 注入。**正式发布走 CI**：先 `node scripts/stamp-version.mjs`
+盖戳并提交，再推 `v<版本>` tag（tag 是版本唯一真相）；下面是本地验证/手工打包步骤：
 
 1. `npm run build:app:release` 生成 `.app.tar.gz` + `.sig`（Windows NSIS 构建会额外生成当前版本的 `*_x64-setup.exe` + `.exe.sig`）。CI 会先清掉 `target/**/release/bundle`，避免 cargo cache 把旧安装包带进 Release。
 2. macOS：`UPDATE_OS=macos UPDATE_ARCH=aarch64 sh scripts/gen-update-json.sh` 生成 `latest-macos-aarch64.json`；Intel 用 `UPDATE_ARCH=x86_64`
@@ -66,9 +67,10 @@ mv dist dist.old.$$ && npm run build:fast
 2. 先 `sh scripts/gen-platform-packages.sh <版本>` 生成 5 个平台包，把对应二进制放进各包 `bin/` 后逐个 `npm publish --access public`
 3. `cd npm && npm publish --access public`（主包，`postinstall` 从已安装的平台包复制二进制）
 
-> ⚠️ **发布前提**：npm 账号必须拥有 **`nextagentx` 这个 scope**（用户名即为 `nextagentx`，
-> 或在该账号下创建同名 organization）。scope 不属于自己时 `npm publish` 会 403，
-> 且 `@nextagentx/*` 是别人无法代持的命名空间。
+> ⚠️ **发布前提**：`@nextagentx` scope 属于上游项目，本仓（`qiuyongjun/AccSwitch`）**没有该 scope**，
+> 因此 npm 通道继续保持关闭（`PUBLISH_NPM` 未配置）。若本仓要发布 npm 包，需先把
+> `npm/package.json`、平台包与 `npm/scripts/install.js` 里的包名改成自己拥有的 scope，
+> 再配置 `NPM_TOKEN` 并置 `PUBLISH_NPM=true`；直接沿用旧 scope 会在 `npm publish` 时 403。
 >
 > 另外：`buddy-switch`（不带 scope）这个包名**在 npm 上已被他人占用**，所以不能再退回无 scope 命名；
 > 本项目此前的发布用的是 `workbuddy-switch`。
@@ -117,10 +119,11 @@ macOS 未签名会触发 Gatekeeper，先 `xattr -d com.apple.quarantine <路径
 ### 在线演示（GitHub Pages）部署前提
 
 `.github/workflows/pages.yml` 在每次 push 到 `main` 时构建只读演示并部署。
-**首次部署前必须先手动启用 Pages**：仓库 Settings → Pages → Source 选 **GitHub Actions**。
+**首版由仓库变量 `PUBLISH_PAGES` 关闭**：未配置时 job 显示 skipped（不红）。
+要开启时，先设置 `PUBLISH_PAGES=true`，并手动启用 Pages：仓库 Settings → Pages → Source 选 **GitHub Actions**。
 
-未启用时该工作流会**恰好失败在 `Configure Pages` 这一步**（前面的 `npm ci` 与
-`npm run build:demo` 都是通过的，容易误判成构建坏了），并且此后每次 push 都会留一条红的 run。
+顺序必须反过来：**先启用 Pages，再置 `PUBLISH_PAGES=true`**。否则工作流会恰好失败在
+`Configure Pages` 这一步（前面的 `npm ci` 与 `npm run build:demo` 都通过，容易误判成构建坏了）。
 
 > **不要试图用 `enablement: true` 绕过这一步**：`actions/configure-pages` 的文档明确要求该选项
 > 使用 `GITHUB_TOKEN` **以外**的 token（PAT 的 `repo` scope，或 GitHub App 的

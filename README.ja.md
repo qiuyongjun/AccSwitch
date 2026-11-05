@@ -27,8 +27,6 @@
   <a href="README.pt.md">Português</a>
 </p>
 
-# AccSwitch
-
 **ローカル完結**のマルチアカウント管理ツールです。**WorkBuddy / CodeBuddy / TraeWork / Qoder** の 4 製品ライン、**6 つのスコープ**のアカウントを 1 か所に集約し、QR・デバイスコードでのログイン、ワンクリックのアカウント切り替え、チェックインとクレジット、利用状況の集計、セッション複製の同期、そしてモデル枠を OpenAI / Anthropic 互換 API としてローカルの他ツールに開放します。
 
 |  |  |
@@ -186,8 +184,8 @@ flowchart TB
 | --- | --- | --- |
 | **デスクトップアプリ** | [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) からインストーラーを取得 | Tauri 製。日常利用に推奨 |
 | **webui** | ソースからビルド（下記） | デスクトップ版と同じフロントエンド成果物をローカル HTTP で配信 |
-| **Docker** | ビルド済みイメージ `ghcr.io/nextagentx/buddy-switch`（amd64 / arm64）を取得 | コンテナ内で動くのは **headless サーバー**（webui + API ゲートウェイ）で、デスクトップ版の切り替え機能は**ありません**。詳細は [Docker でのデプロイ](docs/guides/DOCKER.md) |
-| **オンラインデモ** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | 読み取り専用。アカウントや利用量はすべて架空のデータ |
+| **Docker** | ソースからビルド（ビルド済みイメージ `ghcr.io/qiuyongjun/accswitch` は未公開） | コンテナ内で動くのは **headless サーバー**（webui + API ゲートウェイ）で、デスクトップ版の切り替え機能は**ありません**。詳細は [Docker でのデプロイ](docs/guides/DOCKER.md) |
+| **ローカルデモ** | `npm run dev:demo`（オンラインデモは未デプロイ） | 読み取り専用。アカウントや利用量はすべて架空のデータ |
 
 > npm パッケージは未公開のため `npm i -g` ではインストールできません。webui は下記のソースビルドをご利用ください。
 >
@@ -419,22 +417,10 @@ npm/                     # npm パッケージ（未公開）
 
 - ⭐ **Star を付ける** — いちばん直接的な支援です。見つけてもらいやすくなり、継続開発の判断材料になります。
 - 🐞 **問題を具体的に** — 再現できる Issue は「動かない」の 10 倍有用で、たいてい次の版で直ります。
-- ☕ **作者に一杯おごる**（任意。機能制限は一切ありません）
-
-<table>
-  <thead>
-    <tr><th>WeChat Pay</th><th>Alipay</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/donate-wechat.png" alt="WeChat Pay QR" width="240" /></td>
-      <td><img src="docs/images/donate-alipay.jpg" alt="Alipay QR" width="240" /></td>
-    </tr>
-  </tbody>
-</table>
 
 ## 謝辞
 
+- 本プロジェクトは NextAgentX の AccSwitch から派生したものです（PolyForm Noncommercial 1.0.0）。元の著作権表示と Required Notice は [LICENSE](./LICENSE) に保持しています。
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — WorkBuddy のアカウントデータ形式とマルチアカウント切り替えの考え方を参考にしました。
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — モデル枠を OpenAI 互換 API として公開するアイデアを参考にしました。
 

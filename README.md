@@ -183,8 +183,8 @@ flowchart TB
 | --- | --- | --- |
 | **桌面 App** | [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 下载安装包 | Tauri 打包，推荐日常使用 |
 | **webui** | 从源码构建（见下） | 与桌面 App 同一份前端产物，走本地 HTTP 通道 |
-| **Docker** | 拉预构建镜像 `ghcr.io/nextagentx/buddy-switch`（amd64 / arm64） | 容器内是 **headless 服务端**（webui + API 网关），**不是**桌面切换器；见 [Docker 部署](docs/guides/DOCKER.md) |
-| **在线演示** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | 只读演示，账号与用量均为虚构数据 |
+| **Docker** | 从源码构建（预构建镜像 `ghcr.io/qiuyongjun/accswitch` 尚未发布） | 容器内是 **headless 服务端**（webui + API 网关），**不是**桌面切换器；见 [Docker 部署](docs/guides/DOCKER.md) |
+| **本地演示** | `npm run dev:demo`（在线演示尚未部署） | 只读演示，账号与用量均为虚构数据 |
 
 > npm 包尚未发布，`npm i -g` 暂时装不到；webui 请按下面的源码构建。
 >
@@ -424,22 +424,10 @@ npm/                     # npm 包（尚未发布）
 
 - ⭐ **点个 Star** —— 这是最直接的帮助：它让更多人搜到这个工具，也让作者知道值得继续维护。
 - 🐛 **把问题说清楚** —— 一个能复现的 Issue 比十句"不好用"有用得多，通常下一版就修了。
-- ☕ **请作者喝杯饮料**（完全自愿，不影响任何功能）
-
-<table>
-  <thead>
-    <tr><th>微信支付</th><th>支付宝</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/donate-wechat.png" alt="微信支付收款码" width="240" /></td>
-      <td><img src="docs/images/donate-alipay.jpg" alt="支付宝收款码" width="240" /></td>
-    </tr>
-  </tbody>
-</table>
 
 ## 致谢
 
+- 本项目基于 NextAgentX 的 AccSwitch 衍生开发（PolyForm Noncommercial 1.0.0）；原始版权与 Required Notice 保留在 [LICENSE](./LICENSE)。
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — 借鉴 WorkBuddy 账号数据格式与多账号切换思路。
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — 借鉴把模型额度封装成 OpenAI 兼容接口的思路。
 

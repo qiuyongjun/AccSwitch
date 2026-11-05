@@ -1,8 +1,8 @@
 [package]
 name = "buddy-switch-rust"
-version = "2026.10.201902"
+version = "2026.11.52003"
 description = "AccSwitch —— WorkBuddy 账号切换工具（Rust/Tauri 版）"
-authors = ["NextAgentX"]
+authors = ["qiuyongjun"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

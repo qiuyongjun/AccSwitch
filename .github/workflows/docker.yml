@@ -10,10 +10,10 @@ name: docker
 #
 # ## 镜像坐标
 #
-#   ghcr.io/nextagentx/buddy-switch
+#   ghcr.io/qiuyongjun/accswitch
 #
 # ⚠️ 必须**全小写**：镜像名大写会被 docker 直接判 `invalid reference format`。
-# 因此这里**不写** `${{ github.repository_owner }}`（那是 `NextAgentX` 大写），
+# 因此这里**不写** `${{ github.repository_owner }}`（仓库名是 `AccSwitch` 大写），
 # 而是硬编码小写。`scripts/check-docker.cjs` 会校验这串名字与 `docker-compose.yml`、
 # `README.md`、`docs/guides/DOCKER.md` 完全一致 —— 四处漂移的症状是
 # 「compose 拉不到 → 静默回落成本地构建」，用户只会觉得慢，不会觉得错。
@@ -65,7 +65,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/nextagentx/buddy-switch
+  IMAGE: ghcr.io/qiuyongjun/accswitch
 
 jobs:
   # ===========================================================================
@@ -73,6 +73,8 @@ jobs:
   # ===========================================================================
   build:
     name: build linux/${{ matrix.arch }}
+    # 首版只发桌面安装包：变量未配置时不推镜像，job 显示 skipped 而不是红。
+    if: vars.PUBLISH_DOCKER == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -180,6 +182,7 @@ jobs:
   merge:
     name: Publish multi-arch manifest
     needs: build
+    if: vars.PUBLISH_DOCKER == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

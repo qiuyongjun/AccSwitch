@@ -17,6 +17,8 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy read-only demo
+    # 首版不部署在线演示：变量未配置时 job 显示 skipped，避免每次 push main 留一条红。
+    if: vars.PUBLISH_PAGES == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

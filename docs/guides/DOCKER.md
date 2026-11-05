@@ -25,14 +25,17 @@
 
 ## 快速开始
 
-### 方式 A · 预构建镜像（推荐）
+### 方式 A · 预构建镜像（首版暂未发布）
+
+> 首版 Release 只发桌面安装包，未开启 `PUBLISH_DOCKER`，`ghcr.io/qiuyongjun/accswitch` 还没有推送。
+> 目前请直接用下面的「方式 B」从源码构建；镜像发布后再按这里切换。
 
 ```bash
 docker run -d --name buddy-switch \
   -p 127.0.0.1:57890:57890 \
   -v buddy-switch-data:/data \
   --restart unless-stopped \
-  ghcr.io/nextagentx/buddy-switch:latest
+  ghcr.io/qiuyongjun/accswitch:latest
 # 打开 http://127.0.0.1:57890
 ```
 
@@ -63,17 +66,16 @@ docker compose down                   # 停止（命名卷里的数据保留）
 架构：`linux/amd64` + `linux/arm64`，同一个 tag 下是一条多架构 manifest list，
 `docker pull` 会按当前机器自动选。**没有** `arm/v7`（32 位 ARM 请自行改 Dockerfile 构建）。
 
+> 以上标签在仓库变量 `PUBLISH_DOCKER=true` 开启后生效。首版未开启，镜像尚未推送。
+
 标签由 `.github/workflows/docker.yml` 在推 `v*` tag 时自动发布（两个架构各跑一台**原生**
 runner，再由 merge job 拼 manifest）。手动触发该工作流只产出 `edge`。
 
 ### 镜像可见性
 
-本仓是公开仓库，包也按 **Public** 发布 —— 2026-10-19 实测匿名 token 可直接拉到 manifest
-（`ghcr.io/v2/nextagentx/buddy-switch/manifests/edge` 返回 200）。
-
-若某次之后 `docker pull` 报 `denied` / `unauthorized`，到
-`https://github.com/orgs/NextAgentX/packages/container/buddy-switch/settings`
-确认 Visibility 仍是 Public。改成 Private 也能用，只是每台机器都要先 `docker login ghcr.io`；
+首版未发布镜像，无需配置可见性。开启 `PUBLISH_DOCKER` 后，包页在
+`https://github.com/users/qiuyongjun/packages/container/accswitch/settings`，
+按 **Public** 发布即可匿名拉取；改成 Private 也能用，只是每台机器都要先 `docker login ghcr.io`；
 而 `docker compose up -d` 拉不到时会**静默回落到本地构建**（看起来像「卡住了」）。
 
 ---
@@ -271,7 +273,7 @@ runtime  (debian:12) →  二进制 + ca-certificates + curl
 
 ### 发布路径（CI）
 
-`.github/workflows/docker.yml` 在推 `v*` tag 时自动发布 `ghcr.io/nextagentx/buddy-switch`：
+`.github/workflows/docker.yml` 在推 `v*` tag 时自动发布 `ghcr.io/qiuyongjun/accswitch`（需先设置仓库变量 `PUBLISH_DOCKER=true`）：
 
 1. **版本戳只在 tag 触发时盖**（`stamp-version.sh --tag "$GITHUB_REF_NAME"`）：两个架构各跑一次，
    但取值来自同一个 tag，结果一致。手动触发**不盖** —— `gen-release-notes.mjs` 是按 tag 取提交
@@ -292,10 +294,10 @@ runtime  (debian:12) →  二进制 + ca-certificates + curl
 
 | 症状 | 原因 | 处理 |
 |:---|:---|:---|
-| `up -d` 不下载镜像、直接开始**编译**（几分钟后才起来） | 预构建镜像没拉到（包私有 / 网络不通 / 该 tag 还没发布），Compose 回落成本地构建 | 先单独 `docker pull ghcr.io/nextagentx/buddy-switch:latest` 看真实报错；私有包需 `docker login ghcr.io`，或把包改成 Public |
+| `up -d` 不下载镜像、直接开始**编译**（几分钟后才起来） | 预构建镜像没拉到（尚未发布 / 包私有 / 网络不通 / 该 tag 还没发布），Compose 回落成本地构建 | 首版属预期；开启 `PUBLISH_DOCKER` 后先单独 `docker pull ghcr.io/qiuyongjun/accswitch:latest` 看真实报错；私有包需 `docker login ghcr.io` |
 | `docker pull` 报 `denied` / `unauthorized` | 包被改成 Private；或登录用的 Token 没有 `read:packages` | 见「镜像可见性」一节 |
 | `no matching manifest for linux/arm/v7` | 只发布了 `amd64` / `arm64` | 32 位 ARM 自行 `docker compose up -d --pull build` 本地构建 |
-| 镜像版本与 tag 对不上 | 用了 `latest`，而它不是这次的 tag | 显式拉 `ghcr.io/nextagentx/buddy-switch:<版本>` |
+| 镜像版本与 tag 对不上 | 用了 `latest`，而它不是这次的 tag | 显式拉 `ghcr.io/qiuyongjun/accswitch:<版本>` |
 | 容器起来后**立刻退出**，日志说「拒绝启动」 | `BUDDY_SWITCH_HOME` 不存在 / 非绝对路径 / 无写权限 | 检查卷挂载与属主（见「数据持久化」） |
 | 宿主访问不到 `57890` | 容器内仍绑 `127.0.0.1` | 确认 `BUDDY_SWITCH_HOST=0.0.0.0` 已生效 |
 | 页面能开，但**所有操作都报 403** | 管理面来源校验拒绝了当前 `Host` —— 用 IP / 域名访问却没配白名单 | 见「[改映射后为什么还要配 `BUDDY_SWITCH_ALLOWED_HOSTS`](#改映射后为什么还要配-buddy_switch_allowed_hosts)」；只走 SSH 隧道不会出现这一条 |
