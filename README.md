@@ -13,18 +13,18 @@
   <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-macOS%20%7C%20Windows%20%7C%20Linux-2ea043" />
   <a href="https://github.com/qiuyongjun/AccSwitch/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/qiuyongjun/AccSwitch?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC" /></a>
   <a href="./LICENSE"><img alt="许可" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-PolyForm%20Noncommercial-4c8bf5" /></a>
-  <a href="https://github.com/NextAgentX/AccSwitch"><img alt="上游" src="https://img.shields.io/badge/%E4%B8%8A%E6%B8%B8-NextAgentX%2FAccSwitch-8b5cf6" /></a>
+  <a href="https://github.com/NextAgentX/qoder-trae-workbuddy-switch"><img alt="上游" src="https://img.shields.io/badge/%E4%B8%8A%E6%B8%B8-NextAgentX%2Fqoder--trae--workbuddy--switch-8b5cf6" /></a>
 </p>
 
 > **非官方第三方工具**（source-available，PolyForm Noncommercial 许可）。与 WorkBuddy / CodeBuddy / TraeWork / Qoder 及其权利人不存在隶属、授权或背书关系。它会读写本机客户端的认证数据、按你的配置自动发起请求，并可通过本地端口转发额度。使用前请读完 **[免责声明](docs/policies/DISCLAIMER.md)**。
 
 ## 仓库来源（Fork 说明）
 
-本仓是 [NextAgentX/AccSwitch](https://github.com/NextAgentX/AccSwitch)（曾用名 `NextAgentX/qoder-trae-workbuddy-switch`）的衍生分支：保留上游的「本地多账号工作台」底座，在其上做品牌独立、信息架构与账号工作台重构，并独立构建与发布桌面安装包。
+本仓是 [NextAgentX/qoder-trae-workbuddy-switch](https://github.com/NextAgentX/qoder-trae-workbuddy-switch) 的 Fork（GitHub 上的 fork 父仓即该仓库）：保留上游的「本地多账号工作台」底座，在其上做品牌独立、信息架构与账号工作台重构，并独立构建与发布桌面安装包。
 
 | 项 | 说明 |
 | --- | --- |
-| 上游 | [NextAgentX/AccSwitch](https://github.com/NextAgentX/AccSwitch)，本项目由其分叉而来 |
+| 上游 | [NextAgentX/qoder-trae-workbuddy-switch](https://github.com/NextAgentX/qoder-trae-workbuddy-switch)，本项目由其分叉而来 |
 | 本仓 | [qiuyongjun/AccSwitch](https://github.com/qiuyongjun/AccSwitch)，非官方衍生版本，独立维护与发布 |
 | 关系 | 不属于上游官方发行版；上游与本仓各自独立演进，功能不保证对齐 |
 | 数据目录 | 仍为 `~/.buddy-switch/`，旧版账号库、网关 Key、签到与用量记录可直接沿用，无需迁移 |
@@ -33,7 +33,7 @@
 
 ```mermaid
 flowchart LR
-    U["NextAgentX/AccSwitch<br/>上游主线"] -->|分叉| F["本仓 dev<br/>AccSwitch 独立线"]
+    U["NextAgentX/qoder-trae-workbuddy-switch<br/>上游主线"] -->|分叉| F["本仓 dev<br/>AccSwitch 独立线"]
     U -->|按需移植上游修复| F
     F -->|构建与发布| R["Releases<br/>Windows / macOS / Linux"]
     M["本仓 main<br/>上游同步线"] -.->|对照差异 / 取补丁| U
@@ -261,7 +261,7 @@ cargo build --release -p buddy-switch-server     # 2) 编译服务端（把 dist
 
 ## 致谢
 
-- 上游项目：**NextAgentX/AccSwitch**（PolyForm Noncommercial 1.0.0）。本仓基于其衍生开发，原始版权与 Required Notice 保留在 [LICENSE](./LICENSE)。
+- 上游项目：**NextAgentX/qoder-trae-workbuddy-switch**（PolyForm Noncommercial 1.0.0）。本仓基于其衍生开发，原始版权与 Required Notice 保留在 [LICENSE](./LICENSE)。
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — 借鉴 WorkBuddy 账号数据格式与多账号切换思路。
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — 借鉴把模型额度封装成 OpenAI 兼容接口的思路。
 
