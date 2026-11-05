@@ -48,7 +48,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklEa3hOell3T0RNNU0wVXlSa0U1TXpBS1VsZFJkM0ZUT0N0UFVXZ3lhMlZzYzJwUVFtbFZTalJTTlRScWRWcHNNMk16T0dWTFJWTk5ha2hLZUcxYVRHaDJWR3R5T0VFcmVHTUs=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxNzYwODM5M0UyRkE5MzAKUldRd3FTOCtPUWgya2Vsc2pQQmlVSjRSNTRqdVpsM2MzOGVLRVNNakhKeG1aTGh2VGtyOEEreGMK",
       "endpoints": [
         "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest.json",
         "https://github.com/qiuyongjun/AccSwitch/releases/latest/download/latest-{{target}}-{{arch}}.json",
