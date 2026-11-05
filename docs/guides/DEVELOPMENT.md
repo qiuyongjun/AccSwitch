@@ -112,8 +112,10 @@ CI 的两个发布 job（`publish-platform` / `publish-main`）与「是否把 C
 `npm platform *` job、`publish-main` 被 skip，而 Release 与安装包本身一直是 success ——
 那是噪音不是事故，却会让人误判「这次发版挂了」。恢复发布时**只改变量**，不用改 workflow。
 
-**关闭期间的 webui 分发方式**：从 GitHub Releases 下载对应平台的裸二进制直接跑
-（`buddy-switch` / `buddy-switch serve --port 57890` / `status` / `version`）。
+**关闭期间的 webui 分发方式**：从 GitHub Releases 下载对应平台的裸二进制 `AccSwitch-<平台>-<架构>`
+（Windows 是 `AccSwitch-win32-x64.exe`），直接运行该文件即可（文件名就是命令名，例如
+`./AccSwitch-linux-x64` / `./AccSwitch-linux-x64 serve --port 57890` / `status` / `version`）。
+Release 里用的是品牌名；npm 包内的命令名仍是 `buddy-switch`（由 `bin` 字段决定）。
 macOS 未签名会触发 Gatekeeper，先 `xattr -d com.apple.quarantine <路径>`；Windows 会有 SmartScreen 提示，选「仍要运行」。
 
 ### 在线演示（GitHub Pages）部署前提

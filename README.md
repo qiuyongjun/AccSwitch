@@ -109,6 +109,10 @@ flowchart LR
 
 安装包统一在 [Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 下载。
 
+> **哪些文件不用下载**：`latest*.json`、`release-notes.json` 与所有 `.sig` 是应用内「检查更新」用的清单与签名，客户端会自己读取；手动安装只需要上表里的 DMG / EXE / deb / AppImage。
+>
+> **webui / headless**：`AccSwitch-<平台>-<架构>` 是无界面的服务端裸二进制（Linux arm64 只有这一形态），不需要桌面版时用它。下载后直接运行该文件即可，例如 `./AccSwitch-linux-x64 serve --port 57890`；它只跑服务端，不切换本机客户端。
+
 > **从上游旧版升级**：本仓更换了 updater 签名密钥与应用 identifier，旧版无法通过应用内自动更新升级到本版。请先退出旧版并手动安装新包；建议先卸载旧版再安装，避免两份应用同时运行并写入同一个 `~/.buddy-switch/` 数据目录。安装新版后，后续版本可在应用内直接升级。
 
 <details>
