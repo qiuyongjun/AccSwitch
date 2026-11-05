@@ -1,17 +1,24 @@
 {
-  "version": "2026.11.52027",
+  "version": "2026.11.52103",
   "breaking": [
     {
       "title": "旧版需手动替换",
-      "desc": "本次更换了 updater 签名密钥与应用 identifier，上游旧版无法通过应用内自动更新升级到本版，请先退出旧版并手动安装新包。建议先卸载旧版再安装，避免两份应用同时运行并写入同一个 ~/.buddy-switch 数据目录。安装新版后，后续版本可在应用内直接检查并升级。"
+      "desc": "本仓更换了 updater 签名密钥与应用 identifier，上游旧版无法通过应用内自动更新升级到本版，请先退出旧版并手动安装新包。建议先卸载旧版再安装，避免两份应用同时运行并写入同一个 ~/.buddy-switch 数据目录。安装本版后，后续版本可在应用内直接检查并升级。"
     }
   ],
   "sections": [
     {
-      "title": "首个独立发布版本",
+      "title": "首个正式发布",
       "items": [
-        "本仓库开始独立发布 AccSwitch 桌面版：Windows（NSIS）、macOS（DMG，Apple Silicon / Intel）、Linux（deb / AppImage）。",
+        "本仓库首个可用版本：Windows（NSIS）、macOS（DMG，Apple Silicon / Intel）、Linux（deb / AppImage）四类桌面安装包。",
         "数据目录仍是 ~/.buddy-switch，已有的账号库、网关 Key、签到与用量记录可直接沿用，无需迁移。"
+      ]
+    },
+    {
+      "title": "问题修复",
+      "items": [
+        "修正更新签名公钥配置（此前多编码一层导致桌面打包在生成更新包时失败），本版起安装包可正常产出并支持应用内自动更新。",
+        "更正 README 与 LICENSE 中的上游仓库地址为 NextAgentX/qoder-trae-workbuddy-switch。"
       ]
     },
     {
