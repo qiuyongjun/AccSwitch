@@ -23,7 +23,7 @@
 | **两个搜索入口必须共用同一索引** | 列表搜索 `/` 已存在于 `AccountsPage`/`TraeAccountsPage`（`AccountsPage.tsx:328-339`）；索引已抽出（`src/lib/account-search.ts`） | 命令面板**复用** `accountSearchText` / `matchesAccountQuery`，**不另写一套匹配**（§3.13，否则同一关键词两处结果不一致 = 静默错误）——见 §1.2 |
 | **★ 字段张冠李戴（本仓出过两次事故）** | `lastUsedAt` 属 `ApiKeyRecord`（`types.ts:685`）/ `TraeApiKeyRecord`（`trae-types.ts:837`），**不属任何账号类型**；WB 账号名是 **`nickname`**（`types.ts:16`）不是 `name`；Trae 账号键是 **`userId`**（`trae-types.ts:321`）不是 `id`/`uid` | 面板账号键 / 搜索字段**逐字段核实归属**并写进契约断言——见 §1.2 / §3.3 / §5 |
 | **cmdk 未安装** | `node_modules/cmdk` 不存在；`package.json` 只有 `sonner`（`^2.0.8`）+ Radix 家族 | 新增依赖 `cmdk`（PLAN §3.11 指定「用 `cmdk`，不要手写列表」）；**不手写 combobox 语义**——见 §1.6 |
-| **首次引导会泄露「不存在的快捷键」** | 原型引导条写死 `⌘K` / `/`（`index.html:128-132`） | 引导内容**由真实绑定派生**：降级的快捷键**不出现在引导里**（§3.4 规则 1 的延伸）——见 §1.7 |
+| **首次引导与真实上手路径脱节** | 原型引导条写死 `⌘K` / `/`（`index.html:128-132`） | 引导改为**四步基本流程**（选作用域 / 添加账号 / 切换程序位 / 一键刷新签到），**不列快捷键**——见 §1.5 |
 
 ### 1.2 命令面板：条目集与「唯一搜索索引」
 
@@ -72,7 +72,7 @@ planScopeShortcuts({ scopes, enabled })
 - `enabled === false` ⇒ `bindings = ∅`、`degraded = true`、`reason = "user-disabled"`；
 - 否则 `SCOPES[i] → i+1`。
 
-**★ 「绑定」与「序号提示」同源（§3.4 规则 1）**：`⌘N` 提示（出现在面板「作用域」组 / 首次引导 / 设置项说明）**只能**在 `bindings` 非空时渲染。降级时：
+**★ 「绑定」与「序号提示」同源（§3.4 规则 1）**：`⌘N` 提示（出现在面板「作用域」组 / 设置项说明）**只能**在 `bindings` 非空时渲染。降级时：
 
 - 快捷键**不绑定**（按下无反应）；
 - **序号提示一并不渲染** —— 绝不出现「显示了 ⌘3、按了却没反应」的**假控件**。
@@ -112,12 +112,13 @@ export function showUndoToast(input: UndoToastInput): void; // 内部走 sonner 
 > ✅ **不构成假承诺**：P5 已把删除**对话框**文案改为「可在回收站恢复」，且交付了回收站入口 ⇒ 后端确实可恢复 ⇒ P6 的撤销 toast 是**第二条加速路径**（`toast` 一键恢复），与回收站**同源同后端**，**不是新承诺**。
 > ⚠️ **两个恢复入口要一致**：撤销 toast 与回收站都调 `account_restore`，**同一命令**，不各写一份恢复逻辑（否则漂移）。
 
-### 1.5 首次引导：内容由「真实绑定」派生
+### 1.5 首次引导：讲「基本流程」而不是快捷键
 
-原型引导条（`index.html:128-132`）写死几条提示。真实应用里**必须**避免「引导里列了、实际按了没反应」：
+原型引导条（`index.html:128-132`）写死几条快捷键提示。真实应用里首次用户更需要知道**账号从哪来、程序位怎么切**：
 
-- 引导条内容**由运行时绑定派生**：`⌘K` 始终可用；`⌘1..N` **仅在 `bindings` 非空时**出现；`/`（列表搜索）已存在（`AccountsPage.tsx:328`）⇒ 可列。
-- 形态：**可关闭的顶部提示条**（非模态、不挡操作），**关闭后持久化**（localStorage），下次冷启动不再出现（原型是「15 秒自动退场 + 会话级」，见 §8 #4）。
+- 引导条内容 = **四步基本流程**：选作用域 → 添加账号 → 切换程序位 → 一键刷新 / 签到；每一步都与页面上真实存在的控件逐字对应（不写「引导里有、界面找不到」的假承诺，§3.4 规则 1）。
+- **不列快捷键**：`⌘K` / `⌘1..N` / `/` 是熟练后的加速器，放在命令面板入口与设置里即可；首次引导列它们只会挤占真正需要的上手路径（2026-11-06 调整）。
+- 形态：**底部居中可关闭浮层**（非模态、不挡操作、空隙处点击可穿透），**关闭后持久化**（localStorage），下次冷启动不再出现（原型是「15 秒自动退场 + 会话级」，见 §8 #4）。
 
 ### 1.6 命令面板组件：cmdk + Radix Dialog（不手写 combobox）
 
@@ -134,7 +135,7 @@ PLAN §3.11 要求：命令面板 = combobox 语义 + `aria-activedescendant` + 
 |:---|:---|
 | 面板「作用域」组 | 降级时**不渲染 `⌘N` 序号提示**（只留作用域名） |
 | 面板「账号」组 | 某作用域**无账号** ⇒ 不产该作用域的账号条目（不留空组） |
-| 首次引导 | 降级的快捷键**不写进引导** |
+| 首次引导 | **不列快捷键**（改讲四步基本流程，避免占走上手路径） |
 | 设置项「键盘快捷键」 | 降级（`reason="too-many"`）时**不显示「可开启」开关**，改为一句说明（无可开启之物） |
 
 ### 1.8 与 P4 的接口：`?q=` 一次性种子（P4 已预留，P6 接线）
@@ -196,7 +197,7 @@ export function collectPaletteActions(): readonly PaletteAction[];
 | `src/lib/first-run.ts` | 首次引导持久化：`shouldShowFirstRunHint(storage)` / `dismissFirstRunHint(storage)` |
 | `src/components/ui/command.tsx` | cmdk 薄封装（shadcn 风格：`Command` / `Input` / `List` / `Group` / `Item`） |
 | `src/components/command-palette/command-palette.tsx` | 面板组件（Radix Dialog + cmdk；四组条目；`aria-live` 结果数；`Esc`/焦点归还） |
-| `src/components/first-run-hint.tsx` | 首次引导条（**内容由真实绑定派生**；可关闭 + 持久化） |
+| `src/components/first-run-hint.tsx` | 首次引导条（**四步基本流程**；可关闭 + 持久化） |
 
 ### 修改
 
@@ -568,14 +569,14 @@ sequenceDiagram
 ### T03 · 全局作用域快捷键 + 首次引导 ｜ P0
 - **源文件**
   - 修改 `src/App.tsx`（`Layout` 内注册 `⌘1..N` 全局键 + 挂载 `<FirstRunHint />`）
-  - 新建 `src/components/first-run-hint.tsx`（内容由真实绑定派生；可关闭 + 持久化）
+  - 新建 `src/components/first-run-hint.tsx`（四步基本流程；按钮名复用真实词条；可关闭 + 持久化）
   - 修改 `src/pages/SettingsPage.tsx`（或 `src/components/app-settings.tsx`）——「键盘快捷键」开关
   - 修改 `src/locales/domains/shell.{zh,en}.ts`
 - **依赖**：T01
 - **要点**
   - 快捷键：`Ctrl/Cmd + 1..N` → `scopeShortcutTarget(scope, 当前目的地)`；**输入框 / 可编辑区豁免**（沿用既有判据）。
   - **降级**：`>5` 或用户关闭 ⇒ **不绑定 + 不显示序号**；设置页在 `reason="too-many"` 时**不显示开关**（§1.7）。
-  - **首次引导**：`⌘K` 恒列；`⌘1..N` **仅绑定时**列；`/`（已存在）可列；关闭即持久化。
+  - **首次引导**：四步基本流程（选作用域 / 添加账号 / 切换程序位 / 一键刷新签到）；按钮名复用真实词条；关闭即持久化。
   - **切 scope 清空选择**由 P5 §2.5(4) 承担，P6 不重复补偿（§1.3）。
   - 词条 zh + en 同步，只加被引用键。
 
@@ -633,7 +634,7 @@ sequenceDiagram
 | **R5** | **展示字段是脏对象** | 当 React 子节点 ⇒ **白屏**（issue #2） | 过 `displayText`；变异验证 ⑤ 兜住 |
 | **R6** | **切 scope 残留选择集** | 用 A 的 id 打 B 的库（§2.5 第 4 条） | 依赖 P5 的 `(scope, id)` 键控；P6 导航不额外补偿（避免两份「清空」） |
 | **R7** | **快捷键与系统/浏览器冲突** | 按 `Ctrl+1..9` 误切标签页 | 设置项**可关闭**（§3.1）；Tauri webview **实测**（Windows/macOS）；关闭后提示同步消失 |
-| **R8** | **首次引导列了不存在的快捷键** | 「引导里有、按了没反应」的假承诺 | 引导内容**由真实绑定派生**（降级项不列） |
+| **R8** | **首次引导与界面按钮名失配** | 「引导里写着旧按钮名」的假承诺 | 按钮名**复用真实词条**（`shared.addDrawer.title` / `shared.toolbar.quickRefresh` / `quickCheckin`）；门禁断言兜住 |
 | **R9** | **cmdk 手写替代** | combobox 语义 / `aria-activedescendant` / 焦点管理缺失（§3.11） | 用 `cmdk` + Radix Dialog，**不手写列表** |
 | **R10** | **P7 反向依赖 P6 落空** | P7 登记动作时面板不存在 ⇒ **死代码**（`P7-ARCH.md` §7 #6） | P6 **先落**面板 + `palette-actions.ts` 扩展点；依赖方向 **P7 等 P6** |
 | **R11** | **两套验收错配** | 拿 `verify-demo.cjs`（验**原型**）卡真实应用，或反之 | `verify-demo.cjs` **不动**；P6 真实应用断言加进 `scripts/check-scope-registry.cjs`（**✅ #1**） |

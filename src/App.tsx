@@ -331,7 +331,7 @@ function useTraeVariantRunning(active: boolean): Record<string, boolean> {
  * ## 入口不是一次性的
  *
  * 悬浮窗「关闭 = 隐藏」（**不销毁**，见 `companion.rs` 的 `CloseRequested`）⇒ 关掉后
- * 仍能从**这里**或托盘重开（P9 B4）。默认可见（§3.16「默认显示」）。
+ * 仍能从**这里**或托盘重开（P9 B4）。默认隐藏，需手动打开。
  *
  * ## 状态自明
  *
@@ -828,7 +828,7 @@ function Layout() {
 
         {/* ══ 内容区（L3 视图参数）：懒加载页面 ══ */}
         <main className="min-w-0 flex-1 overflow-y-auto bg-background overscroll-contain">
-          {/* P6：首次引导条（可关闭 + 持久化；内容由真实绑定派生，降级项不列）。 */}
+          {/* P6：首次引导条（可关闭 + 持久化；内容为四步基本流程）。 */}
           <FirstRunHint />
           {/* 懒加载页面在这里挂起。Suspense **必须留在路由层**：
               放在更外层会让侧栏一起被 fallback 替换（切页时整屏闪），

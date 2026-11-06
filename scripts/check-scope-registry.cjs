@@ -3998,14 +3998,31 @@ check("★ P6 首次引导：默认显示、关闭后持久化不再显示", () 
   return "首启显示 / 关闭持久化 / 无存储显示";
 });
 
-check("★ P6 引导内容由真实绑定派生（降级项不写进引导，防「引导里有、按了没反应」）", () => {
+check("★ P6 首次引导：讲基本流程而不是快捷键（退回快捷键清单即变红）", () => {
+  /* 首次用户需要的是「账号从哪来、程序位怎么切」，不是熟练后才用得上的加速器。
+     引导必须列全四步，且按钮名复用真实词条（界面改名时引导自动跟随）；
+     若又改回 `⌘K` / `⌘1..N` / `/` 的清单 ⇒ 本条变红。 */
   const code = readCode(FIRST_RUN_COMPONENT);
-  if (!/planScopeShortcuts\(/.test(code)) throw new Error("引导没有用 `planScopeShortcuts` 派生内容");
-  if (!/bindings\.size\s*>\s*0/.test(code)) {
-    throw new Error("引导没有按 `bindings.size > 0` 决定是否列出 ⌘1..N");
+  for (const key of [
+    "firstRun.step.scope.title",
+    "firstRun.step.account.title",
+    "firstRun.step.switch.title",
+    "firstRun.step.daily.title",
+  ]) {
+    if (!code.includes(key)) throw new Error(`首次引导缺少基本流程步骤：${key}`);
+  }
+  for (const key of [
+    "shared.addDrawer.title",
+    "shared.toolbar.quickRefresh",
+    "shared.toolbar.quickCheckin",
+  ]) {
+    if (!code.includes(key)) throw new Error(`首次引导没有复用真实按钮词条：${key}`);
+  }
+  if (/planScopeShortcuts|firstRun\.openPalette|firstRun\.scopeShortcut|firstRun\.listSearch/.test(code)) {
+    throw new Error("首次引导退回了快捷键清单 —— 首次用户需要的是基本流程");
   }
   if (!/shouldShowFirstRunHint|dismissFirstRunHint/.test(code)) throw new Error("引导没有接持久化");
-  return "引导走 planScopeShortcuts + bindings.size 判据 + 持久化";
+  return "四步基本流程 · 按钮名复用真实词条 · 不再列快捷键 · 持久化";
 });
 
 check("★ P6 设置项：reason=too-many 时不显示快捷键开关（无可开启之物，防假控件）", () => {
@@ -4504,7 +4521,7 @@ check("★ P9 T03 状态语言：首帧 `<Skeleton>`、空态 `<EmptyState>`（�
  *
  * 上面 11 条锁 P9 T01/T02/T03；下面 5 条锁 T04 最易回退的判据：
  *   ★ 侧栏左下角入口存在且是**开关**（不是第二个「看起来能切」的控件）/
- *     可见性偏好落在 L0 localStorage（默认显示）+ 与托盘 / 关闭按钮经事件同步 /
+ *     可见性偏好落在 L0 localStorage（默认隐藏）+ 与托盘 / 关闭按钮经事件同步 /
  *     入口**不是一次性的**（关闭 = 隐藏、可重开）+ 托盘勾选态随可见性事件刷新 /
  *     入口词条 zh + en 同步。
  *
@@ -4552,9 +4569,10 @@ check("★ P9 T04 不是第二个「看起来能切」的控件：侧栏入口�
   return "无 Select / Tabs / DropdownMenu · aria-pressed 开关";
 });
 
-check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认显示）+ listen 同步（缺同步即变红）", () => {
-  /* 载体必须是 L0 localStorage（§2.1 / §1.5），默认**显示**（§3.16）；且必须 `listen`
-     可见性事件与托盘 / 关闭按钮同步（否则三面会各说各话 = 多个能切的控件）。 */
+check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认隐藏）+ listen 同步（缺同步即变红）", () => {
+  /* 载体必须是 L0 localStorage（§2.1 / §1.5），默认**隐藏**（2026-11-06 调整：悬浮窗多数时候
+     没有数据，常驻显示等于长期占着一块空窗）；且必须 `listen` 可见性事件与托盘 / 关闭按钮同步
+     （否则三面会各说各话 = 多个能切的控件）。 */
   if (!fs.existsSync(path.join(ROOT, COMPANION_VISIBILITY_TS))) {
     throw new Error(`缺少 ${COMPANION_VISIBILITY_TS}`);
   }
@@ -4568,10 +4586,10 @@ check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认显示）+ list
   if (!/"companion-visibility"/.test(lib)) {
     throw new Error("hook 的事件名与 companion.rs 的 `VISIBILITY_EVENT` 不一致");
   }
-  if (!/raw === null \? true/.test(lib)) {
-    throw new Error("偏好默认值不是「显示」（未设置时应返回 true，§3.16「默认显示」）");
+  if (!/raw === null \? false/.test(lib)) {
+    throw new Error("偏好默认值不是「隐藏」（未设置时应返回 false）");
   }
-  return "localStorage(默认显示) · listen(companion-visibility) · 与托盘/关闭按钮同源";
+  return "localStorage(默认隐藏) · listen(companion-visibility) · 与托盘/关闭按钮同源";
 });
 
 check("★ P9 T04 入口不是一次性的 + 勾选态同步（关闭=隐藏可重开；托盘随事件刷新）", () => {

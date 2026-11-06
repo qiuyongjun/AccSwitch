@@ -100,9 +100,15 @@ export const en = {
 
   // ---- First-run hint (P6 §1.5) ----
   "firstRun.title": "Quick start",
-  "firstRun.openPalette": "Press {shortcut} to open the command palette and search across scopes.",
-  "firstRun.scopeShortcut": "Press {shortcut} to switch directly to a scope.",
-  "firstRun.listSearch": "Press / on the accounts page to focus search.",
+  "firstRun.subtitle": "Four steps to add accounts and start using them",
+  "firstRun.step.scope.title": "Choose a scope",
+  "firstRun.step.scope.desc": "Pick a platform and region in the top bar; accounts, usage and gateway are scoped independently.",
+  "firstRun.step.account.title": "Add an account",
+  "firstRun.step.account.desc": "On the Accounts page, click \"{add}\" to sign in or scan; import an existing local login if you have one.",
+  "firstRun.step.switch.title": "Switch a program slot",
+  "firstRun.step.switch.desc": "Click an IDE / CLI / VS Code slot on an account card; desktop clients are closed and reopened.",
+  "firstRun.step.daily.title": "Keep status fresh",
+  "firstRun.step.daily.desc": "Use \"{refresh}\" and \"{checkin}\" in the page header to update credits, check-ins and credentials.",
   "firstRun.dismiss": "Got it",
 
   // ---- Undo toast (P6 T04 §1.4) ----

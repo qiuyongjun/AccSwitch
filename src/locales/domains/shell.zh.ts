@@ -95,9 +95,15 @@ export const zh = {
 
   // ---- 首次引导（P6 §1.5）----
   "firstRun.title": "快速上手",
-  "firstRun.openPalette": "按 {shortcut} 打开命令面板，跨作用域搜索并跳转。",
-  "firstRun.scopeShortcut": "按 {shortcut} 直接切换到对应作用域。",
-  "firstRun.listSearch": "在账号页按 / 聚焦搜索框。",
+  "firstRun.subtitle": "按四步完成账号接入与日常使用",
+  "firstRun.step.scope.title": "选择作用域",
+  "firstRun.step.scope.desc": "在顶栏选择平台与区域；账号、用量、网关都按作用域独立。",
+  "firstRun.step.account.title": "添加账号",
+  "firstRun.step.account.desc": "在「账号」页点「{add}」，扫码或登录接入；本机已有登录态可直接导入。",
+  "firstRun.step.switch.title": "切换程序位",
+  "firstRun.step.switch.desc": "点账号卡上的 IDE / CLI / VS Code 等按钮切换；桌面程序位会先关闭再重启客户端。",
+  "firstRun.step.daily.title": "保持状态最新",
+  "firstRun.step.daily.desc": "页头的「{refresh}」「{checkin}」批量更新积分、签到与凭据状态。",
   "firstRun.dismiss": "知道了",
 
   // ---- 撤销 toast（P6 T04 §1.4）----
