@@ -27,8 +27,6 @@
   <a href="README.pt.md">Português</a>
 </p>
 
-# AccSwitch
-
 **로컬에서 동작하는** 멀티 계정 워크벤치입니다. **WorkBuddy / CodeBuddy / TraeWork / Qoder** 네 제품 라인, **6개 스코프**의 계정을 한곳에 모아 QR·기기 코드 로그인, 원클릭 계정 전환, 출석 체크와 크레딧, 사용량 통계, 세션 사본 동기화를 제공하고, 모델 할당량을 OpenAI / Anthropic 호환 API로 로컬의 다른 AI 도구에 개방합니다.
 
 |  |  |
@@ -186,8 +184,8 @@ flowchart TB
 | --- | --- | --- |
 | **데스크톱 앱** | [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 에서 설치 파일 다운로드 | Tauri 패키지, 일상 사용에 권장 |
 | **webui** | 소스에서 빌드(아래 참조) | 데스크톱 앱과 동일한 프런트엔드 산출물을 로컬 HTTP로 제공 |
-| **Docker** | 사전 빌드 이미지 `ghcr.io/nextagentx/buddy-switch`(amd64 / arm64) 받기 | 컨테이너에서 도는 것은 **headless 서버**(webui + API 게이트웨이)이며 데스크톱 전환기가 **아닙니다**. [Docker 배포](docs/guides/DOCKER.md) 참고 |
-| **온라인 데모** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | 읽기 전용 데모, 계정·사용량은 모두 가상 데이터 |
+| **Docker** | 소스에서 빌드(사전 빌드 이미지 `ghcr.io/qiuyongjun/accswitch`는 아직 미배포) | 컨테이너에서 도는 것은 **headless 서버**(webui + API 게이트웨이)이며 데스크톱 전환기가 **아닙니다**. [Docker 배포](docs/guides/DOCKER.md) 참고 |
+| **로컬 데모** | `npm run dev:demo`(온라인 데모는 아직 미배포) | 읽기 전용 데모, 계정·사용량은 모두 가상 데이터 |
 
 > npm 패키지는 아직 배포되지 않아 `npm i -g` 로는 설치되지 않습니다. webui는 아래 소스 빌드를 사용하세요.
 >
@@ -419,22 +417,10 @@ npm/                     # npm 패키지(미배포)
 
 - ⭐ **Star 눌러주기** — 가장 직접적인 도움입니다. 더 많은 사람이 검색할 수 있고, 유지보수를 계속할 근거가 됩니다.
 - 🐞 **문제를 구체적으로** — 재현 가능한 이슈 하나가 “안 돼요” 열 마디보다 낫고, 보통 다음 버전에서 고쳐집니다.
-- ☕ **작성자에게 커피 한 잔** (완전 자발적, 어떤 기능도 잠기지 않습니다)
-
-<table>
-  <thead>
-    <tr><th>위챗페이</th><th>알리페이</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/donate-wechat.png" alt="위챗페이 QR" width="240" /></td>
-      <td><img src="docs/images/donate-alipay.jpg" alt="알리페이 QR" width="240" /></td>
-    </tr>
-  </tbody>
-</table>
 
 ## 감사의 글
 
+- 이 프로젝트는 NextAgentX의 AccSwitch에서 파생되었습니다(PolyForm Noncommercial 1.0.0). 원저작권 및 Required Notice는 [LICENSE](./LICENSE)에 유지되어 있습니다.
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — WorkBuddy 계정 데이터 형식과 멀티 계정 전환 방식을 참고했습니다.
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — 모델 할당량을 OpenAI 호환 API로 제공하는 아이디어를 참고했습니다.
 

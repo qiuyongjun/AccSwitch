@@ -11,7 +11,7 @@
     - 清掉进程环境里重复的大小写代理变量（http_proxy 与 HTTP_PROXY 同时存在会让 .NET
       构造子进程环境块时抛「字典中的关键字重复」→ 任何原生命令都起不来，而报错完全看不出原因）；
     - 自动定位受管 Node 与 rustup 工具链（cargo 不在 PATH 也能用）；
-    - 检测 ~/.buddy-switch/buddy-switch-updater.key：有则签名生成 updater 产物（.sig），
+    - 检测 ~/.buddy-switch/accswitch-updater.key：有则签名生成 updater 产物（.sig），
       无则临时关掉 createUpdaterArtifacts，只打本地安装包、不报错；
     - 构建输出同时落 logs/，便于失败后复查；
     - 校验产物**确实是本次构建生成的**（时间戳新鲜度），避免构建失败却把旧 exe 当成功。
@@ -20,7 +20,7 @@
   release（默认）或 debug。
 
 .PARAMETER SignPassword
-  updater 私钥密码，默认 buddy-switch-dev。
+  updater 私钥密码，默认 accswitch-dev。
 
 .PARAMETER OutDir
   产物收集目录，默认 deliverables（相对仓库根）。
@@ -47,7 +47,7 @@
 param(
   [ValidateSet("release", "debug")]
   [string]$Mode = "release",
-  [string]$SignPassword = "buddy-switch-dev",
+  [string]$SignPassword = "accswitch-dev",
   [string]$OutDir = "deliverables",
   [switch]$SkipStamp,
   [switch]$Fast
@@ -207,7 +207,7 @@ Write-Host ("      本次打包版本：{0}" -f $stampedVer) -ForegroundColor Gr
 
 # ---------------------------------------------------------------- 3. 签名密钥
 Write-Step "3/5" "检测 updater 签名密钥 ..."
-$keyPath = Join-Path $env:USERPROFILE ".buddy-switch\buddy-switch-updater.key"
+$keyPath = Join-Path $env:USERPROFILE ".buddy-switch\accswitch-updater.key"
 $tempCfg = $null
 $signing = $false
 # 需要临时改写的 tauri 配置项（bundle / build …）先攒在这里，最后合并成**一个** --config 文件：

@@ -3,7 +3,7 @@
 **WorkBuddy / TraeWork 多账号管理工具**（webui 形态）：启动本地服务后用浏览器操作，能力与桌面 App 一致。
 
 > 桌面 App（Tauri）请从 [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) 下载安装包。
-> 在线只读演示：<https://nextagentx.github.io/AccSwitch/>
+> 在线只读演示尚未部署；本地可用 `npm run dev:demo` 启动演示。
 
 > **本包（`@nextagentx/buddy-switch`）暂未发布到 npm**（npmjs 账号侧受限，通道已就绪但未开启）。
 > 在开启之前，请用下面的「从 GitHub Releases 直接下载」方式获取 webui 形态；通道开启后以 npm 命令为准。
@@ -79,18 +79,6 @@ buddy-switch version      # 版本号
 
 **欢迎 PR 与 Issue** —— 报 Bug、补文档、适配新版客户端、改进界面都可以。提交前的检查项与几条硬性要求（不要提交本地数据与来源不明的代码、贡献按同一许可分发）见[贡献指南](https://github.com/qiuyongjun/AccSwitch/blob/main/CONTRIBUTING.md)。
 
-## 支持这个项目
-
-如果 AccSwitch 帮到了你，可以请作者喝杯饮料 ☕
-
-<table>
-  <tbody>
-    <tr>
-      <td align="center"><img src="https://raw.githubusercontent.com/qiuyongjun/AccSwitch/main/docs/images/donate-wechat.png" alt="微信支付收款码" width="240" /><br />微信支付</td>
-      <td align="center"><img src="https://raw.githubusercontent.com/qiuyongjun/AccSwitch/main/docs/images/donate-alipay.jpg" alt="支付宝收款码" width="240" /><br />支付宝</td>
-    </tr>
-  </tbody>
-</table>
 
 ## 许可
 

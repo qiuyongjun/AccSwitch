@@ -39,9 +39,9 @@ case "$UPDATE_OS" in
     # 桌面端只发 deb + AppImage，其中**只有 AppImage 能自更新**：tauri-plugin-updater
     # 在 Linux 上仅支持 AppImage（deb 归系统包管理器，无法原地升级）。
     # createUpdaterArtifacts=true 时 appimage 目标会额外产出
-    #   <Product>_<ver>_<arch>.AppImage.tar.gz 与同名 .sig
+    #   <Product>_<ver>_<arch>.AppImage 与同名 .sig
     DEFAULT_BUNDLE="appimage"
-    SIG_GLOB="*.AppImage.tar.gz.sig"
+    SIG_GLOB="*.AppImage.sig"
     # 已装的旧客户端按 tauri 的平台候选顺序回退查找，第一个就是带 bundle 后缀的键。
     # 两个键都给，新老客户端都能命中（与 windows-*-nsis / windows-* 同一做法）。
     PLATFORM_KEYS="linux-$UPDATE_ARCH-appimage linux-$UPDATE_ARCH"

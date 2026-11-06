@@ -27,8 +27,6 @@
   <a href="README.pt.md">Português</a>
 </p>
 
-# AccSwitch
-
 Una estación de trabajo multicuenta **totalmente local**: reúne las cuentas de cuatro líneas de producto — **WorkBuddy / CodeBuddy / TraeWork / Qoder** — y **6 ámbitos** en un solo lugar. Inicio de sesión por QR o código de dispositivo, cambio de cuenta en un clic, registros diarios y créditos, analítica de uso, sincronización de copias de sesión y publicación de tu cuota de modelos a otras herramientas de IA locales mediante endpoints compatibles con OpenAI / Anthropic.
 
 |  |  |
@@ -186,8 +184,8 @@ flowchart TB
 | --- | --- | --- |
 | **Aplicación de escritorio** | Descargar el instalador desde [GitHub Releases](https://github.com/qiuyongjun/AccSwitch/releases/latest) | Empaquetada con Tauri; recomendada para el día a día |
 | **webui** | Compilar desde el código (abajo) | El mismo bundle del frontend, servido por HTTP local |
-| **Docker** | Descargar la imagen precompilada `ghcr.io/nextagentx/buddy-switch` (amd64 / arm64) | Dentro del contenedor corre el **servidor headless** (webui + pasarelas API), **no** el conmutador de escritorio; ver [Despliegue con Docker](docs/guides/DOCKER.md) |
-| **Demo en línea** | [GitHub Pages](https://nextagentx.github.io/AccSwitch/) | Demo de solo lectura; cuentas y uso son ficticios |
+| **Docker** | Compilar desde el código fuente (la imagen precompilada `ghcr.io/qiuyongjun/accswitch` aún no está publicada) | Dentro del contenedor corre el **servidor headless** (webui + pasarelas API), **no** el conmutador de escritorio; ver [Despliegue con Docker](docs/guides/DOCKER.md) |
+| **Demo local** | `npm run dev:demo` (la demo en línea aún no está desplegada) | Demo de solo lectura; cuentas y uso son ficticios |
 
 > El paquete npm aún no está publicado, así que `npm i -g` no lo instalará; para la forma webui usa la compilación desde el código.
 >
@@ -419,22 +417,10 @@ Guía completa (qué se puede hacer, checklist de PR, convenciones de código): 
 
 - ⭐ **Dar una estrella** — la ayuda más directa: el proyecto se encuentra antes y el autor sabe que merece la pena mantenerlo.
 - 🐞 **Describir bien un problema** — una issue reproducible vale por diez «no funciona» y suele entrar en la siguiente versión.
-- ☕ **Invitar un café al autor** (totalmente opcional, ninguna función queda bloqueada)
-
-<table>
-  <thead>
-    <tr><th>WeChat Pay</th><th>Alipay</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><img src="docs/images/donate-wechat.png" alt="WeChat Pay QR" width="240" /></td>
-      <td><img src="docs/images/donate-alipay.jpg" alt="Alipay QR" width="240" /></td>
-    </tr>
-  </tbody>
-</table>
 
 ## Agradecimientos
 
+- Este proyecto deriva de AccSwitch de NextAgentX (PolyForm Noncommercial 1.0.0); el copyright original y el Required Notice se conservan en [LICENSE](./LICENSE).
 - [changexbc/workbuddy-switch](https://github.com/changexbc/workbuddy-switch) — por el formato de datos de cuenta de WorkBuddy y el enfoque de cambio multicuenta.
 - [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) — por la idea de exponer la cuota de modelos como servicio compatible con OpenAI.
 

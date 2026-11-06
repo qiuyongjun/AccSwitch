@@ -31,7 +31,8 @@ services:
   buddy-switch:
     # 预构建镜像。名字必须与 .github/workflows/docker.yml 的 `IMAGE` 逐字一致
     # （`scripts/check-docker.cjs` 会校验，连 README 与 docs/guides/DOCKER.md 一起）。
-    image: ghcr.io/nextagentx/buddy-switch:latest
+    # 首版未开启 PUBLISH_DOCKER，镜像尚未推送；拉不到时会回落到下面的 build。
+    image: ghcr.io/qiuyongjun/accswitch:latest
     # 源码构建 fallback：只有 pull 不到时才用到，见文件头。
     build:
       context: .
