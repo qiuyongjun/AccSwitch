@@ -3,9 +3,36 @@
   "publishedAt": "2026-11-10T13:48:00+08:00",
   "sections": [
     {
+      "title": "其他维护",
+      "items": [
+        "release：发布 v2026.11.101348",
+        "release：同步 Cargo.lock 的版本号",
+        "release：发布 v2026.11.101107"
+      ]
+    },
+    {
       "title": "构建与 CI",
       "items": [
-        "ci：锁文件源归一为 npmjs，并给 npm install 加重试"
+        "ci：锁文件源归一为 npmjs，并给 npm install 加重试",
+        "release：CLI 裸二进制在 Release 中改用 AccSwitch 品牌名"
+      ]
+    },
+    {
+      "title": "问题修复",
+      "items": [
+        "accounts：积分首屏占位与刷新判据整改"
+      ]
+    },
+    {
+      "title": "新功能",
+      "items": [
+        "ui：首次引导改为四步基本流程，悬浮窗默认隐藏"
+      ]
+    },
+    {
+      "title": "文档",
+      "items": [
+        "写明 Release 里哪些文件不用手动下载"
       ]
     }
   ],
