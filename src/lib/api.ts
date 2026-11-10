@@ -82,6 +82,7 @@ import type {
   UpdateInfo,
   VscodeCodebuddyPluginStatus,
 } from "./types";
+import { mapWithConcurrency } from "./concurrency";
 import { demoModeEnabled, demoUnavailableMessage } from "./demo-mode";
 import { displayText } from "./display-text";
 import { localizeCodedStrings, localizeError } from "./error-code";
@@ -1667,9 +1668,11 @@ export async function getCheckinStatusMap(
     return map;
   }
 
-  // 桌面端命令是单账号的，无法再合并 ⇒ 并行发出。
-  await Promise.all(
-    accountIds.map(async (accountId) => {
+  // 桌面端命令是单账号的，无法再合并 ⇒ 用有界并发发出（无上限的 Promise.all 会把
+  // N 个账号的签到请求一次性拍给上游，账号一多就触发限流，整体反而更慢）。
+  await mapWithConcurrency(
+    accountIds,
+    async (accountId) => {
       try {
         map[accountId] = await call<CheckinStatusEntry>("checkin_status", {
           scope: scopeOf("workbuddy", region ?? "cn"),
@@ -1678,7 +1681,8 @@ export async function getCheckinStatusMap(
       } catch {
         // 单个失败不拖垮整批：调用方按「未命中」处理（保留原值）。
       }
-    }),
+    },
+    { concurrency: 4 },
   );
   return map;
 }
@@ -1820,8 +1824,9 @@ export async function queryTravelStatuses(
     return { statuses, failedIds };
   }
 
-  await Promise.all(
-    ids.map(async (accountId) => {
+  await mapWithConcurrency(
+    ids,
+    async (accountId) => {
       try {
         statuses[accountId] = await call<TravelStatus>("get_travel_status", {
           accountId,
@@ -1830,7 +1835,8 @@ export async function queryTravelStatuses(
       } catch {
         failedIds.push(accountId);
       }
-    }),
+    },
+    { concurrency: 4 },
   );
   return { statuses, failedIds };
 }

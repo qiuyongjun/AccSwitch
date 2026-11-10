@@ -175,6 +175,21 @@ interface FailedItem {
 }
 
 /**
+ * 额度 / 签到 / 程序位的**上次成功快照**（按作用域隔离）。
+ *
+ * 这三份数据是页面私有 state，且带「部分失败保留旧值」的合并语义，搬进通用
+ * `useCachedResource` 会改变失败规则。这里只做**首屏占位**：重挂载先渲染上次结果，
+ * 同时照常向后台上游请求 —— 请求次数与失败语义都不变，只消除「空白等几十秒」。
+ */
+interface QoderEnrichmentSnapshot {
+  credits: Record<string, QoderCreditsRow>;
+  checkinRows: Record<string, QoderCheckinRow>;
+  checkinUnavailable: boolean;
+  programs: QoderProgramStatus[] | null;
+}
+const enrichmentCache = new Map<string, QoderEnrichmentSnapshot>();
+
+/**
  * Qoder 账号页 —— 作用域外壳。
  *
  * 按**完整作用域**渲染带 `key` 的内容面板（`docs/specs/P4-TOOLBAR-ARCH.md` §1.11①）：
@@ -216,14 +231,31 @@ function QoderAccountsPanel({
   const [importing, setImporting] = useState(false);
 
   /* ── 额度 / 签到（**上游调用**，与账号列表分开加载；见文件头「加载策略」） ── */
-  const [credits, setCredits] = useState<Record<string, QoderCreditsRow>>({});
-  const [checkinRows, setCheckinRows] = useState<Record<string, QoderCheckinRow>>({});
-  /** 区域签到快照是否**已经尝试过**（成功 / 失败都算）—— 抽屉的按需补取要等它落地，避免重复请求。 */
+  const cachedEnrichment = enrichmentCache.get(scope);
+  const [credits, setCredits] = useState<Record<string, QoderCreditsRow>>(
+    () => cachedEnrichment?.credits ?? {},
+  );
+  const [checkinRows, setCheckinRows] = useState<Record<string, QoderCheckinRow>>(
+    () => cachedEnrichment?.checkinRows ?? {},
+  );
+  /**
+   * 区域签到快照是否**本轮已经尝试过**（成功 / 失败都算）—— 抽屉的按需补取要等它落地，避免重复请求。
+   *
+   * ⚠️ 初值**不能**看 `enrichmentCache` 有没有条目（spec §11 的契约是「已尝试过」）。
+   * 快照缓存只代表「上次会话读到过」，不代表这一轮的区域请求已经回来：
+   * 拿它当 `true`，缓存里恰好没有某账号的签到行时，抽屉会立刻补发
+   * `qoder_checkin_status_map([uid])`，与在途的区域快照并发多打一轮上游。
+   * 缓存只用于 `credits` / `checkinRows` 的**初值占位**（上面两行）。
+   */
   const [checkinLoaded, setCheckinLoaded] = useState(false);
   /** 本区域签到通道是否未开放（`qoder_checkin_status.unavailable`）—— 菜单要如实说「未开放」。 */
-  const [checkinUnavailable, setCheckinUnavailable] = useState(false);
+  const [checkinUnavailable, setCheckinUnavailable] = useState(
+    () => cachedEnrichment?.checkinUnavailable ?? false,
+  );
   /* 程序位状态（只读）：决定页脚程序位行、「当前登录」徽章与「切换到此账号」的可用性。 */
-  const [programs, setPrograms] = useState<QoderProgramStatus[] | null>(null);
+  const [programs, setPrograms] = useState<QoderProgramStatus[] | null>(
+    () => cachedEnrichment?.programs ?? null,
+  );
 
   /* ── 视图参数（页内 state，不进 URL、不进全局 store —— `account-list-view.ts` 的纪律） ── */
   const [query, setQuery] = useState("");
@@ -331,15 +363,36 @@ function QoderAccountsPanel({
     /* 被更新的读取取代 ⇒ 丢弃整批（三份同批写入，保持同一时刻的快照）。 */
     if (request !== enrichmentSeq.current) return;
     setCheckinLoaded(true);
-    if (programView.status === "fulfilled") {
-      setPrograms(programView.value.programs ?? []);
+
+    const nextPrograms =
+      programView.status === "fulfilled" ? (programView.value.programs ?? []) : null;
+    const nextCredits =
+      creditsView.status === "fulfilled"
+        ? Object.fromEntries(creditsView.value.accounts.map((row) => [row.uid, row]))
+        : null;
+    const nextCheckin =
+      checkinView.status === "fulfilled"
+        ? Object.fromEntries(checkinView.value.accounts.map((row) => [row.uid, row]))
+        : null;
+    const nextUnavailable =
+      checkinView.status === "fulfilled" ? Boolean(checkinView.value.unavailable) : null;
+
+    if (nextPrograms) setPrograms(nextPrograms);
+    if (nextCredits) setCredits(nextCredits);
+    if (nextCheckin) {
+      setCheckinRows(nextCheckin);
+      setCheckinUnavailable(nextUnavailable ?? false);
     }
-    if (creditsView.status === "fulfilled") {
-      setCredits(Object.fromEntries(creditsView.value.accounts.map((row) => [row.uid, row])));
-    }
-    if (checkinView.status === "fulfilled") {
-      setCheckinRows(Object.fromEntries(checkinView.value.accounts.map((row) => [row.uid, row])));
-      setCheckinUnavailable(Boolean(checkinView.value.unavailable));
+
+    /* 只有真拿到至少一层结果才刷新快照：整批失败时保留旧缓存，下次重挂载仍有东西可看。 */
+    if (nextPrograms || nextCredits || nextCheckin) {
+      const previous = enrichmentCache.get(scope);
+      enrichmentCache.set(scope, {
+        credits: nextCredits ?? previous?.credits ?? {},
+        checkinRows: nextCheckin ?? previous?.checkinRows ?? {},
+        checkinUnavailable: nextUnavailable ?? previous?.checkinUnavailable ?? false,
+        programs: nextPrograms ?? previous?.programs ?? null,
+      });
     }
   }, [scope]);
 

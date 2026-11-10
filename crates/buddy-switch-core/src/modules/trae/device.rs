@@ -34,6 +34,26 @@ use crate::modules::trae::variant::TraeVariant;
 /// 或小于该值的记录会在下次取用时就地重建，从而让旧的病态派生结果被自愈替换。
 pub const DEVICE_GEN: u32 = 2;
 
+/// `device_map.json` 的**进程内读改写锁**。
+///
+/// [`ensure_for_variant`] 是「读整表 → 插入一条 → 整表写回」，[`reset_for_variant`]
+/// 是「读整表 → 删一条 → 整表写回」。批量刷新改成 4 路并发后
+/// （`trae::credits::refresh_all_remaining_for` 的 `JoinSet`），同一账号会并发进入：
+///
+/// - 无锁时后写者覆盖先写者刚插入的条目 —— `derive` 对同一 `user_id` 是幂等的，
+///   所以**不会**造成身份漂移，但会让条目被反复重建、白写磁盘；
+/// - 与「重置设备」交错时，`ensure` 可能把刚被 `reset` 删掉的条目整表写回，
+///   表现为「点了重置但设备标识还在」（下一次 `ensure` 又会重建）。
+///
+/// 只保证**同一进程内**串行：`device_map.json` 按模块文档还会被 MITM 代理进程读写，
+/// 跨进程仍是「原子写 + 后写者胜」，靠 `derive` 的确定性兜底。
+static MAP_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 取锁；持锁线程 panic 过也继续（毒化不应让设备标识永久不可用）。
+fn lock_map_writes() -> std::sync::MutexGuard<'static, ()> {
+    MAP_WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 一个账号的伪设备标识。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeviceEntry {
@@ -188,6 +208,8 @@ pub fn ensure_for(user_id: &str) -> Result<DeviceEntry, String> {
 /// 重建结果按 `user_id` 确定性派生，因此「重建」对同一账号是幂等的——
 /// 不会因为反复调用而产生身份漂移。
 pub fn ensure_for_variant(variant: TraeVariant, user_id: &str) -> Result<DeviceEntry, String> {
+    /* 读改写必须整体串行：中途插入 → 写回之间被另一路覆盖，条目就会丢（见 `MAP_WRITE_LOCK`）。 */
+    let _guard = lock_map_writes();
     let mut map = load_map_for(variant);
     let stale = map
         .get(user_id)
@@ -218,6 +240,8 @@ pub fn reset_for(user_id: &str) -> Result<bool, String> {
 /// 注意：由于派生是确定性的，删除后重建得到的是**同一套 ID**——
 /// 想真正换一套身份，需要连 `user_id` 一起变（新账号）或改用随机种子派生。
 pub fn reset_for_variant(variant: TraeVariant, user_id: &str) -> Result<bool, String> {
+    /* 与 `ensure_for_variant` 共用同一把锁：否则并发 `ensure` 会把刚删掉的条目写回来。 */
+    let _guard = lock_map_writes();
     let mut map = load_map_for(variant);
     let removed = map.remove(user_id).is_some();
     if removed {

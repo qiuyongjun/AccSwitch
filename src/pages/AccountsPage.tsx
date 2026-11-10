@@ -68,6 +68,7 @@ import { attentionOf, needsManualAttention } from "@/lib/account-attention";
 import { accountSearchText } from "@/lib/account-search";
 /** 批量动作的并发口径（与积分刷新同一档削峰）：串行会让 20 个账号的批处理变成 20 次 RTT。 */
 import { mapWithConcurrency } from "@/lib/concurrency";
+import { readCreditCache, creditCacheNote } from "@/lib/credit-cache";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
 import {
@@ -324,6 +325,16 @@ function RegionPanel({ region }: { region: Region }) {
 
   const descriptor = regionDescriptor(region);
 
+  /**
+   * 稳定的账号 id 串。
+   *
+   * `reconcileAccounts` 每次都换一个新数组（哪怕内容完全相同），若 effect 直接依赖
+   * `accounts`，刷新完成后的回读会把签到 / 旅行 / 成长三路被动请求整轮重放一遍。
+   * 依赖这串 id 后：只有**账号集合真的变了**才重跑。
+   */
+  const accountIds = useMemo(() => accounts.map((account) => account.id), [accounts]);
+  const accountIdsKey = useMemo(() => accountIds.join(","), [accountIds]);
+
   /* 「重新检测」两处入口（错误 Alert / 详情抽屉空态）各自的进行中态。 */
   const { busy: recheckAlertBusy, run: runRecheckAlert } = useRefreshAction();
   const { busy: recheckDrawerBusy, run: runRecheckDrawer } = useRefreshAction();
@@ -536,6 +547,40 @@ function RegionPanel({ region }: { region: Region }) {
    * 这里是**键控层面**的加固 —— 即便哪天重挂载被误删，键控本身仍能挡住跨作用域误操作。
    */
   const scope = scopeOf("workbuddy", region);
+  /**
+   * 展示用积分表 = 本轮真实结果 + 上次成功读数（localStorage）。
+   *
+   * 真实结果永远优先；缓存只负责让首屏立刻有数字，后台刷新回来会覆盖。
+   * **不要**把它用于排序 / 优先级判定（那些仍读 `creditMap`，避免用旧数据重排列表）。
+   */
+  const demoMode = api.isDemoMode();
+  /**
+   * 上次成功读数（**带写入时刻**）—— 只做首屏占位。
+   *
+   * ⚠️ 边界：不参与排序 / `attentionOf` / 优先级判定（那些必须读实时 `creditMap`，
+   * 否则 7 天前的读数会重排列表并误报状态）。展示时**必须**由 `cachedCreditAt`
+   * 补「上次读数 · N 分钟前」，三处（卡片 / 表格 / 抽屉）共用同一判据。
+   */
+  const cachedCredits = useMemo(
+    () => (demoMode ? {} : readCreditCache(scope, accountIds)),
+    [demoMode, scope, accountIds],
+  );
+  const cachedCreditValues = useMemo(
+    () => Object.fromEntries(Object.entries(cachedCredits).map(([id, entry]) => [id, entry.value])),
+    [cachedCredits],
+  );
+  const displayCreditMap = useMemo(
+    () =>
+      Object.keys(cachedCreditValues).length === 0
+        ? creditMap
+        : { ...cachedCreditValues, ...creditMap },
+    [cachedCreditValues, creditMap],
+  );
+  /** 该账号当前展示的是缓存值 ⇒ 返回写入时刻；已有实时值 ⇒ `undefined`。 */
+  const cachedCreditAt = useCallback(
+    (id: string): number | undefined => (creditMap[id] ? undefined : cachedCredits[id]?.at),
+    [creditMap, cachedCredits],
+  );
   const selectionKey = (id: string) => `${scope}:${id}`;
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
@@ -1091,6 +1136,7 @@ function RegionPanel({ region }: { region: Region }) {
       const ids = accounts.map((account) => account.id);
       let growthFailed = false;
       let travelFailed = 0;
+      let snapshotFailed = false;
       const growthScan =
         region === "cn"
           ? api
@@ -1108,30 +1154,65 @@ function RegionPanel({ region }: { region: Region }) {
       const travelScan = loadTravelMap(ids).then((result) => {
         travelFailed = result.failedIds.length;
       });
-      await Promise.all([
+      const [creditResult] = await Promise.all([
         refreshCredits(ids, { region }),
         travelScan,
         growthScan,
         /* ★ 凭据状态（昵称 / 到期 / 需重登）与顶栏 ⟳ 同一条命令。留在这是**必须**的：
            卡片的「凭据到期 / 刷新令牌到期」只有 `getAccounts` 能更新，移出会留下
            「其他数字都新了、凭据还是旧日期」的半新半旧卡片。失败不阻断其余数据。 */
-        reconcileAccounts(region).catch(() => undefined),
+        reconcileAccounts(region).catch(() => {
+          snapshotFailed = true;
+        }),
       ]);
       const next = await fetchTodayCheckinMap(ids, region);
       if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
-      /* toast 必须把范围说全，否则用户会以为「账号信息 / Token 也刷了」。 */
-      const description = growthFailed
-        ? t("wbAccounts.toast.quickRefreshTasksFailed", { n: ids.length })
-        : region === "cn"
-          ? t("wbAccounts.toast.quickRefreshScope", { n: ids.length })
-          : t("wbAccounts.toast.quickRefreshScopeNoTasks", { n: ids.length });
+
+      /*
+       * 按**层**判定，不再只看旅行 / 任务：
+       * 此前积分全读失败时也会亮「一键刷新完成」，用户关掉 toast 只看得到卡片上的「—」
+       * 与「读取失败」—— 那正是「点了刷新却没反应」的观感来源。
+       */
+      const creditOutcome =
+        creditResult.total === 0 || creditResult.failed === 0
+          ? "ok"
+          : creditResult.ok === 0
+            ? "fail"
+            : "partial";
+      const travelOutcome =
+        travelFailed === 0 ? "ok" : travelFailed >= ids.length ? "fail" : "partial";
+      const snapshotOutcome = snapshotFailed ? "fail" : "ok";
+      /* 只在**适用的层**上判定：国际版没有成长任务，不能拿它当「成功层」掩盖全失败。 */
+      const outcomes: ("ok" | "partial" | "fail")[] = [creditOutcome, travelOutcome, snapshotOutcome];
+      if (region === "cn") outcomes.push(growthFailed ? "fail" : "ok");
+      const allOk = outcomes.every((outcome) => outcome === "ok");
+      const allFail = outcomes.every((outcome) => outcome === "fail");
+
+      const parts: string[] = [];
+      if (creditResult.failed > 0) {
+        parts.push(t("wbAccounts.toast.quickRefreshCreditsFailed", { failed: creditResult.failed }));
+      }
       if (travelFailed > 0) {
-        /* 有账号没读到旅行状态 ⇒ **不报全成功**；已成功的项仍在界面上更新了。 */
-        toast.warning(t("wbAccounts.toast.quickRefreshTravelPartial", { n: ids.length, failed: travelFailed }), {
-          description,
-        });
-      } else {
+        parts.push(t("wbAccounts.toast.quickRefreshTravelFailed", { failed: travelFailed }));
+      }
+      if (growthFailed) parts.push(t("wbAccounts.toast.quickRefreshTasksPartFailed"));
+      if (snapshotFailed) parts.push(t("wbAccounts.toast.quickRefreshCredentialFailed"));
+      const partialDetail = parts.join(t("shared.punct.comma"));
+      /* 失败原因优先用后端给的第一条：只说「刷新失败」用户看不出下一步该做什么。 */
+      const failureReason = creditResult.failures[0]?.error ?? (partialDetail || undefined);
+
+      /* toast 必须把范围说全，否则用户会以为「账号信息 / Token 也刷了」。 */
+      const description = region === "cn"
+        ? t("wbAccounts.toast.quickRefreshScope", { n: ids.length })
+        : t("wbAccounts.toast.quickRefreshScopeNoTasks", { n: ids.length });
+      if (allOk) {
         toast.success(t("wbAccounts.toast.quickRefreshDone"), { description });
+      } else if (allFail) {
+        toast.error(t("wbAccounts.toast.quickRefreshFail"), { description: failureReason });
+      } else {
+        toast.warning(t("wbAccounts.toast.quickRefreshPartial", { n: ids.length }), {
+          description: partialDetail || description,
+        });
       }
       return true;
     } finally {
@@ -1542,13 +1623,9 @@ function RegionPanel({ region }: { region: Region }) {
   // 依赖里带上 `enabled`，开关切换后 effect 才会重跑：开→关立即停，关→开立即补一次。
   useEffect(() => {
     if (!autoCheckinConfig?.enabled) return;
-    if (!accounts.length) return;
+    if (!accountIdsKey) return;
     let cancelled = false;
-    void fetchTodayCheckinMap(
-      accounts.map((account) => account.id),
-      region,
-      () => cancelled,
-    ).then((next) => {
+    void fetchTodayCheckinMap(accountIdsKey.split(","), region, () => cancelled).then((next) => {
       if (!cancelled && Object.keys(next).length > 0) {
         setCheckinMap((prev) => ({ ...prev, ...next }));
       }
@@ -1556,7 +1633,8 @@ function RegionPanel({ region }: { region: Region }) {
     return () => {
       cancelled = true;
     };
-  }, [accounts, region, autoCheckinConfig?.enabled]);
+    // 依赖 id 串而不是数组：回读账号库产生的新数组不该重放这一轮上游查询。
+  }, [accountIdsKey, region, autoCheckinConfig?.enabled]);
 
   /**
    * 批量扫一次成长任务摘要（卡片提示标签）。
@@ -1567,7 +1645,7 @@ function RegionPanel({ region }: { region: Region }) {
    */
   useEffect(() => {
     if (region !== "cn") return;
-    if (!accounts.length) return;
+    if (!accountIdsKey) return;
     let cancelled = false;
     void api
       .growthTasksScan(scope)
@@ -1580,7 +1658,7 @@ function RegionPanel({ region }: { region: Region }) {
     return () => {
       cancelled = true;
     };
-  }, [accounts, region, scope]);
+  }, [accountIdsKey, region, scope]);
 
   /**
    * 刷**单个**账号的任务摘要（抽屉里跑完「一键完成 / 领取」后调用）。
@@ -1722,24 +1800,23 @@ function RegionPanel({ region }: { region: Region }) {
   // 首查：不受可见性门控 —— 否则「切到后台再切回来」会因为 effect 重跑被跳过而看到空态。
   useEffect(() => {
     if (!autoTravelConfig?.enabled) return;
-    if (!accounts.length) return;
+    if (!accountIdsKey) return;
     let cancelled = false;
-    const ids = accounts.map((account) => account.id);
-    void loadTravelMap(ids, () => cancelled);
+    void loadTravelMap(accountIdsKey.split(","), () => cancelled);
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts, region, autoTravelConfig?.enabled]);
+  }, [accountIdsKey, region, autoTravelConfig?.enabled]);
 
   // 轮询：**加可见性门控** —— 应用在后台时每分钟空打一次上游毫无意义（用户看不见）。
   // 只门控「要不要建这个定时器」，间隔 60 秒本身不动。
   useEffect(() => {
     if (!autoTravelConfig?.enabled) return;
-    if (!accounts.length) return;
+    if (!accountIdsKey) return;
     if (!documentVisible) return;
     let cancelled = false;
-    const ids = accounts.map((account) => account.id);
+    const ids = accountIdsKey.split(",");
     const timer = window.setInterval(() => {
       void loadTravelMap(ids, () => cancelled);
     }, 60_000);
@@ -1748,13 +1825,13 @@ function RegionPanel({ region }: { region: Region }) {
       window.clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts, region, autoTravelConfig?.enabled, documentVisible]);
+  }, [accountIdsKey, region, autoTravelConfig?.enabled, documentVisible]);
 
   // 只给尚未缓存的账号拉积分；切回首页不重复请求。点「刷新积分」才强制更新。
   useEffect(() => {
-    if (!accounts.length) return;
-    void ensureCredits(accounts.map((account) => account.id), region);
-  }, [accounts, ensureCredits, region]);
+    if (!accountIdsKey) return;
+    void ensureCredits(accountIdsKey.split(","), region);
+  }, [accountIdsKey, ensureCredits, region]);
 
   async function onRecheck() {
     await Promise.all([refreshRegionStatus(region), reconcileAccounts(region)]);
@@ -2573,7 +2650,9 @@ function RegionPanel({ region }: { region: Region }) {
       header: t("wbAccounts.table.credits"),
       align: "right",
       render: (account) => {
-        const creditMetric = creditMetricValues(creditMap[account.id]);
+        const creditMetric = creditMetricValues(displayCreditMap[account.id]);
+        /* 展示值来自落盘缓存时，必须自报时间（缓存最长 7 天，到期文案仍是当前态口径）。 */
+        const cachedAt = cachedCreditAt(account.id);
         const { current: currentCredit, total: totalCredit, expiry } = creditMetric;
         const creditTip = creditMetricTip(creditMetric, t);
         const priority = account.id === priorityAccountId;
@@ -2622,6 +2701,11 @@ function RegionPanel({ region }: { region: Region }) {
                 )}
               </span>
             )}
+            {cachedAt ? (
+              <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                {creditCacheNote(cachedAt, t)}
+              </span>
+            ) : null}
           </button>
         );
       },
@@ -2687,7 +2771,7 @@ function RegionPanel({ region }: { region: Region }) {
     ? displayText(detail.nickname) || displayText(detail.uid) || t("wbAccounts.card.unnamed")
     : "";
   const detailUid = displayText(detail?.uid);
-  const detailCredit = detail ? creditMap[detail.id] : undefined;
+  const detailCredit = detail ? displayCreditMap[detail.id] : undefined;
   const detailLoading = detail ? Boolean(creditLoadingMap[detail.id]) : false;
   const detailSections: DetailSection[] = detail
     ? [
@@ -2747,7 +2831,9 @@ function RegionPanel({ region }: { region: Region }) {
    */
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detail) return [];
-    const credit = creditMap[detail.id];
+    const credit = displayCreditMap[detail.id];
+    /* 展示值来自落盘缓存 ⇒ 副行补「上次读数 · N 分钟前」，不把旧值说成当前态。 */
+    const cachedAt = cachedCreditAt(detail.id);
     const checkedIn = checkinMap[detail.id];
     const expired = detail.expiresAt != null && detail.expiresAt < Date.now();
     const credBad = expired || Boolean(detail.needsRelogin);
@@ -2763,7 +2849,12 @@ function RegionPanel({ region }: { region: Region }) {
           credit && credit.totalCapacity != null
             ? `${formatCredits(credit.totalRemaining ?? 0)}/${formatCredits(credit.totalCapacity)}`
             : "—",
-        subText: nextBatch ? nextExpiryLabel(expiry, t, now) : t("shared.stat.noExpiring"),
+        subText: [
+          nextBatch ? nextExpiryLabel(expiry, t, now) : t("shared.stat.noExpiring"),
+          cachedAt ? creditCacheNote(cachedAt, t, now) : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
         /* 与卡片同一阈值：3 天内到期才用警示色（`isExpiryUrgent`）。 */
         tone: nextBatch && isExpiryUrgent(nextBatch.expireAt, now) ? "warn" : undefined,
         refreshKind: "credits",
@@ -2821,7 +2912,7 @@ function RegionPanel({ region }: { region: Region }) {
       },
     ];
     return stats;
-  }, [detail, creditMap, checkinMap, growthHints, growthRefreshBusyId, scope, t, now]);
+  }, [detail, displayCreditMap, cachedCreditAt, checkinMap, growthHints, growthRefreshBusyId, scope, t, now]);
 
   /**
    * 「凭据」页签的凭据信息 —— 状态徽标 + 三行明细（凭据到期 / 刷新令牌到期 / 最近续期）。
@@ -3484,8 +3575,9 @@ function RegionPanel({ region }: { region: Region }) {
                               todayCheckedIn={checkinMap[a.id]}
                               travelStatus={travelMap[a.id]}
                               growthHint={growthHints[a.id]}
-                              credit={creditMap[a.id]}
+                              credit={displayCreditMap[a.id]}
                               creditLoading={creditLoadingMap[a.id]}
+                              creditCachedAt={cachedCreditAt(a.id)}
                               creditPriority={a.id === priorityAccountId}
                               workbuddyActive={isWorkbuddyCurrent(a, current)}
                               codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending}

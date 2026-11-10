@@ -2095,7 +2095,10 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 
   if (page.includes("wbAccounts.table.current")) {
     throw new Error("`wbAccounts.table.current`（「当前」）已删除，请复用 `card.currentLogin`");
   }
-  if (!/creditMetricValues\(creditMap\[account\.id\]\)/.test(page)) {
+  /* ★ 2026-11-10：展示层引入了 `displayCreditMap`（实时结果 ⊕ 上次成功读数）。
+     断言只要求「积分列仍走 `creditMetricValues` 且以当前行为键」—— 允许两张同源表，
+     但**不允许**单元格自己读 `totalRemaining` / 手拼到期文案。 */
+  if (!/creditMetricValues\((?:displayCreditMap|creditMap)\[account\.id\]\)/.test(page)) {
     throw new Error("积分列未复用 `creditMetricValues` —— 当前/总额与到期口径会和卡片漂移");
   }
   /* ★ 2026-10-23：卡片与列表的到期文案统一由 `nextExpiryLabel` 生成（今天/明天/日期），
@@ -2118,6 +2121,95 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 
     throw new Error("卡片未导出 `creditMetricValues` —— 两个视图必须读同一份积分口径");
   }
   return "今日用量不进表 · 积分列=当前/总额+最近到期+优先 · 凭据列复用卡片 `CredentialExpiryMeta` · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
+});
+
+check("★ 积分「上次成功读数」占位：只落成功值 · 只做展示 · 必须自报时间 · 不顶掉实时值", () => {
+  /* 2026-11-10：首屏占位（`lib/credit-cache.ts`）引入了三条**会被悄悄违反**的边界，
+     逐条钉住。变异：写失败结果 / 拿缓存参与排序 / 去掉时间标注 / 让 loading 盖住读数
+     / 用单值时刻当 TTL 判据 ⇒ 本条变红。 */
+  const cache = stripComments(readCode("src/lib/credit-cache.ts"));
+  if (!/if \(!value\.ok\) return;/.test(cache)) {
+    throw new Error("`writeCreditCacheEntry` 未拒绝失败读数 —— 一次网络抖动会被固化成「上次读数」");
+  }
+  if (!/out\[id\] = \{ at: entry\.at, value: entry\.value \}/.test(cache)) {
+    throw new Error("`readCreditCache` 没有把 `at` 交出来 —— 展示层无法标注「上次读数」");
+  }
+  if (!/MAX_AGE_MS = 7 \* 24 \* 3600 \* 1000/.test(cache)) {
+    throw new Error("缓存过期窗口被改动 —— 「7 天」是 spec §12.1 的口径");
+  }
+
+  const page = stripComments(readCode("src/pages/AccountsPage.tsx"));
+  /* 实时值必须覆盖缓存：展开顺序反了，缓存会盖住刚拿到的新读数。 */
+  if (!/\{ \.\.\.cachedCreditValues, \.\.\.creditMap \}/.test(page)) {
+    throw new Error("`displayCreditMap` 的合并顺序不等于「缓存 ⊕ 实时」—— 旧值会盖掉新读数");
+  }
+  if (!/creditMap\[id\] \? undefined : cachedCredits\[id\]\?\.at/.test(page)) {
+    throw new Error("`cachedCreditAt` 没有在「已有实时值」时返回 undefined —— 新数据会被标成缓存");
+  }
+  /* 排序 / 优先级 / `attentionOf` 只能读实时 `creditMap`（spec §12.1 的边界）。 */
+  const priorityBlock = page.slice(
+    page.indexOf("const priorityOrdered"),
+    page.indexOf("const priorityAccountId"),
+  );
+  if (priorityBlock.includes("displayCreditMap") || priorityBlock.includes("cachedCredit")) {
+    throw new Error("积分优先级排序读了展示缓存 —— 旧读数会重排列表并误报「优先」");
+  }
+  const nextBatchBlock = page.slice(page.indexOf("const nextBatchById"), page.indexOf("const priorityOrdered"));
+  if (nextBatchBlock.includes("displayCreditMap")) {
+    throw new Error("`nextBatchById` 读了展示缓存 —— 排序键必须来自实时读数");
+  }
+  for (const [name, source] of [
+    ["表格「积分」列", "creditCacheNote(cachedAt"],
+    ["卡片指标行", "creditCachedAt"],
+  ]) {
+    if (!page.includes(source)) {
+      throw new Error(`${name}未接「上次读数」标注 —— 7 天前的批次会被渲染成「明天到期」`);
+    }
+  }
+
+  const card = stripComments(readCode("src/components/account-card.tsx"));
+  /* 判据顺序：先看有没有读数，再看 loading。反过来 loading 会把缓存占位整个盖住。 */
+  if (!/\{!credit \?\s*\(\s*creditLoading \?/.test(card)) {
+    throw new Error("卡片先判 `creditLoading` 再判 `credit` —— 转圈会盖住「上次读数」占位（§12.1 目标落空）");
+  }
+  if (!/creditCacheNote\(creditCachedAt/.test(card)) {
+    throw new Error("卡片没有把 `creditCachedAt` 渲染出来 —— 缓存的年龄必须可见");
+  }
+  return "只落 ok:true · 7 天过期 · 实时覆盖缓存 · 排序键只读实时 · 卡片/表格/抽屉均自报「上次读数」";
+});
+
+check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {
+  /* 变异：去掉 `creditInflight` 复用 / 把 TTL 判据改回 `creditRefreshedAt` /
+     只凭旅行与任务判定「一键刷新完成」 ⇒ 本条变红。 */
+  const store = stripComments(readCode("src/stores/accounts.ts"));
+  if (!/creditInflight\[region\]\.has\(id\)/.test(store)) {
+    throw new Error("积分请求丢了单航班复用 —— 挂载 / 自动刷新 / 手动刷新会各打一轮上游");
+  }
+  if (!/creditFullRefreshedAt/.test(store)) {
+    throw new Error("store 没有「全量刷新时刻」—— TTL 会被只补一个账号的请求推后");
+  }
+  if (!/coversRegion =[\s\S]{0,160}force && slice\.accounts\.length > 0/.test(store)) {
+    throw new Error("`creditFullRefreshedAt` 未限定「force 且覆盖全区」—— 部分刷新会把 TTL 重置");
+  }
+  const hook = stripComments(readCode("src/lib/use-credit-auto-refresh.ts"));
+  if (!/creditFullRefreshedAt\[region\]/.test(hook)) {
+    throw new Error("TTL 判据没读 `creditFullRefreshedAt` —— 存在长期失败账号时窗口恒为「新鲜」");
+  }
+  if (/CREDIT_REFRESH_INTERVAL_MS/.test(hook)) {
+    throw new Error("30 分钟静默定时器又回来了（spec §12.6 已取消：任何页面任何时间打上游，用户看不见）");
+  }
+  const page = stripComments(readCode("src/pages/AccountsPage.tsx"));
+  if (!/creditResult\.total === 0 \|\| creditResult\.failed === 0/.test(page)) {
+    throw new Error("一键刷新丢了积分层的成败判定 —— 积分全失败时仍会报「完成」");
+  }
+  if (!/\(\"ok\" \| \"partial\" \| \"fail\"\)\[\][\s\S]{0,120}\[creditOutcome, travelOutcome, snapshotOutcome\]/.test(page)) {
+    throw new Error("一键刷新没有把四层汇总成同一份 `outcomes` —— 「按层如实判定」会退化成单层判定");
+  }
+  const qoder = stripComments(readCode("src/pages/QoderAccountsPage.tsx"));
+  if (/useState\(\(\) => cachedEnrichment !== undefined\)/.test(qoder)) {
+    throw new Error("Qoder `checkinLoaded` 又用缓存代替「本轮已尝试」—— 抽屉会与在途快照并发补取（spec §11）");
+  }
+  return "单航班复用 · 全量时刻独立 · TTL 读全量时刻 · 无 30 分钟定时器 · 一键刷新按层判定 · Qoder 快照契约";
 });
 
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {

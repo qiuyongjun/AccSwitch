@@ -23,6 +23,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use futures_util::stream::{self, StreamExt};
 use serde_json::{json, Value};
 
 use buddy_switch_core::modules::account;
@@ -53,6 +54,13 @@ pub const DEFAULT_REFRESH_INTERVAL_MS: i64 = 30 * 60 * 1000;
 ///
 /// 探测成本 = 一次读锁 + 遍历空表，可忽略；换来「账号一进池就被刷新」。
 pub const EMPTY_POOL_PROBE_MS: u64 = 15_000;
+
+/// 后台余额刷新时的账号并发上限。
+///
+/// 与前端积分池同档（3）：串行时「N 个账号」在启动阶段会长期占着上游，
+/// 与账号页自己的刷新互相排队；无上限并发又会把同一 IP 的突发流量放大。
+/// 取数仍然**不持锁**（见 [`refresh_pool`] 的三段式）。
+const CREDITS_FETCH_CONCURRENCY: usize = 3;
 
 /// 下一轮余额刷新的等待时长（毫秒）——**两侧宿主共用**，别各写一份判据。
 ///
@@ -128,7 +136,9 @@ pub async fn refresh_once(state: &GatewayState) -> usize {
 /// 刷新入口（按池句柄）：**三段式**，取数期间不持锁。
 ///
 /// 与 [`refresh_with`] 共用 [`refresh_targets`] / [`apply_refresh`] / [`parse_credits`]，
-/// 因此「测的语义」与「跑的语义」是**同一份代码**；两者只差锁的持有时机。
+/// 因此**取舍数 / 合并 / 失败判定的语义是同一份代码**；差异只剩两处：
+/// 取数是 `CREDITS_FETCH_CONCURRENCY` 路有界并发（`refresh_with` 为串行），
+/// 以及锁的持有时机（本函数取数期间不持锁）。⇒ 单测覆盖的**不包含**并发与锁时序。
 pub async fn refresh_pool<F: CreditFetcher>(
     pool: &std::sync::Arc<tokio::sync::RwLock<Pool>>,
     fetcher: &F,
@@ -143,15 +153,21 @@ pub async fn refresh_pool<F: CreditFetcher>(
         return 0;
     }
 
-    // ② **不持锁**：逐个取数（网络）。
+    // ② **不持锁**：有界并发取数（网络）。串行会在启动阶段长期占着上游，
+    //    与账号页自己的刷新互相排队；上限 3 与前端积分池同档。
     let mut refreshed = 0usize;
-    for (uid, region) in targets {
-        let result = fetcher.fetch(region, &uid).await;
+    let mut stream = stream::iter(targets)
+        .map(|(uid, region)| async move {
+            let result = fetcher.fetch(region, &uid).await;
+            (uid, result)
+        })
+        .buffer_unordered(CREDITS_FETCH_CONCURRENCY);
+    while let Some((uid, result)) = stream.next().await {
         // 未知（失败/回退）→ 绝不写 0，也绝不标记已刷新（下一轮重试）。
         let Some((credits, expiring)) = parse_credits(&result) else {
             continue;
         };
-        // ③ 短暂写锁：只做内存写回。
+        // ③ 短暂写锁：只做内存写回（每个结果独立，完成顺序不影响最终状态）。
         apply_refresh(&mut *pool.write().await, &uid, credits, expiring, now_ms);
         refreshed += 1;
     }
@@ -189,8 +205,11 @@ fn apply_refresh(pool: &mut Pool, uid: &str, credits: i64, expiring: i64, now_ms
 ///
 /// 该签名（`&mut Pool` + 注入 `fetcher`）是单测的注入点；生产走 [`refresh_pool`]。
 ///
-/// 两者共用 [`refresh_targets`] / [`apply_refresh`] / [`parse_credits`]，**只差锁的持有时机** ——
-/// 因此这里测到的语义就是生产语义，不存在「测的路径不是跑的路径」。
+/// 两者共用 [`refresh_targets`] / [`apply_refresh`] / [`parse_credits`]，判据与写回口径一致 ——
+/// 但**不等于**「测的语义就是生产语义」：生产路径 [`refresh_pool`] 是
+/// `CREDITS_FETCH_CONCURRENCY` 路有界并发，本函数是串行。
+/// 并发带来的完成顺序差异由 `apply_refresh` 的逐条独立写回吸收，
+/// 而「取数期间不持锁」这一点单测完全覆盖不到。
 pub async fn refresh_with<F: CreditFetcher>(
     pool: &mut Pool,
     fetcher: &F,

@@ -78,8 +78,21 @@ export default function CreditStatsPage({ viewWindow, combineAll }: UsageViewPro
   const { busy, run } = useRefreshAction();
 
   /* ★ 必须带 selector（本页含图表，store 的高频刷新不该牵动整页重渲染）。 */
-  const { creditMap, fetchAllRegions } = useAccountsStore(
-    useShallow((state) => ({ creditMap: state.creditMap, fetchAllRegions: state.fetchAllRegions })),
+  const { creditMap, globalCreditMap, fetchAllRegions } = useAccountsStore(
+    useShallow((state) => ({
+      creditMap: state.creditMap,
+      globalCreditMap: state.global.creditMap,
+      fetchAllRegions: state.fetchAllRegions,
+    })),
+  );
+  /**
+   * 两个区域的读数合起来看：`region === "all"` 时下面的到期分布 / 资源明细会按
+   * 后端返回的账号逐条取数，只读 CN 表会让国际版账号恒显示「—」。
+   * 账号 id 是上游 uid，跨区不重名；万一重名，CN 覆盖 global（先展开 global）。
+   */
+  const creditByAccount = useMemo(
+    () => ({ ...globalCreditMap, ...creditMap }),
+    [globalCreditMap, creditMap],
   );
 
   const load = useCallback(
@@ -126,20 +139,46 @@ export default function CreditStatsPage({ viewWindow, combineAll }: UsageViewPro
     [bars, stats],
   );
 
+  /**
+   * 资源包数据源：本页三块（到期分布 / 临期积分 / 资源明细）都读 `creditByAccount`，
+   * 而 `fetchAllRegions` **只拉状态与账号**，不发积分请求。
+   *
+   * ★ 2026-11-10：此前这两块靠 App 层「30 分钟静默刷新」兜着；那个定时器已按 spec §12.6
+   * 取消 ⇒ 从不进账号页的用户会看到空分布。这里按区域补一次 `ensureCredits`
+   * （只补未取到 / 上次失败的条目，走积分单航班与 3 路有界并发，不会重复打上游）。
+   * 用 id 串订阅而不是账号数组：`reconcileAccounts` 每次都换新数组，依赖数组会重放。
+   */
+  const cnAccountIds = useAccountsStore((s) => s.accounts.map((account) => account.id).join(","));
+  const globalAccountIds = useAccountsStore((s) =>
+    s.global.accounts.map((account) => account.id).join(","),
+  );
+  useEffect(() => {
+    const state = useAccountsStore.getState();
+    /* 不阻塞主路径：统计与图表先渲染，积分回来后 `creditByAccount` 触发一次重算。 */
+    if (cnAccountIds) void state.ensureCredits(cnAccountIds.split(","), "cn").catch(() => {});
+    if (globalAccountIds) {
+      void state.ensureCredits(globalAccountIds.split(","), "global").catch(() => {});
+    }
+  }, [cnAccountIds, globalAccountIds]);
+
   /** 到期分布数据源：把各账号的资源包并成一份（`CreditExpiry` 形状）。 */
   const mergedExpiry = useMemo<CreditExpiry>(() => {
     const resources: CreditResource[] = [];
-    for (const entry of Object.values(creditMap)) {
+    for (const entry of Object.values(creditByAccount)) {
       if (entry?.resources) resources.push(...entry.resources);
     }
     return { ok: true, resources };
-  }, [creditMap]);
+  }, [creditByAccount]);
 
   const buckets = useMemo(() => expiryBuckets(mergedExpiry), [mergedExpiry]);
   const hasExpiry = buckets.some((bucket) => bucket.value > 0);
   const expiringTotal = useMemo(
-    () => Object.values(creditMap).reduce((sum, entry) => sum + (entry?.expiringSoonRemaining ?? 0), 0),
-    [creditMap],
+    () =>
+      Object.values(creditByAccount).reduce(
+        (sum, entry) => sum + (entry?.expiringSoonRemaining ?? 0),
+        0,
+      ),
+    [creditByAccount],
   );
   const soonestDay = buckets.find((bucket) => bucket.value > 0)?.day;
 
@@ -369,7 +408,7 @@ export default function CreditStatsPage({ viewWindow, combineAll }: UsageViewPro
               <Card className="min-w-0 gap-0 overflow-hidden rounded-xl py-0 shadow-none">
                 <div className="divide-y divide-border/60">
                   {stats.accounts.map((account) => {
-                    const entry = creditMap[account.accountId];
+                    const entry = creditByAccount[account.accountId];
                     const resources = entry?.resources ?? [];
                     const name = displayText(account.accountName) || account.accountId;
                     return (

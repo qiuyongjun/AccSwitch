@@ -1,9 +1,10 @@
 # 接口约定：Trae / Qoder 的「按账号 · 今日」只读重取
 
-**日期**：2026-10-18
+**日期**：2026-10-18（最后更新 2026-11-10：补 §12 账号页加载 / 一键刷新提速，含 §12.7 / §12.8）
 **提出方**：账号页（`AccountsPage` / `TraeAccountsPage` / `QoderAccountsPage`）
 **状态**：**已实现**（2026-10-18；`get_trae_account_token_today` / `get_trae_checkin_status_map` /
-`qoder_checkin_status_map` 三条命令 + 两端接线 + 抽屉指标块）
+`qoder_checkin_status_map` 三条命令 + 两端接线 + 抽屉指标块）。§12 为 2026-11-10 追加的
+WorkBuddy 前端策略补充，已落地。
 **影响面**：卡片「更多」菜单与详情抽屉指标块的刷新项（此前两平台各只有「积分 / 凭据状态」）
 
 > **实现期对本文的两处修订**（实现与初稿不一致的地方，以本文为准）：
@@ -289,3 +290,113 @@ Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `
 
 **共享抽屉的文案**：已签到但「今日获得」未知（上游只回状态 / 台账兜底）时，签到页签的
 「今日签到」格写「已签到」，不再写「—」—— 与上方指标块同一结论，且不伪造 `+0`。
+
+---
+
+## 12. 2026-11-10 补充：账号页加载 / 一键刷新的提速与如实反馈
+
+> **归属说明**：本文主体是「Trae / Qoder 的接口约定」，§12 记的是 **WorkBuddy 前端的
+> 展示与刷新策略**（缓存占位、单航班、TTL、按层判定）。两者不同源，暂借此文同处一页
+> 是因为它们由同一轮改动引入；后续拆分时按 `docs/README.md` 的分区规则另立页面，
+> 拆完回填本行的链接。读 §12 时请按「前端策略」而非「后端契约」理解。
+
+### 12.1 WorkBuddy 积分首屏用**上次成功读数**占位
+
+- 进程重启后 `creditMap` 是空的，积分必须等上游回来才有数字（每账号 3 路请求）。
+- `src/lib/credit-cache.ts` 在每次**成功**读数后把它写进 `localStorage`
+  （按作用域分家，只存 `ok:true`，7 天过期，上限 500 条）。
+- 账号页用 `displayCreditMap = 缓存 ⊕ creditMap` **仅做展示**；排序 / 优先级 /
+  `attentionOf` 仍读实时 `creditMap`，避免用旧数据重排列表或误报状态。
+- 缓存不是真值来源：后台刷新回来立即覆盖；失败结果**不落盘**。
+- **占位必须自报年龄**（2026-11-10 复审整改）：缓存最长 7 天，而 `nextExpiryLabel` /
+  `creditMetricTip` 会把旧批次渲染成「明天到期」「最近到期」这类**当前态结论**。
+  ⇒ `readCreditCache` 返回值带 `at`，卡片 / 表格「积分」列 / 抽屉积分格统一走
+  `creditCacheNote(at, t)` 渲染「上次读数 · N 分钟前」。没有时间标注的占位比留空更误导。
+- **有读数时 loading 不得顶掉内容**（同轮整改）：旧顺序是
+  `creditLoading ? 转圈 : !credit ? 等待 : …`，而页面挂载的 `ensureCredits` 会把
+  每个账号的 `creditLoadingMap` 置 `true` ⇒ 缓存占位永远被转圈盖住，§12.1 的目标落空。
+  现在判定顺序改为「先看有没有读数」，刷新中只在下方补一行小字。
+
+### 12.2 积分刷新：单航班 + 失败重试窗口 + 状态清理
+
+- 同账号同区域的积分请求**复用在途 Promise**（`creditInflight: Map<id, Promise>`）：
+  手动刷新、进页面 / 窗口重新可见的 TTL 触发、抽屉的单账号刷新同时发生也只打一轮。
+- `ok:false` 不再永久视为「已缓存」：记录 `creditAttemptAt`，60 秒后的
+  `ensureCredits` / 重新进页面会再试一次；成功前不写展示缓存。
+- `loadCredits` 用 `try/finally` 清理 `creditLoadingMap` 与 `refreshingCredits`：
+  意外异常不能再留下「永远转圈 + 后续不再请求」的残留态。
+
+### 12.3 一键刷新按**层**判定（WorkBuddy）
+
+`quickRefreshAll` 现在汇总四层：积分（`failed/ok`）、旅行（`failedIds`）、成长任务、
+账号库快照（`reconcileAccounts`）。
+
+- 全成功 → `success`；四层全失败 → `error`（带首个积分失败原因）；
+- 其余 → `warning`，描述逐项写清「N 个积分读取失败 / N 个旅行状态失败 / 任务失败 /
+  凭据状态失败」；
+- **不得**在积分全部失败时仍报「一键刷新完成」—— 这正是「点了刷新但卡片还是『—』」
+  的观感来源。
+
+### 12.4 被动请求的并发上限与稳定依赖
+
+- `getCheckinStatusMap` / `queryTravelStatuses` 的桌面端逐账号分支改用
+  `mapWithConcurrency(..., { concurrency: 4 })`；无上限 `Promise.all` 会在页面打开时
+  把 N 个账号的请求一次性拍给上游，触发限流后整体更慢。
+- 账号页的签到 / 旅行 / 成长 / 积分 effect 依赖**账号 id 串**而不是 `accounts` 数组：
+  `reconcileAccounts` 每次都换新数组，依赖数组会让这些被动请求在每次刷新回读后重放一轮。
+- `fetchAllRegions` 增加区域级在途去重：同一区域的并发挂载复用同一轮。
+
+### 12.5 批量积分刷新：有界并发、顺序合并不变
+
+- **Trae**：`refresh_all_remaining_for` 的**取数**改为最多 4 个账号并发（`JoinSet`），
+  **合并 / 解冻 / 失败清单仍按账号原始顺序**执行 ⇒ 输出顺序与串行版逐条一致，
+  只缩短 N 个串行 RTT 的等待。任务异常退出（panic）的账号计入失败，不静默丢弃。
+- **WorkBuddy 网关**：后台余额刷新的取数改为 3 路并发（`buffer_unordered`），
+  写回仍是每个结果一次短暂写锁；`refresh_pool_and_refresh_with_agree` 与
+  「不持锁跨 fetch」两条护栏继续生效。
+
+### 12.6 界面积分自动刷新：取消 30 分钟定时器，改 TTL 触发
+
+- **不再**在 App 层常驻 30 分钟静默刷新（它会在任何页面、任何时间打一轮上游，用户看不见）。
+- `useCreditAutoRefresh` 只在以下时机检查：
+  1. 进入 WorkBuddy 账号页（含区域切换）；
+  2. 窗口重新可见（`visibilitychange` / Tauri `main-window-visible`）；
+  3. 窗口重新获得焦点。
+- 判定口径：只处理**当前可见区域**（与 `useScope` 同一套优先级）；
+  `creditFullRefreshedAt` 距今 ≥ **15 分钟**或从未全量刷新 ⇒ `refreshCredits(force)`；
+  否则 `ensureCredits`（只补从未取到 / 上次失败的条目）。
+- **两个时刻必须分开**（2026-11-10 复审整改）：`creditRefreshedAt` 是「任意一轮请求」
+  的诊断事实（`ensureCredits` 也写），**不能**当 TTL 判据 —— 只要有一个长期失败的账号，
+  60 秒一次的重试就会不断把它推后，窗口永远判定为「还新鲜」，判据形同虚设。
+  TTL 只读 `creditFullRefreshedAt`，且该值仅在「`force` 且本轮目标覆盖该区域全部账号」时写入。
+- 页面挂载时的 `ensureCredits` 仍然保留，两路并发由积分单航班去重。
+- **后端**网关余额循环与 Trae 积分循环不在此列：它们服务选号权重与自动解冻，不能取消。
+
+### 12.7 Qoder 快照缓存（`enrichmentCache`）：占位可以，契约不能改
+
+`QoderAccountsPage` 用一个模块级 `Map<scope, QoderEnrichmentSnapshot>` 记住上次会话
+读到的「额度 / 签到 / 程序位」，用于页面重进时的初值占位。**占位范围有硬边界**：
+
+- **只**作为 `credits` / `checkinRows` / `programs` / `checkinUnavailable` 的初值；
+- **不得**决定 `checkinLoaded`。它的契约是「**本轮区域快照已尝试过**（成功 / 失败都算）」，
+  见 §11：抽屉的按需补取要等这一拍落地。若用「缓存里有条目」代替它，
+  缓存快照恰好缺某账号的签到行时，抽屉会立刻补发 `qoder_checkin_status_map([uid])`，
+  与在途的区域快照并发多打一轮上游。
+- 缓存快照是**同一时刻**的三份数据（`loadEnrichment` 批内写入），不要单独替换其中一份。
+
+> 复审记录：本项曾在 2026-11-10 首版实现里被改坏（`useState(() => cachedEnrichment !== undefined)`），
+> 同轮整改已恢复为 `useState(false)`，并由 `check-scope-registry` 加断言钉住。
+
+### 12.8 积分统计页的取数（取消全局静默刷新的连带影响）
+
+`CreditStatsPage` 的「到期分布 / 临期积分 / 资源明细」读的是 store 里的 `creditMap`，
+而该页只调 `fetchAllRegions()`——**那只拉状态与账号，不发任何积分请求**。
+取消 App 层 30 分钟静默刷新（§12.6）后，从不进账号页的用户会看到空分布。
+
+修复口径：
+
+- 页面按区域补一次 `ensureCredits`（只补未取到 / 上次失败的条目），依赖**账号 id 串**
+  而不是账号数组（`reconcileAccounts` 每次换新数组，依赖数组会重放）；
+- **不阻塞**主路径：统计与图表先渲染，积分回来后由 store 触发一次重算；
+- 合并 CN 与 Global 两个区域的 `creditMap`（`creditByAccount`）——只读 CN 表会让
+  `region === "all"` 时的国际版账号恒显示「—」。
