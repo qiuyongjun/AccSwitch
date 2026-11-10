@@ -33,10 +33,20 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os
+          # ★ 2026-11-10：`macos-14` 已于 **2026-11-02 被 GitHub 退役**
+          #   （github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement）。
+          #   退役后 job **不会报错**，而是「2 秒内 cancelled、runner 为空、零步骤执行」——
+          #   v2026.11.101107 / v2026.11.101348 两轮都栽在这，表现成「CI 看着成功，
+          #   Publish release assets 被 skip，于是没有 Release」。
+          #   ⇒ 改用 `macos-15-intel`（标准 x64 镜像，仍可用）。**特意不换 mac-arm64 的宿主架构**：
+          #   此前两条 macOS 都跑在 x64 宿主上（mac-arm64 靠 cross-compile 到
+          #   aarch64-apple-darwin），保持一致可避免引入新的交叉编译差异。
+          #   下次该标签退役时，这里会再以同样「静默 cancelled」的方式坏掉 ——
+          #   判断特征是 job 的 runner 为空且 started_at == completed_at。
           all_platforms = [
               {
                   "name": "mac-arm64",
-                  "os": "macos-14",
+                  "os": "macos-15-intel",
                   "target": "aarch64-apple-darwin",
                   "cli_bin": "buddy-switch-darwin-arm64",
                   "platform_tag": "darwin-arm64",
@@ -48,7 +58,7 @@ jobs:
               },
               {
                   "name": "mac-x64",
-                  "os": "macos-14",
+                  "os": "macos-15-intel",
                   "target": "x86_64-apple-darwin",
                   "cli_bin": "buddy-switch-darwin-x64",
                   "platform_tag": "darwin-x64",
