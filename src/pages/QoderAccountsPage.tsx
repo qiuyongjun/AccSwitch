@@ -116,7 +116,13 @@ import {
 } from "@/lib/account-list-view";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
 import { formatDate } from "@/lib/format";
-import { PACKS_TTL_MS, packSourceLabel, packState, packUnavailableCopy } from "@/lib/qoder-packs";
+import {
+  PACKS_TTL_MS,
+  packSourceLabel,
+  packState,
+  packUnavailableCopy,
+  visibleQoderPacks,
+} from "@/lib/qoder-packs";
 import {
   QuickActionButton,
   QuickRefreshAction,
@@ -291,6 +297,17 @@ function QoderAccountsPanel({
   const [packsLoading, setPacksLoading] = useState<Record<string, boolean>>({});
   /** 每账号上次取数时刻（TTL 用 ref：改它不该触发重渲染）。 */
   const packsFetchedAt = useRef<Record<string, number>>({});
+  /**
+   * 聚合额度的最新值。
+   *
+   * `loadPacks` 是异步回调，闭包里的 `credits` 可能已过期；补取判断必须读 ref。
+   */
+  const creditsRef = useRef(credits);
+  useEffect(() => {
+    creditsRef.current = credits;
+  }, [credits]);
+  /** 单账号聚合额度补取的进行中集合（逐包与聚合是两条独立通道）。 */
+  const creditFetchInflight = useRef<Set<string>>(new Set());
 
   /* 切换区域（Qoder CN ↔ 国际版）时清空逐包缓存：UID 在两个区域可能相同，
      不清会把上一个区域的包/到期日显示到当前账号上。 */
@@ -1352,6 +1369,69 @@ function QoderAccountsPanel({
   }
 
   /**
+   * 补取**单账号**的聚合额度（openapi）。
+   *
+   * 逐包走网页会话、聚合走 access token，是两条独立通道。逐包读成功并不代表
+   * 卡片主积分行 / 抽屉指标（都读 `credits`）有值；聚合缺席或上次失败时补一次，
+   * 让用户不必再手动点一次「刷新积分」。已有成功值时由调用方挡掉。
+   */
+  async function loadCreditOne(uid: string) {
+    if (!uid || creditFetchInflight.current.has(uid)) return;
+    creditFetchInflight.current.add(uid);
+    try {
+      const view = await api.qoderCredits(scope, [uid]);
+      if (!aliveRef.current) return;
+      const rows = Object.fromEntries(view.accounts.map((row) => [row.uid, row]));
+      if (Object.keys(rows).length > 0) {
+        setCredits((prev) => ({ ...prev, ...rows }));
+      }
+    } catch {
+      /* 聚合失败不打扰：逐包合计已可用于展示（见 `creditForDisplay`）。 */
+    } finally {
+      creditFetchInflight.current.delete(uid);
+    }
+  }
+
+  /**
+   * **展示用**额度行：聚合额度优先；缺失 / 失败时用逐包合计兜底。
+   *
+   * 为什么需要：卡片「资源包」浮层取的是逐包（网页会话），而卡片主积分行、表格积分列
+   * 与抽屉指标读的是聚合额度（openapi）。两条通道互相独立 —— 用户只读了逐包时，
+   * 上面三个展示位会停在「—」，看起来像「详情页没有带过去、还要再取一次」。
+   *
+   * ⚠️ **只用于展示**：排序 / 「优先」标记仍读实时 `credits`（与 WorkBuddy 的
+   * `displayCreditMap` 同一纪律）—— 派生值不参与列表重排。
+   */
+  const creditForDisplay = useCallback(
+    (uid: string): QoderCreditsRow | undefined => {
+      const row = credits[uid];
+      if (row?.ok) return row;
+      const web = webPacks[uid];
+      if (!web?.available) return row;
+      /* 与列表同一口径：用完的包不参与合计（否则总量里会混着 0/0 的占位包）。 */
+      const active = visibleQoderPacks(web.packs);
+      if (active.length === 0) return row;
+      const now = Date.now();
+      const futureExpiries = active
+        .map((pack) => pack.expiresAtMs)
+        .filter((ms): ms is number => typeof ms === "number" && ms > now);
+      return {
+        uid,
+        name: row?.name ?? "",
+        ok: true,
+        remaining: active.reduce((sum, pack) => sum + pack.remaining, 0),
+        used: active.reduce((sum, pack) => sum + pack.used, 0),
+        total: active.reduce((sum, pack) => sum + pack.limit, 0),
+        // 逐包有自己的到期时刻；聚合到期未知时取**最近的未来一批**，没有就留空。
+        expiresAt: futureExpiries.length > 0 ? Math.min(...futureExpiries) : null,
+        expiresForever: row?.expiresForever === true,
+        plan: row?.plan ?? null,
+      };
+    },
+    [credits, webPacks],
+  );
+
+  /**
    * 取某账号的逐包明细（带 TTL；`force` 绕过 TTL）。
    *
    * ★ 并发去重：浮层与抽屉可能同时触发同一个账号 —— 用 `packsLoading` 挡第二次，
@@ -1367,6 +1447,11 @@ function QoderAccountsPanel({
       const result = await api.qoderWebCreditPacks(scope, uid);
       packsFetchedAt.current[uid] = Date.now();
       setWebPacks((prev) => ({ ...prev, [uid]: result }));
+      /* 逐包是网页会话读的；卡片主积分行 / 抽屉指标读聚合额度。聚合缺席 / 上次失败
+         时补一次该账号，避免「逐包已经读到了，详情页还要再点一次刷新」。 */
+      if (result.available && !creditsRef.current[uid]?.ok) {
+        void loadCreditOne(uid);
+      }
     } catch {
       /* 静默：详情拿不到不是错误，浮层会按 `packs` 为空给出引导。 */
     } finally {
@@ -1394,7 +1479,12 @@ function QoderAccountsPanel({
         return false;
       }
       await loadPacks(uid, true);
-      toast.success(t("qoder.page.accounts.web.readDone", { n: String(probe.packs?.length ?? 0) }));
+      /* 与列表同一口径：只报**还能用**的包数（用完的已不展示）。 */
+      toast.success(
+        t("qoder.page.accounts.web.readDone", {
+          n: String(visibleQoderPacks(probe.packs ?? []).length),
+        }),
+      );
       return true;
     } catch {
       /* 上游拒绝 / 网络失败：让浮层与抽屉按结构化原因给下一步，这里不重复报错。 */
@@ -1692,7 +1782,8 @@ function QoderAccountsPanel({
    */
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detailLive) return [];
-    const row = credits[detailLive.uid];
+    /* 展示用：聚合额度优先，逐包合计兜底（见 `creditForDisplay`）。 */
+    const row = creditForDisplay(detailLive.uid);
     const expired = detailLive.expiresAt != null && detailLive.expiresAt < Date.now();
     const credBad = expired || !detailLive.hasCredential;
     /* ★ 2026-10-27（用户报障「详情页积分卡没像 WB 显示剩余/总数与到期」）：
@@ -1769,7 +1860,7 @@ function QoderAccountsPanel({
         refreshKind: "credential",
       },
     ];
-  }, [detailLive, credits, detailCheckinText, checkinEntryOf, t]);
+  }, [detailLive, creditForDisplay, detailCheckinText, checkinEntryOf, t]);
 
   /**
    * ★ 2026-10-26（用户报障「凭证页不显示内容」）：抽屉的**凭据页签**只渲染调用方注入的
@@ -1836,11 +1927,12 @@ function QoderAccountsPanel({
     if (!detail) return [];
     const web = webPacks[detail.uid];
 
-    // ① 有逐包 ⇒ 逐条渲染（回答「我有几个包、各剩多少、何时到期」）。
-    if (web?.available && web.packs.length > 0) {
+    // ① 有逐包 ⇒ 只渲染**还能用**的包，按最近到期排序（与浮层同一函数）。
+    const visible = web?.available ? visibleQoderPacks(web.packs) : [];
+    if (visible.length > 0) {
       const now = Date.now();
       const seen = new Map<string, number>();
-      return web.packs.map((pack, index) => {
+      return visible.map((pack, index) => {
         const source = packSourceLabel(t, pack.source);
         const ordinal = (seen.get(source) ?? 0) + 1;
         seen.set(source, ordinal);
@@ -1872,8 +1964,8 @@ function QoderAccountsPanel({
       });
     }
 
-    // ② 没有逐包 ⇒ 回落聚合行（聚合三标量在任意形态都拿得到）。
-    const row = credits[detail.uid];
+    // ② 没有逐包 ⇒ 回落聚合行（逐包合计也参与兜底，见 `creditForDisplay`）。
+    const row = creditForDisplay(detail.uid);
     if (!row || !row.ok) return [];
     const remaining = row.remaining ?? 0;
     const total = row.total ?? 0;
@@ -1899,7 +1991,7 @@ function QoderAccountsPanel({
         ratio: total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0,
       },
     ];
-  }, [detail, credits, t, webPacks]);
+  }, [detail, creditForDisplay, t, webPacks]);
 
   /**
    * 抽屉积分包区块下方的说明与动作（#111）。
@@ -1913,8 +2005,12 @@ function QoderAccountsPanel({
     /* 还没取到结果（首次打开 / 取数失败）：不摆动作，避免把「未知」说成未登录或已登录。 */
     if (!web) return null;
     if (web.available) {
+      const activeCount = visibleQoderPacks(web.packs).length;
       return {
-        text: t("qoder.page.accounts.web.packsNoticeReady", { n: String(web.packs.length) }),
+        text:
+          activeCount > 0
+            ? t("qoder.page.accounts.web.packsNoticeReady", { n: String(activeCount) })
+            : t("qoder.page.accounts.web.packsNoticeNoUsablePacks"),
         actionLabel: t("qoder.page.accounts.web.logout"),
         onAction: () => void logoutWebSession(),
         busy: false,
@@ -2069,7 +2165,8 @@ function QoderAccountsPanel({
            取不到额度快照时也给 `—` 且**仍可点**（点进去正是「为什么没有」）；
            主行补「剩余 · 总额 · 已用」（`creditMetricTip`），副行补逐批明细（`expiryTooltipLines`），
            都用原生 `title` —— 表格里不用 Radix 浮层，与 WB 同一纪律。 */
-        const row = credits[account.uid];
+        /* 展示用：聚合额度优先，逐包合计兜底（见 `creditForDisplay`）。 */
+        const row = creditForDisplay(account.uid);
         const hasCredits = Boolean(row?.ok);
         const now = Date.now();
         const expiry =
@@ -2410,7 +2507,8 @@ function QoderAccountsPanel({
         rowSelectLabel={(account) => t("shared.table.selectRowAria", { name: qoderAccountName(account) })}
         rowOpenLabel={(account) => t("shared.table.openRowAria", { name: qoderAccountName(account) })}
         renderCard={(account) => {
-          const row = credits[account.uid];
+          /* 展示用：聚合额度优先，逐包合计兜底（见 `creditForDisplay`）。 */
+          const row = creditForDisplay(account.uid);
           return (
             <QoderAccountCard
               key={account.uid}

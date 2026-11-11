@@ -27,7 +27,12 @@ import * as api from "@/lib/api";
 import type { QoderWebCreditPacks } from "@/lib/api";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { useT } from "@/lib/i18n";
-import { packSourceLabel, packState, packUnavailableCopy } from "@/lib/qoder-packs";
+import {
+  packSourceLabel,
+  packState,
+  packUnavailableCopy,
+  visibleQoderPacks,
+} from "@/lib/qoder-packs";
 
 export interface QoderPacksPopoverProps {
   /** `undefined` = 还没请求过；`null` = 请求过但没有结果（按未授权处理）。 */
@@ -73,8 +78,10 @@ export function QoderPacksPopover({
   // 展示不出来的话这个页面等于没有该功能。真正的「不支持」分支由 webui 实机覆盖。
   const desktop = demoModeEnabled || !api.isWebui();
   const available = desktop && packs?.available === true;
-  const count = packs?.summary?.count ?? 0;
-  const remaining = packs?.summary?.remaining ?? 0;
+  /* 列表与「N 个包 / 共剩」统一按**可见包**计算：用完的包不显示，也不计入数量。 */
+  const visiblePacks = available ? visibleQoderPacks(packs!.packs) : [];
+  const count = visiblePacks.length;
+  const remaining = visiblePacks.reduce((sum, pack) => sum + pack.remaining, 0);
 
   // ★ `packs === undefined` = **还没取过**，此时说「未登录」就是假信息（用户可能已登录）。
   //   三态必须分开：未知（中性标签）/ 在读 / 已知（有包或确实没登录）。
@@ -85,7 +92,9 @@ export function QoderPacksPopover({
       : packs === undefined
         ? t("qoder.page.accounts.web.triggerNeutral")
         : available
-          ? t("qoder.page.accounts.web.triggerPacks", { n: String(count) })
+          ? count > 0
+            ? t("qoder.page.accounts.web.triggerPacks", { n: String(count) })
+            : t("qoder.page.accounts.web.triggerNoUsablePacks")
           : t("qoder.page.accounts.web.triggerNoSession");
 
   const view = reasonView(t, packs?.reason);
@@ -111,11 +120,17 @@ export function QoderPacksPopover({
           <span className="tabular-nums">{label}</span>
         </button>
       </PopoverTrigger>
-      {/* ★ 浮层必须限高可滚（本仓硬约束）：不限高 + 内容长 ⇒ 被窗口切掉且没有滚动条。 */}
-      <PopoverContent align="start" className="w-72 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
+      {/* ★ 浮层必须限高（本仓硬约束），但**只有列表滚动**：
+          外层 `overflow-y-hidden` + flex 列，列表 `min-h-0 flex-1 overflow-y-auto`。
+          此前外层与列表各有一套 max-height/overflow ⇒ 出现两条滚动条，外侧那条是
+          没有意义的（内容全在列表里，外层只多出 padding/说明）。 */}
+      <PopoverContent
+        align="start"
+        className="flex w-72 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-y-hidden p-3"
+      >
+        <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
           <span className="text-[11.5px] font-medium">{t("qoder.page.accounts.web.title")}</span>
-          {available && packs?.summary ? (
+          {available && count > 0 ? (
             <span className="text-[11px] tabular-nums text-muted-foreground">
               {t("qoder.page.accounts.web.summary", {
                 n: String(count),
@@ -126,13 +141,18 @@ export function QoderPacksPopover({
         </div>
 
         {loading ? (
-          <div className="flex items-center gap-2 py-3 text-[11.5px] text-muted-foreground">
+          <div className="flex shrink-0 items-center gap-2 py-3 text-[11.5px] text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" />
             {t("qoder.page.accounts.web.loading")}
           </div>
+        ) : available && visiblePacks.length === 0 ? (
+          /* 拿得到逐包，但全部用完 ⇒ 不摆一个空列表，也不谎报「未登录」。 */
+          <p className="shrink-0 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
+            {t("qoder.page.accounts.web.noUsablePacks")}
+          </p>
         ) : available ? (
-          <ul className="max-h-[min(60vh,320px)] space-y-2 overflow-y-auto pr-1">
-            {packs!.packs.map((pack, index) => {
+          <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
+            {visiblePacks.map((pack, index) => {
               const state = packState(pack, Date.now());
               const expired = state === "expired";
               const expiringSoon = state === "expiring";
@@ -187,7 +207,7 @@ export function QoderPacksPopover({
             })}
           </ul>
         ) : (
-          <div className="space-y-2 py-1">
+          <div className="min-h-0 space-y-2 overflow-y-auto py-1">
             <div className="flex items-start gap-1.5 text-[11.5px]">
               <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
               <div className="min-w-0">

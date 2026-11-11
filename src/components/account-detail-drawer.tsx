@@ -1021,6 +1021,27 @@ export function AccountDetailDrawer({
                         </Button>
                       )}
                     </div>
+                    {/* ★ 网页会话说明 / 退出登录放在列表**上方**：放列表底部时，
+                        资源包多的时候用户要滚到底才看得到「退出网页登录」。 */}
+                    {packsNotice ? (
+                      <div className="mb-3 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
+                        <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                          {packsNotice.text}
+                        </p>
+                        {packsNotice.actionLabel && packsNotice.onAction ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="mt-1.5 h-7"
+                            disabled={packsNotice.busy}
+                            onClick={packsNotice.onAction}
+                          >
+                            {packsNotice.actionLabel}
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {packs.length > 0 ? (
                       <div className="space-y-3">
                         {packs.map((pack) => (
@@ -1056,25 +1077,6 @@ export function AccountDetailDrawer({
                         {t("shared.drawer.packs.empty")}
                       </p>
                     )}
-                    {packsNotice ? (
-                      <div className="mt-3 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
-                        <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-                          {packsNotice.text}
-                        </p>
-                        {packsNotice.actionLabel && packsNotice.onAction ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="mt-1.5 h-7"
-                            disabled={packsNotice.busy}
-                            onClick={packsNotice.onAction}
-                          >
-                            {packsNotice.actionLabel}
-                          </Button>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </section>
                 </TabsContent>
               )}

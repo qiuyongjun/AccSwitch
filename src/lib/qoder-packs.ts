@@ -47,6 +47,44 @@ export function packState(pack: QoderCreditPack, now: number): QoderPackState {
   return "normal";
 }
 
+/**
+ * 资源包列表的**可见性与顺序**（卡片浮层 / 详情抽屉共用）。
+ *
+ * - **没有可用额度的包不显示**：`remaining <= 0`（用完）或**已过期**（即使还有剩余）
+ *   都剔除。过期包已经不能再用，继续占位只会让「最近到期」排在最前的是一批
+ *   不可用的条目；用户真正要看的是现在还能用的包。
+ * - **按到期时刻由近到远**：最近到期的排最前；缺到期时刻（长期有效）的排最后。
+ *
+ * 抽成共享函数而不是两处各写一遍 `map`：顺序/过滤规则一旦分叉，同一账号在浮层
+ * 与抽屉里会给出两种列表（本仓已有同类漂移的教训）。
+ *
+ * `now` 可注入，便于单测/门禁固定时间；生产调用直接用当前时刻。
+ */
+export function visibleQoderPacks(
+  packs: readonly QoderCreditPack[],
+  now: number = Date.now(),
+): QoderCreditPack[] {
+  const expiryOf = (pack: QoderCreditPack): number | null =>
+    typeof pack.expiresAtMs === "number" && pack.expiresAtMs > 0 ? pack.expiresAtMs : null;
+
+  return packs
+    .filter((pack) => {
+      if (pack.remaining <= 0) return false;
+      const expiry = expiryOf(pack);
+      // `null` = 无到期时刻（长期有效）；有到期时刻且已过 ⇒ 不可用，不保留。
+      return expiry === null || expiry > now;
+    })
+    .sort((left, right) => {
+      const leftExpiry = expiryOf(left);
+      const rightExpiry = expiryOf(right);
+      if (leftExpiry !== null && rightExpiry !== null) return leftExpiry - rightExpiry;
+      if (leftExpiry !== null) return -1;
+      if (rightExpiry !== null) return 1;
+      // 两者都无到期时刻：保持后端原序（现代 JS 的 sort 是稳定排序）。
+      return 0;
+    });
+}
+
 /** 上游 `source` 取值 → 本地化标签。未知取值兜底成「资源包」，**不显示原始枚举串**。 */
 export function packSourceLabel(
   t: Translate,

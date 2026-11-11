@@ -2338,6 +2338,69 @@ check("★ Win32 原生进程枚举（spec §12.9）：展示 / 守卫 / 运行�
   return "ToolHelp 全量枚举 · 运行路径按名取路径 · 守卫实时枚举";
 });
 
+check("★ Qoder 逐包 / 聚合两条通道：逐包成功后聚合不缺席（展示兜底 + 单账号补取）", () => {
+  /* 用户报障：卡片「资源包」读了逐包，进详情页积分仍显示「—」、还要再点一次刷新。
+     根因是两条独立通道：逐包走网页会话，卡片主积分行 / 表格 / 抽屉指标读聚合额度
+     （openapi）。这一条钉住三件事：
+       ① 逐包成功后，聚合缺席 / 失败时自动补取该账号；
+       ② 展示层用 `creditForDisplay`（聚合优先、逐包合计兜底）；
+       ③ 排序 / 「优先」仍读实时 `credits`，派生值不得重排列表。 */
+  const page = readCode("src/pages/QoderAccountsPage.tsx");
+  if (!/async function loadCreditOne\(/.test(page)) {
+    throw new Error("逐包成功后补取聚合额度的入口不见了");
+  }
+  if (!/result\.available && !creditsRef\.current\[uid\]\?\.ok/.test(page)) {
+    throw new Error("逐包成功后不再补取聚合额度 —— 详情页会停在「—」");
+  }
+  if (!/const creditForDisplay = useCallback\(/.test(page)) {
+    throw new Error("展示兜底 `creditForDisplay` 不见了 —— 聚合失败时又只剩「—」");
+  }
+  const stats = page.slice(page.indexOf("const detailStats"), page.indexOf("const detailPacks"));
+  if (!stats.includes("creditForDisplay(detailLive.uid)")) {
+    throw new Error("抽屉指标没走展示兜底");
+  }
+  if (!page.includes("creditForDisplay(account.uid)")) {
+    throw new Error("卡片 / 表格积分没走展示兜底");
+  }
+  const priority = page.slice(page.indexOf("const priorityAccountId"), page.indexOf("const [checkinMap"));
+  if (!priority.includes("credits[account.uid]")) {
+    throw new Error("「优先」标记改读了派生值 —— 展示兜底不得参与排序");
+  }
+  return "逐包→聚合补取 · 展示兜底 · 排序仍读实时值";
+});
+
+check("★ Qoder 资源包列表：用完 / 已过期不显示 · 最近到期在前", () => {
+  /* 用户要求：资源包按最近到期排前面；用完的移除；已过期但仍有剩余的也不保留。
+     变异：删掉 remaining 过滤 ⇒ 0/0 占位重新占满列表；漏掉过期过滤 ⇒ 过期包又回到
+     列表最前（它到期最近，排序会把它顶到第一位）；删掉 sort ⇒ 顺序回到后端原序。 */
+  const lib = readCode("src/lib/qoder-packs.ts");
+  if (!/export function visibleQoderPacks/.test(lib)) {
+    throw new Error("共享的 `visibleQoderPacks` 不见了 —— 浮层与抽屉会各写一套");
+  }
+  const fn = lib.slice(
+    lib.indexOf("export function visibleQoderPacks"),
+    lib.indexOf("export function packSourceLabel"),
+  );
+  if (!/pack\.remaining\s*[<>]=?\s*0/.test(fn)) {
+    throw new Error("用完的包没有被过滤掉（0/0 占位会继续显示）");
+  }
+  if (!/expiry === null \|\| expiry > now/.test(fn)) {
+    throw new Error("已过期的包没有被过滤（即使仍有剩余也不能显示）");
+  }
+  if (!fn.includes("expiresAtMs") || !fn.includes("sort(")) {
+    throw new Error("资源包没有按到期时间排序（最近到期必须在前）");
+  }
+  const popover = readCode("src/components/qoder/qoder-packs-popover.tsx");
+  if (!popover.includes("visibleQoderPacks(packs!.packs)")) {
+    throw new Error("卡片资源包浮层没走共享的过滤/排序");
+  }
+  const page = readCode("src/pages/QoderAccountsPage.tsx");
+  if (!page.includes("visibleQoderPacks(web.packs)")) {
+    throw new Error("详情抽屉的资源包列表没走共享的过滤/排序");
+  }
+  return "用完 / 过期不显示 · 最近到期在前 · 浮层/抽屉同源";
+});
+
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {
   /* 2026-10-23 用户反馈：卡上没有标签时读不出「已完成 / 没扫到 / 没有成长体系」。
      ⇒ 判据：
