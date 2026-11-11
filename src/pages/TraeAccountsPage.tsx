@@ -243,10 +243,17 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
 
   /** 登录态仅依赖程序清单，立即接续读取，与积分和环境读取并行。 */
   const loadSnapshot = useCallback(async (): Promise<AccountsSnapshot> => {
-    const programs = loadTraeVariantStatuses().then(async (statuses) => ({
-      statuses,
-      logins: await loadTraeVariantLogins(statuses),
-    }));
+    const programs = loadTraeVariantStatuses().then(async (statuses) => {
+      /* ★ 本页只渲染**当前区域**的程序位（`programsFor` 按 `status.variant === variant`
+         过滤）⇒ 登录态也只需要当前区域那一到两个程序位。旧实现把两个区域都问一遍，
+         每次切换页都多付一轮 `get_trae_profiles`（每次含一个实时 tasklist）。
+         顶栏作用域菜单需要的「两区登录名」由 `useScopeStatus` 自己取，与此无关。 */
+      const currentRegion = statuses.filter((status) => status.variant === variant);
+      return {
+        statuses,
+        logins: await loadTraeVariantLogins(currentRegion),
+      };
+    });
     const [envData, creditData, checkinData, programData] = await Promise.all([
       api.getTraeEnv(),
       api.getTraeCredits(variant),

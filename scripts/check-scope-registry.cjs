@@ -2095,7 +2095,10 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 
   if (page.includes("wbAccounts.table.current")) {
     throw new Error("`wbAccounts.table.current`（「当前」）已删除，请复用 `card.currentLogin`");
   }
-  if (!/creditMetricValues\(creditMap\[account\.id\]\)/.test(page)) {
+  /* ★ 2026-11-10：展示层引入了 `displayCreditMap`（实时结果 ⊕ 上次成功读数）。
+     断言只要求「积分列仍走 `creditMetricValues` 且以当前行为键」—— 允许两张同源表，
+     但**不允许**单元格自己读 `totalRemaining` / 手拼到期文案。 */
+  if (!/creditMetricValues\((?:displayCreditMap|creditMap)\[account\.id\]\)/.test(page)) {
     throw new Error("积分列未复用 `creditMetricValues` —— 当前/总额与到期口径会和卡片漂移");
   }
   /* ★ 2026-10-23：卡片与列表的到期文案统一由 `nextExpiryLabel` 生成（今天/明天/日期），
@@ -2118,6 +2121,284 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 
     throw new Error("卡片未导出 `creditMetricValues` —— 两个视图必须读同一份积分口径");
   }
   return "今日用量不进表 · 积分列=当前/总额+最近到期+优先 · 凭据列复用卡片 `CredentialExpiryMeta` · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
+});
+
+check("★ 积分「上次成功读数」占位：只落成功值 · 只做展示 · 必须自报时间 · 不顶掉实时值", () => {
+  /* 2026-11-10：首屏占位（`lib/credit-cache.ts`）引入了三条**会被悄悄违反**的边界，
+     逐条钉住。变异：写失败结果 / 拿缓存参与排序 / 去掉时间标注 / 让 loading 盖住读数
+     / 用单值时刻当 TTL 判据 ⇒ 本条变红。 */
+  const cache = stripComments(readCode("src/lib/credit-cache.ts"));
+  if (!/if \(!value\.ok\) return;/.test(cache)) {
+    throw new Error("`writeCreditCacheEntry` 未拒绝失败读数 —— 一次网络抖动会被固化成「上次读数」");
+  }
+  if (!/out\[id\] = \{ at: entry\.at, value: entry\.value \}/.test(cache)) {
+    throw new Error("`readCreditCache` 没有把 `at` 交出来 —— 展示层无法标注「上次读数」");
+  }
+  if (!/MAX_AGE_MS = 7 \* 24 \* 3600 \* 1000/.test(cache)) {
+    throw new Error("缓存过期窗口被改动 —— 「7 天」是 spec §12.1 的口径");
+  }
+
+  const page = stripComments(readCode("src/pages/AccountsPage.tsx"));
+  /* 实时值必须覆盖缓存：展开顺序反了，缓存会盖住刚拿到的新读数。 */
+  if (!/\{ \.\.\.cachedCreditValues, \.\.\.creditMap \}/.test(page)) {
+    throw new Error("`displayCreditMap` 的合并顺序不等于「缓存 ⊕ 实时」—— 旧值会盖掉新读数");
+  }
+  if (!/creditMap\[id\] \? undefined : cachedCredits\[id\]\?\.at/.test(page)) {
+    throw new Error("`cachedCreditAt` 没有在「已有实时值」时返回 undefined —— 新数据会被标成缓存");
+  }
+  /* 排序 / 优先级 / `attentionOf` 只能读实时 `creditMap`（spec §12.1 的边界）。 */
+  const priorityBlock = page.slice(
+    page.indexOf("const priorityOrdered"),
+    page.indexOf("const priorityAccountId"),
+  );
+  if (priorityBlock.includes("displayCreditMap") || priorityBlock.includes("cachedCredit")) {
+    throw new Error("积分优先级排序读了展示缓存 —— 旧读数会重排列表并误报「优先」");
+  }
+  const nextBatchBlock = page.slice(page.indexOf("const nextBatchById"), page.indexOf("const priorityOrdered"));
+  if (nextBatchBlock.includes("displayCreditMap")) {
+    throw new Error("`nextBatchById` 读了展示缓存 —— 排序键必须来自实时读数");
+  }
+  for (const [name, source] of [
+    ["表格「积分」列", "creditCacheNote(cachedAt"],
+    ["卡片指标行", "creditCachedAt"],
+  ]) {
+    if (!page.includes(source)) {
+      throw new Error(`${name}未接「上次读数」标注 —— 7 天前的批次会被渲染成「明天到期」`);
+    }
+  }
+
+  const card = stripComments(readCode("src/components/account-card.tsx"));
+  /* 判据顺序：先看有没有读数，再看 loading。反过来 loading 会把缓存占位整个盖住。 */
+  if (!/\{!credit \?\s*\(\s*creditLoading \?/.test(card)) {
+    throw new Error("卡片先判 `creditLoading` 再判 `credit` —— 转圈会盖住「上次读数」占位（§12.1 目标落空）");
+  }
+  if (!/creditCacheNote\(creditCachedAt/.test(card)) {
+    throw new Error("卡片没有把 `creditCachedAt` 渲染出来 —— 缓存的年龄必须可见");
+  }
+  return "只落 ok:true · 7 天过期 · 实时覆盖缓存 · 排序键只读实时 · 卡片/表格/抽屉均自报「上次读数」";
+});
+
+check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {
+  /* 变异：去掉 `creditInflight` 复用 / 把 TTL 判据改回 `creditRefreshedAt` /
+     只凭旅行与任务判定「一键刷新完成」 ⇒ 本条变红。 */
+  const store = stripComments(readCode("src/stores/accounts.ts"));
+  if (!/creditInflight\[region\]\.has\(id\)/.test(store)) {
+    throw new Error("积分请求丢了单航班复用 —— 挂载 / 自动刷新 / 手动刷新会各打一轮上游");
+  }
+  if (!/creditFullRefreshedAt/.test(store)) {
+    throw new Error("store 没有「全量刷新时刻」—— TTL 会被只补一个账号的请求推后");
+  }
+  if (!/coversRegion =[\s\S]{0,160}force && slice\.accounts\.length > 0/.test(store)) {
+    throw new Error("`creditFullRefreshedAt` 未限定「force 且覆盖全区」—— 部分刷新会把 TTL 重置");
+  }
+  const hook = stripComments(readCode("src/lib/use-credit-auto-refresh.ts"));
+  if (!/creditFullRefreshedAt\[region\]/.test(hook)) {
+    throw new Error("TTL 判据没读 `creditFullRefreshedAt` —— 存在长期失败账号时窗口恒为「新鲜」");
+  }
+  if (/CREDIT_REFRESH_INTERVAL_MS/.test(hook)) {
+    throw new Error("30 分钟静默定时器又回来了（spec §12.6 已取消：任何页面任何时间打上游，用户看不见）");
+  }
+  const page = stripComments(readCode("src/pages/AccountsPage.tsx"));
+  if (!/creditResult\.total === 0 \|\| creditResult\.failed === 0/.test(page)) {
+    throw new Error("一键刷新丢了积分层的成败判定 —— 积分全失败时仍会报「完成」");
+  }
+  if (!/\(\"ok\" \| \"partial\" \| \"fail\"\)\[\][\s\S]{0,120}\[creditOutcome, travelOutcome, snapshotOutcome\]/.test(page)) {
+    throw new Error("一键刷新没有把四层汇总成同一份 `outcomes` —— 「按层如实判定」会退化成单层判定");
+  }
+  const qoder = stripComments(readCode("src/pages/QoderAccountsPage.tsx"));
+  if (/useState\(\(\) => cachedEnrichment !== undefined\)/.test(qoder)) {
+    throw new Error("Qoder `checkinLoaded` 又用缓存代替「本轮已尝试」—— 抽屉会与在途快照并发补取（spec §11）");
+  }
+  return "单航班复用 · 全量时刻独立 · TTL 读全量时刻 · 无 30 分钟定时器 · 一键刷新按层判定 · Qoder 快照契约";
+});
+
+check("★ 冷启动提速（spec §12.9）：负缓存期保便宜层 · Trae 单航班 · 状态闸门只挡事件路径", () => {
+  /* 变异清单（每条都对应一个**用户能看见**的退化）：
+       ① 负缓存直接返回 None ⇒ 运行中新装客户端停在「未安装」占位，而「重新检测」
+          与轮询走同一条命令，5 分钟内救不回来；
+       ② 便宜探测跑空后刷新结论时刻 ⇒ 负缓存被轮询续期，永不过期；
+       ③ 启动失败不作废进程内结论 ⇒ 用户被同一个死路径报同样的错直到 TTL 到期；
+       ④ 去掉 `variantsInflight` ⇒ 切到 Trae 分区一轮打两次 `get_trae_variants`；
+       ⑤ 闸门挪进 `refreshStatus` ⇒ 定时轮询与闸门同归于尽。 */
+  const process = readCode("crates/buddy-switch-core/src/modules/process.rs");
+  const probeArmStart = process.indexOf("WindowsExeCacheLookup::MissFreshProbeDue =>");
+  if (probeArmStart < 0) {
+    throw new Error("负缓存分支不见了 —— 运行中新装的客户端只能等 5 分钟负缓存过期");
+  }
+  const probeArm = process.slice(probeArmStart, process.indexOf("WindowsExeCacheLookup::Stale =>", probeArmStart));
+  if (!probeArm.includes("windows_fallback_exe_probe_for")) {
+    throw new Error("负缓存期不再跑便宜候选 —— 装到默认目录的客户端也要等满 5 分钟才被发现");
+  }
+  for (const expensive of ["windows_running_workbuddy_exe_for", "windows_registry_exe_candidates_for"]) {
+    if (probeArm.includes(expensive)) {
+      throw new Error(`负缓存期又调了 ${expensive}（会 spawn PowerShell）—— 负缓存白加`);
+    }
+  }
+  // 便宜层跑空时只能推进节流时间戳：一旦调 `remember_windows_exe_path(region, None)`
+  // 就把结论时刻也刷新了，5 分钟窗口被轮询不断续期 ⇒ 永远等不到完整重探。
+  if (!probeArm.includes("touch_windows_exe_cheap_probe(region);")) {
+    throw new Error("便宜探测没有推进自己的节流时间戳 —— 每次焦点刷新都会重跑一串 stat");
+  }
+  if (probeArm.includes("remember_windows_exe_path(region, None)")) {
+    throw new Error("便宜探测跑空时刷新了结论时刻 —— 负缓存被轮询续期，永远等不到重探");
+  }
+  if (!probeArm.includes("None => None,")) {
+    throw new Error("负缓存期跑空不再返回「没找到」—— 调用方会拿到一个不存在的路径");
+  }
+  if (!/invalidate_windows_exe_cache\(region\);\s*return Err\(/.test(process)) {
+    throw new Error("启动失败没有作废进程内结论 —— 同一个死路径会被报满整个 TTL");
+  }
+
+  const variants = readCode("src/lib/trae-variant-status.ts");
+  if (!/if \(variantsInflight\) return variantsInflight;/.test(variants)) {
+    throw new Error("Trae 变体探测丢了在途单航班 —— 切区时 App 与页面同拍各探一次");
+  }
+  if (!/if \(variantsInflight === run\) variantsInflight = null;/.test(variants)) {
+    throw new Error("Trae 变体单航班没有清理 —— 一次失败会把后续调用钉在旧结果上");
+  }
+
+  const refresh = readCode("src/lib/use-workbuddy-status-refresh.ts");
+  if (!/performance\.now\(\) - lastRefreshAt < WORKBUDDY_STATUS_FOCUS_MIN_INTERVAL_MS/.test(refresh)) {
+    throw new Error("状态刷新闸门不见了 —— 每次 alt-tab 都要付一轮 `get_status`");
+  }
+  if (!/lastRefreshAt = Number\.NEGATIVE_INFINITY/.test(refresh)) {
+    throw new Error("闸门初值不是 -Infinity —— `performance.now()` 从页面加载起算，首屏刷新会被自己吞掉");
+  }
+  const plainRefresh = refresh.slice(
+    refresh.indexOf("function refreshStatus()"),
+    refresh.indexOf("function refreshStatusOnEvent"),
+  );
+  if (plainRefresh.includes("WORKBUDDY_STATUS_FOCUS_MIN_INTERVAL_MS")) {
+    throw new Error("闸门挪进了 `refreshStatus` —— 定时轮询会被一起吞掉（应只装在事件包装里）");
+  }
+  if (!/setInterval\(refreshStatus, WORKBUDDY_STATUS_REFRESH_INTERVAL_MS\)/.test(refresh)) {
+    throw new Error("定时器没挂在无闸门的 `refreshStatus` 上");
+  }
+
+  // ⑥ 账号页的 CLI / IDE / 插件探测必须延后到首屏之后：它们每个都要 spawn
+  //    PowerShell（Windows 实测 ~1s），回到挂载同步执行就是首屏前的进程风暴。
+  const wbPage = readCode("src/pages/AccountsPage.tsx");
+  if (!/LOCAL_PROBE_DEFER_MS\s*=\s*1200/.test(wbPage)) {
+    throw new Error("账号页的本机探测延时常量不见了 —— 4–6 个 PowerShell 会回到首屏前与状态/积分抢资源");
+  }
+  if (
+    !/setTimeout\(\(\) => \{[\s\S]*?refreshCodebuddyCliStatus[\s\S]*?\}, LOCAL_PROBE_DEFER_MS\)/.test(
+      wbPage,
+    )
+  ) {
+    throw new Error("延时常量存在，但探测 effect 没有接到它上（或又被改回挂载即执行）");
+  }
+  return "负缓存期保便宜层 · 便宜探测不续期 · 启动失败作废结论 · Trae 单航班 · 闸门只挡事件路径 · 账号页探测延后";
+});
+
+check("★ Win32 原生进程枚举（spec §12.9）：展示 / 守卫 / 运行路径不再起 tasklist / PowerShell", () => {
+  /* 变异清单（每条都对应一次实测过的退化）：
+       ① 全量枚举回到 `tasklist` ⇒ 每次冷快照 +~0.5s（实测 516–574ms → 原生 ~9ms）；
+       ② 运行路径探测回到 PowerShell ⇒ 缓存缺失时每次 +~1s；
+       ③ 写前守卫改用展示快照 ⇒ 1 秒陈旧，可能放过正在写文件的客户端。 */
+  const src = readCode("crates/buddy-switch-core/src/modules/process.rs");
+  if (!src.includes("CreateToolhelp32Snapshot")) {
+    throw new Error("找不到 ToolHelp 实现 —— 原生枚举被整体删掉了");
+  }
+  const enumFn = src.slice(
+    src.indexOf("fn enumerate_windows_process_rows"),
+    src.indexOf("fn snapshot_engine"),
+  );
+  if (!enumFn.includes("win_proc::snapshot_rows()")) {
+    throw new Error("全量枚举没有走原生快照（展示 / 实时 / 守卫全部退化为子进程）");
+  }
+  if (enumFn.includes('run_cmd_timeout("tasklist"')) {
+    throw new Error("全量枚举又回到了 tasklist 子进程（每次冷快照 +~0.5s）");
+  }
+
+  const runningFn = src.slice(
+    src.indexOf("fn windows_running_workbuddy_exe_for"),
+    src.indexOf("const WINDOWS_REGISTRY_SCRIPT"),
+  );
+  if (runningFn.includes("ps_output")) {
+    throw new Error("运行路径探测又回到了 PowerShell（缓存缺失时 +~1s）");
+  }
+  if (!runningFn.includes("win_proc::snapshot_rows")) {
+    throw new Error("运行路径探测没有用原生快照");
+  }
+  if (!runningFn.includes("win_proc::image_path")) {
+    throw new Error("运行路径探测没有按匹配映像名取路径");
+  }
+
+  const guardFn = src.slice(
+    src.indexOf("pub fn is_image_running"),
+    src.indexOf("fn windows_rows_match_image"),
+  );
+  if (!guardFn.includes("fresh_process_rows()")) {
+    throw new Error("写前守卫没有走实时进程枚举");
+  }
+  if (guardFn.includes('"tasklist"')) {
+    throw new Error("写前守卫又回到了 tasklist 子进程");
+  }
+  return "ToolHelp 全量枚举 · 运行路径按名取路径 · 守卫实时枚举";
+});
+
+check("★ Qoder 逐包 / 聚合两条通道：逐包成功后聚合不缺席（展示兜底 + 单账号补取）", () => {
+  /* 用户报障：卡片「资源包」读了逐包，进详情页积分仍显示「—」、还要再点一次刷新。
+     根因是两条独立通道：逐包走网页会话，卡片主积分行 / 表格 / 抽屉指标读聚合额度
+     （openapi）。这一条钉住三件事：
+       ① 逐包成功后，聚合缺席 / 失败时自动补取该账号；
+       ② 展示层用 `creditForDisplay`（聚合优先、逐包合计兜底）；
+       ③ 排序 / 「优先」仍读实时 `credits`，派生值不得重排列表。 */
+  const page = readCode("src/pages/QoderAccountsPage.tsx");
+  if (!/async function loadCreditOne\(/.test(page)) {
+    throw new Error("逐包成功后补取聚合额度的入口不见了");
+  }
+  if (!/result\.available && !creditsRef\.current\[uid\]\?\.ok/.test(page)) {
+    throw new Error("逐包成功后不再补取聚合额度 —— 详情页会停在「—」");
+  }
+  if (!/const creditForDisplay = useCallback\(/.test(page)) {
+    throw new Error("展示兜底 `creditForDisplay` 不见了 —— 聚合失败时又只剩「—」");
+  }
+  const stats = page.slice(page.indexOf("const detailStats"), page.indexOf("const detailPacks"));
+  if (!stats.includes("creditForDisplay(detailLive.uid)")) {
+    throw new Error("抽屉指标没走展示兜底");
+  }
+  if (!page.includes("creditForDisplay(account.uid)")) {
+    throw new Error("卡片 / 表格积分没走展示兜底");
+  }
+  const priority = page.slice(page.indexOf("const priorityAccountId"), page.indexOf("const [checkinMap"));
+  if (!priority.includes("credits[account.uid]")) {
+    throw new Error("「优先」标记改读了派生值 —— 展示兜底不得参与排序");
+  }
+  return "逐包→聚合补取 · 展示兜底 · 排序仍读实时值";
+});
+
+check("★ Qoder 资源包列表：用完 / 已过期不显示 · 最近到期在前", () => {
+  /* 用户要求：资源包按最近到期排前面；用完的移除；已过期但仍有剩余的也不保留。
+     变异：删掉 remaining 过滤 ⇒ 0/0 占位重新占满列表；漏掉过期过滤 ⇒ 过期包又回到
+     列表最前（它到期最近，排序会把它顶到第一位）；删掉 sort ⇒ 顺序回到后端原序。 */
+  const lib = readCode("src/lib/qoder-packs.ts");
+  if (!/export function visibleQoderPacks/.test(lib)) {
+    throw new Error("共享的 `visibleQoderPacks` 不见了 —— 浮层与抽屉会各写一套");
+  }
+  const fn = lib.slice(
+    lib.indexOf("export function visibleQoderPacks"),
+    lib.indexOf("export function packSourceLabel"),
+  );
+  if (!/pack\.remaining\s*[<>]=?\s*0/.test(fn)) {
+    throw new Error("用完的包没有被过滤掉（0/0 占位会继续显示）");
+  }
+  if (!/expiry === null \|\| expiry > now/.test(fn)) {
+    throw new Error("已过期的包没有被过滤（即使仍有剩余也不能显示）");
+  }
+  if (!fn.includes("expiresAtMs") || !fn.includes("sort(")) {
+    throw new Error("资源包没有按到期时间排序（最近到期必须在前）");
+  }
+  const popover = readCode("src/components/qoder/qoder-packs-popover.tsx");
+  if (!popover.includes("visibleQoderPacks(packs!.packs)")) {
+    throw new Error("卡片资源包浮层没走共享的过滤/排序");
+  }
+  const page = readCode("src/pages/QoderAccountsPage.tsx");
+  if (!page.includes("visibleQoderPacks(web.packs)")) {
+    throw new Error("详情抽屉的资源包列表没走共享的过滤/排序");
+  }
+  return "用完 / 过期不显示 · 最近到期在前 · 浮层/抽屉同源";
 });
 
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {
@@ -3998,14 +4279,31 @@ check("★ P6 首次引导：默认显示、关闭后持久化不再显示", () 
   return "首启显示 / 关闭持久化 / 无存储显示";
 });
 
-check("★ P6 引导内容由真实绑定派生（降级项不写进引导，防「引导里有、按了没反应」）", () => {
+check("★ P6 首次引导：讲基本流程而不是快捷键（退回快捷键清单即变红）", () => {
+  /* 首次用户需要的是「账号从哪来、程序位怎么切」，不是熟练后才用得上的加速器。
+     引导必须列全四步，且按钮名复用真实词条（界面改名时引导自动跟随）；
+     若又改回 `⌘K` / `⌘1..N` / `/` 的清单 ⇒ 本条变红。 */
   const code = readCode(FIRST_RUN_COMPONENT);
-  if (!/planScopeShortcuts\(/.test(code)) throw new Error("引导没有用 `planScopeShortcuts` 派生内容");
-  if (!/bindings\.size\s*>\s*0/.test(code)) {
-    throw new Error("引导没有按 `bindings.size > 0` 决定是否列出 ⌘1..N");
+  for (const key of [
+    "firstRun.step.scope.title",
+    "firstRun.step.account.title",
+    "firstRun.step.switch.title",
+    "firstRun.step.daily.title",
+  ]) {
+    if (!code.includes(key)) throw new Error(`首次引导缺少基本流程步骤：${key}`);
+  }
+  for (const key of [
+    "shared.addDrawer.title",
+    "shared.toolbar.quickRefresh",
+    "shared.toolbar.quickCheckin",
+  ]) {
+    if (!code.includes(key)) throw new Error(`首次引导没有复用真实按钮词条：${key}`);
+  }
+  if (/planScopeShortcuts|firstRun\.openPalette|firstRun\.scopeShortcut|firstRun\.listSearch/.test(code)) {
+    throw new Error("首次引导退回了快捷键清单 —— 首次用户需要的是基本流程");
   }
   if (!/shouldShowFirstRunHint|dismissFirstRunHint/.test(code)) throw new Error("引导没有接持久化");
-  return "引导走 planScopeShortcuts + bindings.size 判据 + 持久化";
+  return "四步基本流程 · 按钮名复用真实词条 · 不再列快捷键 · 持久化";
 });
 
 check("★ P6 设置项：reason=too-many 时不显示快捷键开关（无可开启之物，防假控件）", () => {
@@ -4504,7 +4802,7 @@ check("★ P9 T03 状态语言：首帧 `<Skeleton>`、空态 `<EmptyState>`（�
  *
  * 上面 11 条锁 P9 T01/T02/T03；下面 5 条锁 T04 最易回退的判据：
  *   ★ 侧栏左下角入口存在且是**开关**（不是第二个「看起来能切」的控件）/
- *     可见性偏好落在 L0 localStorage（默认显示）+ 与托盘 / 关闭按钮经事件同步 /
+ *     可见性偏好落在 L0 localStorage（默认隐藏）+ 与托盘 / 关闭按钮经事件同步 /
  *     入口**不是一次性的**（关闭 = 隐藏、可重开）+ 托盘勾选态随可见性事件刷新 /
  *     入口词条 zh + en 同步。
  *
@@ -4552,9 +4850,10 @@ check("★ P9 T04 不是第二个「看起来能切」的控件：侧栏入口�
   return "无 Select / Tabs / DropdownMenu · aria-pressed 开关";
 });
 
-check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认显示）+ listen 同步（缺同步即变红）", () => {
-  /* 载体必须是 L0 localStorage（§2.1 / §1.5），默认**显示**（§3.16）；且必须 `listen`
-     可见性事件与托盘 / 关闭按钮同步（否则三面会各说各话 = 多个能切的控件）。 */
+check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认隐藏）+ listen 同步（缺同步即变红）", () => {
+  /* 载体必须是 L0 localStorage（§2.1 / §1.5），默认**隐藏**（2026-11-06 调整：悬浮窗多数时候
+     没有数据，常驻显示等于长期占着一块空窗）；且必须 `listen` 可见性事件与托盘 / 关闭按钮同步
+     （否则三面会各说各话 = 多个能切的控件）。 */
   if (!fs.existsSync(path.join(ROOT, COMPANION_VISIBILITY_TS))) {
     throw new Error(`缺少 ${COMPANION_VISIBILITY_TS}`);
   }
@@ -4568,10 +4867,10 @@ check("★ P9 T04 可见性偏好 hook：L0 localStorage（默认显示）+ list
   if (!/"companion-visibility"/.test(lib)) {
     throw new Error("hook 的事件名与 companion.rs 的 `VISIBILITY_EVENT` 不一致");
   }
-  if (!/raw === null \? true/.test(lib)) {
-    throw new Error("偏好默认值不是「显示」（未设置时应返回 true，§3.16「默认显示」）");
+  if (!/raw === null \? false/.test(lib)) {
+    throw new Error("偏好默认值不是「隐藏」（未设置时应返回 false）");
   }
-  return "localStorage(默认显示) · listen(companion-visibility) · 与托盘/关闭按钮同源";
+  return "localStorage(默认隐藏) · listen(companion-visibility) · 与托盘/关闭按钮同源";
 });
 
 check("★ P9 T04 入口不是一次性的 + 勾选态同步（关闭=隐藏可重开；托盘随事件刷新）", () => {
@@ -4691,17 +4990,18 @@ const APP_SETTINGS_SNAPSHOT = "src/lib/app-settings-snapshot.ts";
 const BACKUP_LOCALE_ZH = "src/locales/domains/backup.zh.ts";
 const BACKUP_LOCALE_EN = "src/locales/domains/backup.en.ts";
 
-check("★ 设置子导航 7 项：通用 / 备份与恢复已移出客户端设置（全局设置抽屉承载）", () => {
-  /* 为什么改：这两项对所有客户端生效，留在每个客户端的设置页会让同一份全局配置
-     在 WB / Trae / Qoder 三处重复出现。现在统一挂在顶栏 ⚙「应用设置」抽屉里作入口，
-     点击打开弹框（`global-settings-dialogs.tsx`），抽屉不再平铺整页设置。
+check("★ 设置子导航 8 项：通用 / 备份与恢复已移出客户端设置，网络分区只给 Qoder", () => {
+  /* 为什么改：通用 / 备份对所有客户端生效，留在每个客户端的设置页会让同一份全局配置
+     在 WB / Trae / Qoder 三处重复出现；现在统一挂在顶栏 ⚙「应用设置」抽屉里作入口。
+     `network` 是 Qoder 逐包取数的出站代理（issue #111）：只有 Qoder 设置页把它收进
+     自己的分区集，全局设置页显式过滤掉，避免摆一个空分区。
      变异①：把 general / backup 加回子导航表 ⇒ 本条变红。
      变异②：抽屉只剩平铺内容、没有两个入口（或入口没接 onClick）⇒ 本条变红。 */
   const code = readCode(BACKUP_SUBNAV);
   const m = code.match(/SETTINGS_SUBNAV[\s\S]*?=\s*\[([\s\S]*?)\];/);
   if (!m) throw new Error("找不到 `SETTINGS_SUBNAV` 表");
   const ids = [...m[1].matchAll(/id:\s*"([a-z]+)"/g)].map((x) => x[1]);
-  const want = ["account", "checkin", "gateway", "schedule", "client", "diagnostics", "logs"];
+  const want = ["account", "checkin", "gateway", "schedule", "client", "network", "diagnostics", "logs"];
   if (ids.join(",") !== want.join(",")) {
     throw new Error(`子导航应为 ${want.join(" / ")}，实际 ${ids.join(" / ") || "（空）"}`);
   }

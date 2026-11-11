@@ -820,4 +820,8 @@ export const en = {
   "shared.srv.localUnavailableDesc": "Use \"Browser authorization\" or \"Paste credentials\" instead; or export a backup on a machine that has the client and import it here",
   "shared.srv.oauthTitle": "Browser authorization",
   "shared.srv.oauthDesc": "Generates a link and QR code; authorize on any device, the server collects the result",
+
+  // ---- Credit views (auto-refresh cadence / last refresh) ----
+  "shared.credit.autoEvery": "Auto-refreshes every {n} min",
+  "shared.credit.lastRefresh": "Last refreshed {time}",
 };

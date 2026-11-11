@@ -6,7 +6,8 @@
  *
  * 「桌面悬浮窗可见性 → localStorage」，**键名与 scope 无关**（全局一个，P9 §1.5 / §4.3）。
  * 悬浮窗是 **app 级聚合**（不属于 L0–L3、跨 scope，✅ #4），它的可见性偏好因此也不该被
- * region 切分。默认 `true`（§3.16「默认显示」）。
+ * region 切分。**默认 `false`**：悬浮窗只在窗口期有数据（切号/签到进行中，或用户手动开启
+ * 「外部 Agent 会话监听」），默认常驻等于长期占着一块空窗 ⇒ 改为默认隐藏、按需从侧栏/托盘打开。
  *
  * ## 单一真值：三处入口收敛到 `companion_set_visible`
  *
@@ -17,10 +18,9 @@
  *
  * ## 启动按偏好落地（§1.2 / §4.5）
  *
- * 设计写的是「启动：按偏好决定是否 ensure()（**默认显示**）」。偏好存在**前端**
- * （localStorage），Rust 无从读取 ⇒ 由本 hook 在挂载时把它**应用到真实窗口**：
- * 偏好 `true` ⇒ 启动即显示；偏好 `false`（用户上次关掉）⇒ 保持隐藏。
- * 这既是「默认显示」的落地，也是「记住用户选择」。
+ * 偏好存在**前端**（localStorage），Rust 无从读取 ⇒ 由本 hook 在挂载时把它
+ * **应用到真实窗口**：偏好 `true`（用户上次打开过）⇒ 启动即显示；偏好 `false`
+ * （默认值或用户上次关掉）⇒ 保持隐藏。这既是默认隐藏的落地，也是「记住用户选择」。
  *
  * ## webui 安全
  *
@@ -50,16 +50,16 @@ const COMPANION_VISIBILITY_KEY = "buddy-switch.companion-visible";
  */
 const COMPANION_VISIBILITY_EVENT = "companion-visibility";
 
-/** 读取持久化的可见性偏好；**默认 `true`**（§3.16「默认显示」）。 */
+/** 读取持久化的可见性偏好；**默认 `false`**（不占屏，按需从侧栏/托盘打开）。 */
 function readCompanionVisibilityPreference(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   try {
     const raw = window.localStorage.getItem(COMPANION_VISIBILITY_KEY);
-    // 未设置 ⇒ 默认显示；只有显式写入过 `"false"` 才判为隐藏。
-    return raw === null ? true : raw === "true";
+    // 未设置 ⇒ 默认隐藏；只有显式写入过 `"true"` 才判为显示。
+    return raw === null ? false : raw === "true";
   } catch {
     // 隐私模式 / 存储被禁用：退回默认（**不抛** —— 偏好是锦上添花，不该让侧栏崩）。
-    return true;
+    return false;
   }
 }
 
@@ -95,7 +95,7 @@ export function useCompanionVisibility(): [boolean, (next: boolean) => void] {
     let unlisten: (() => void) | undefined;
 
     // ① 启动按偏好落地：把 localStorage 里的偏好应用到真实窗口（幂等，StrictMode 双挂载无害）。
-    //    这是「默认显示」真正生效的一步 —— 只有前端知道偏好，Rust 无从读取（§1.2 / §4.5）。
+    //    这是偏好真正生效的一步 —— 只有前端知道偏好，Rust 无从读取（§1.2 / §4.5）。
     void api.companionSetVisible(readCompanionVisibilityPreference()).catch(() => {
       /* 后端未就绪（冷启动 / 演示模式）不致命：窗口显示与否由下次交互决定 */
     });

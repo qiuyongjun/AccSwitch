@@ -33,10 +33,20 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os
+          # ★ 2026-11-10：`macos-14` 已于 **2026-11-02 被 GitHub 退役**
+          #   （github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement）。
+          #   退役后 job **不会报错**，而是「2 秒内 cancelled、runner 为空、零步骤执行」——
+          #   v2026.11.101107 / v2026.11.101348 两轮都栽在这，表现成「CI 看着成功，
+          #   Publish release assets 被 skip，于是没有 Release」。
+          #   ⇒ 改用 `macos-15-intel`（标准 x64 镜像，仍可用）。**特意不换 mac-arm64 的宿主架构**：
+          #   此前两条 macOS 都跑在 x64 宿主上（mac-arm64 靠 cross-compile 到
+          #   aarch64-apple-darwin），保持一致可避免引入新的交叉编译差异。
+          #   下次该标签退役时，这里会再以同样「静默 cancelled」的方式坏掉 ——
+          #   判断特征是 job 的 runner 为空且 started_at == completed_at。
           all_platforms = [
               {
                   "name": "mac-arm64",
-                  "os": "macos-14",
+                  "os": "macos-15-intel",
                   "target": "aarch64-apple-darwin",
                   "cli_bin": "buddy-switch-darwin-arm64",
                   "platform_tag": "darwin-arm64",
@@ -48,7 +58,7 @@ jobs:
               },
               {
                   "name": "mac-x64",
-                  "os": "macos-14",
+                  "os": "macos-15-intel",
                   "target": "x86_64-apple-darwin",
                   "cli_bin": "buddy-switch-darwin-x64",
                   "platform_tag": "darwin-x64",
@@ -264,9 +274,20 @@ jobs:
           echo "签名密钥已配置（${#KEY} 字符，不回显内容）"
 
       # 前端构建产物（CLI 二进制 rust-embed 嵌入 + Tauri App 使用）
+      #
+      # ★ 2026-11-10：v2026.11.101107 首次发版红在这里，原因**不是代码**：
+      #   `npm error 504 Gateway Time-out - GET https://registry.npmmirror.com/use-sidecar/-/use-sidecar-1.1.3.tgz`
+      #   ⇒ 装了一半，接着 `'tsc' is not recognized` ⇒ exit 1。
+      #   根因是 `package-lock.json` 里 269 个 tarball 地址钉在国内镜像上，而 runner 在境外。
+      #   同一轮已把锁文件归一为 registry.npmjs.org（tarball 逐字节相同，integrity 不变）。
+      #
+      #   这里再留一层兜底：npm 默认只重试 2 次、单请求超时 5 分钟、退避最多 60s，
+      #   遇到源端 5xx 或跨境抖动会直接失败；而这类错误**重试几乎总能过**。
+      #   增大的重试只影响失败路径的耗时，正常安装不变。
+      #   ⚠️ 必须写成**一行**：Windows runner 的默认 shell 是 pwsh，反斜杠续行只在 bash 里成立。
       - name: Build frontend
         run: |
-          npm install
+          npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 --fetch-timeout=600000
           npm run build
 
       # CLI 二进制

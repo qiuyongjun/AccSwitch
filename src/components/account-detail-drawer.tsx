@@ -267,6 +267,20 @@ export interface AccountDetailDrawerProps {
   /** 积分 / 资源包明细；空数组 = 不渲染该区块。 */
   packs?: DetailPack[];
   /**
+   * 积分包区块下方的**说明 + 一个动作**（文案由调用方给，本组件不含平台专属词条）。
+   *
+   * 用途：某些平台的逐包明细要额外授权才拿得到（Qoder 需要网页端登录一次），
+   * 此时列表里只剩聚合回落行 —— 不说明原因的话，用户会以为「这个账号没有包」。
+   * 传 `null` / 不传 ⇒ 不渲染。
+   */
+  packsNotice?: {
+    text: string;
+    actionLabel?: string;
+    onAction?: () => void;
+    /** 动作进行中（按钮置灰）。 */
+    busy?: boolean;
+  } | null;
+  /**
    * 调用方**真的能刷**的刷新项（与卡片 / 批量条用的 `refreshKinds` 同一份）。
    *
    * ★ 2026-10-26（用户报障「没有积分页」）：积分页签此前**只在有包明细时**出现，
@@ -455,6 +469,7 @@ export function AccountDetailDrawer({
   avatarSeed,
   loading = false,
   packs = [],
+  packsNotice = null,
   refreshKinds = [],
   stats = [],
   snapshots = [],
@@ -1006,6 +1021,27 @@ export function AccountDetailDrawer({
                         </Button>
                       )}
                     </div>
+                    {/* ★ 网页会话说明 / 退出登录放在列表**上方**：放列表底部时，
+                        资源包多的时候用户要滚到底才看得到「退出网页登录」。 */}
+                    {packsNotice ? (
+                      <div className="mb-3 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
+                        <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                          {packsNotice.text}
+                        </p>
+                        {packsNotice.actionLabel && packsNotice.onAction ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="mt-1.5 h-7"
+                            disabled={packsNotice.busy}
+                            onClick={packsNotice.onAction}
+                          >
+                            {packsNotice.actionLabel}
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {packs.length > 0 ? (
                       <div className="space-y-3">
                         {packs.map((pack) => (

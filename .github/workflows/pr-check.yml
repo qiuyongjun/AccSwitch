@@ -209,7 +209,7 @@ jobs:
           done
 
   # ★ issue #37：macOS 侧的回归此前**无法由 CI 证明** ——
-  # `rust` job 只在 ubuntu 上跑，而 `build.yml` 的 `macos-14` 只产出 bundle、不跑
+  # `rust` job 只在 ubuntu 上跑，而 `build.yml` 的 macOS 平台只产出 bundle、不跑
   # `cargo test`。于是「Windows 全绿、macOS 仍有 6 条失败」只能靠人工在 mac 机器上
   # 复跑（那一条修复：`data_dir_base()` 不认 `home` 覆盖）才敢确认。
   #
@@ -222,7 +222,10 @@ jobs:
   # - 失败时抛**注解**而不是把结论留在需登录才能看的日志里（与 `rust` job 一致的取舍）。
   rust-macos:
     name: Rust tests on macOS (core)
-    runs-on: macos-14
+    # ★ 2026-11-10：`macos-14` 已于 2026-11-02 退役（GitHub 公告），退役后 job 表现为
+    # 「cancelled、runner 为空、零步骤执行」而不是报错。改用 `macos-15-intel`，
+    # 与 `build.yml` 的 macOS 宿主架构保持一致（都在 x64 上跑）。
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 

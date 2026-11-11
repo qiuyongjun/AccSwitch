@@ -100,9 +100,15 @@ export const en = {
 
   // ---- First-run hint (P6 §1.5) ----
   "firstRun.title": "Quick start",
-  "firstRun.openPalette": "Press {shortcut} to open the command palette and search across scopes.",
-  "firstRun.scopeShortcut": "Press {shortcut} to switch directly to a scope.",
-  "firstRun.listSearch": "Press / on the accounts page to focus search.",
+  "firstRun.subtitle": "Four steps to add accounts and start using them",
+  "firstRun.step.scope.title": "Choose a scope",
+  "firstRun.step.scope.desc": "Pick a platform and region in the top bar; accounts, usage and gateway are scoped independently.",
+  "firstRun.step.account.title": "Add an account",
+  "firstRun.step.account.desc": "On the Accounts page, click \"{add}\" to sign in or scan; import an existing local login if you have one.",
+  "firstRun.step.switch.title": "Switch a program slot",
+  "firstRun.step.switch.desc": "Click an IDE / CLI / VS Code slot on an account card; desktop clients are closed and reopened.",
+  "firstRun.step.daily.title": "Keep status fresh",
+  "firstRun.step.daily.desc": "Use \"{refresh}\" and \"{checkin}\" in the page header to update credits, check-ins and credentials.",
   "firstRun.dismiss": "Got it",
 
   // ---- Undo toast (P6 T04 §1.4) ----
@@ -185,6 +191,7 @@ export const en = {
   "settings.subnav.gateway": "Gateway",
   "settings.subnav.schedule": "Scheduled tasks",
   "settings.subnav.client": "Client",
+  "settings.subnav.network": "Network",
   "settings.subnav.diagnostics": "Permissions & diagnostics",
   "settings.subnav.logs": "Logs",
 
@@ -364,6 +371,46 @@ export const en = {
   "settings.logs.emptyBody":
     "This section only holds this tool's settings and backup entries; WorkBuddy's own runtime logs live in a logs subdirectory of its data dir (not surfaced here yet).",
   "settings.logs.emptyAction": "Open gateway settings",
+
+  // ---- Settings "Logs" section: this tool's own runtime log ----
+  "settings.runtimeLog.groupTitle": "Runtime log",
+  "settings.runtimeLog.intro":
+    "What this tool did and which step failed — gateway startup, account switching, background tasks, crashes. Kept for {days} days, current level {level}. The client's own logs are not here.",
+  "settings.runtimeLog.levelAll": "All levels",
+  "settings.runtimeLog.levelError": "Error",
+  "settings.runtimeLog.levelWarn": "Warning",
+  "settings.runtimeLog.levelInfo": "Info",
+  "settings.runtimeLog.levelDebug": "Debug",
+  "settings.runtimeLog.dateAll": "All dates",
+  "settings.runtimeLog.searchPlaceholder": "Search scope or message…",
+  "settings.runtimeLog.search": "Filter",
+  "settings.runtimeLog.reset": "Reset",
+  "settings.runtimeLog.autoRefresh": "Auto refresh",
+  "settings.runtimeLog.autoRefreshAria": "Auto refresh the runtime log",
+  "settings.runtimeLog.refresh": "Refresh",
+  "settings.runtimeLog.copy": "Copy",
+  "settings.runtimeLog.openDir": "Open folder",
+  "settings.runtimeLog.openDirFailed": "Failed to open the log folder",
+  "settings.runtimeLog.clear": "Clear",
+  "settings.runtimeLog.cleared": "Deleted {count} log file(s)",
+  "settings.runtimeLog.clearFailed": "Failed to clear the runtime log",
+  "settings.runtimeLog.clearConfirmTitle": "Clear the runtime log?",
+  "settings.runtimeLog.clearConfirmBody":
+    "All runtime log files will be deleted and cannot be recovered. Recording restarts on the next launch. Accounts, settings and usage ledgers are not affected.",
+  "settings.runtimeLog.clearConfirmAction": "Clear",
+  "settings.runtimeLog.cancel": "Cancel",
+  "settings.runtimeLog.countSummary": "{total} entries",
+  "settings.runtimeLog.truncated": "Truncated to the latest {limit}",
+  "settings.runtimeLog.emptyTitle": "No runtime log yet",
+  "settings.runtimeLog.emptyBody":
+    "Recording starts once this tool launches. An empty list right after a fresh install is expected.",
+  "settings.runtimeLog.emptyFilteredTitle": "No match for the current filters",
+  "settings.runtimeLog.emptyFilteredBody":
+    "The log files may genuinely have no such entries; reset the filters to see everything.",
+  "settings.runtimeLog.details": "Location and limits",
+  "settings.runtimeLog.dirLabel": "Folder",
+  "settings.runtimeLog.limitLabel": "Limits",
+  "settings.runtimeLog.limitValue": "Keep {days} days · {size} per file · up to {parts} parts per day",
 
   // ---- Scope visibility (app-settings.tsx) ----
   "appSettings.scopeVisibility.groupTitle": "Scope Visibility",

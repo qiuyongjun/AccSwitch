@@ -229,6 +229,9 @@ export const zh = {
   "wbAccounts.card.loadingCredits": "积分查询中…",
   "wbAccounts.card.waitingCredits": "等待积分数据…",
   "wbAccounts.card.creditFailed": "积分查询失败",
+  // ★ 2026-11-10：首屏用落盘缓存占位时必须自报时间 —— 缓存最长 7 天，
+  // 而指标行会把旧批次说成「明天到期」。{age} 由 `formatCreditCacheAge` 生成。
+  "wbAccounts.card.creditCacheAge": "上次读数 · {age}",
   "wbAccounts.card.addPlaintextAccount": "用 OAuth 扫码添加",
   "wbAccounts.card.creditPackFallback": "积分包",
   "wbAccounts.card.setCurrent": "设为当前",
@@ -457,6 +460,13 @@ export const zh = {
   "wbAccounts.toast.quickRefreshScope": "已刷新 {n} 个账号：积分 · 旅行 · 签到状态 · 凭据状态 · 任务完成情况",
   "wbAccounts.toast.quickRefreshScopeNoTasks": "已刷新 {n} 个账号：积分 · 旅行 · 签到状态 · 凭据状态",
   "wbAccounts.toast.quickRefreshTasksFailed": "已刷新 {n} 个账号，但任务完成情况刷新失败",
+  // ★ 2026-11-10：一键刷新按**层**判定，积分失败不再被报成「已完成」。
+  "wbAccounts.toast.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
+  "wbAccounts.toast.quickRefreshFail": "一键刷新失败",
+  "wbAccounts.toast.quickRefreshCreditsFailed": "{failed} 个账号积分读取失败",
+  "wbAccounts.toast.quickRefreshTravelFailed": "{failed} 个账号旅行状态读取失败",
+  "wbAccounts.toast.quickRefreshTasksPartFailed": "任务完成情况刷新失败",
+  "wbAccounts.toast.quickRefreshCredentialFailed": "凭据状态读取失败",
   // ★ 2026-10-27：旅行层不再「读不到也报成功」。全部读不到时仍走这条（failed = n），
   //   已成功的项照常更新，提示语气降为 warning。
   "wbAccounts.toast.quickRefreshTravelPartial": "已刷新 {n} 个账号，但 {failed} 个旅行状态读取失败",

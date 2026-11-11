@@ -289,7 +289,7 @@ fn windows_code_process_rows() -> Vec<process::WindowsProcessRow> {
             return rows;
         }
     }
-    process::windows_tasklist_image_rows("Code.exe")
+    process::windows_process_rows_for_image("Code.exe")
         .into_iter()
         .filter(|row| row.pid != self_pid && keep_windows_code_row(row))
         .collect()

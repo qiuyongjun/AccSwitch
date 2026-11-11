@@ -193,6 +193,19 @@ docs/
 
 四个网关的 `/v1/models` 与 `/v1/chat/completions` **逐字重叠** ⇒ 不能 merge 进同一个 Router（axum 同路径 merge 是**运行期 panic**，有护栏测试 `two_products_own_overlapping_paths` 钉住）。所以永远是四个端口、四套 Key 库、四份配置。
 
+## 运行日志（排查用）
+
+本工具自身写纯文本运行日志到 `~/.buddy-switch/logs/runtime-YYYY-MM-DD.log`（单文件 4 MiB ×
+每天最多 4 片，保留 7 天）。桌面端与 `serve` 启动时都会 `init()`（装 panic hook + 启动横幅）。
+
+- 级别：环境变量 `BUDDY_SWITCH_LOG_LEVEL`（`error` / `warn` / `info` / `debug`，缺省 `info`），
+  进程启动时读一次，改后需重启。
+- 查看：设置页 →「日志」分区（`RuntimeLogCard`）：级别/日期/关键字筛选、自动刷新、复制、
+  打开目录、清空（二次确认）。
+- 与另两份日志的分工：本文件是本工具**自己**做了什么；`gateway_logs.json` 是网关请求账本；
+  各客户端自己的日志在各自数据目录。
+- 写盘前会脱敏（`name=value` 凭据名 / `Bearer` / JWT），本机路径照写。
+
 ## 门禁（改完必跑）
 
 ```bash

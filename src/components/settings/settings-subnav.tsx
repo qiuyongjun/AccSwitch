@@ -1,9 +1,9 @@
 /**
- * 设置页 **7 项子导航** —— 数据驱动。
+ * 设置页 **8 项子导航** —— 数据驱动（`network` 仅 Qoder 使用）。
  *
  * ## 为什么数据驱动
  *
- * 7 项的名字 / 图标 / 顺序只在这里声明一次，页面按 `active` 渲染对应分区。
+ * 8 项的名字 / 图标 / 顺序只在这里声明一次，页面按 `active` 渲染对应分区。
  * 加一项 = 加一行（§4.2 同一思路），不需要在页面里再写一遍 `if`。
  *
  * ## 为什么没有「通用」与「备份与恢复」
@@ -24,7 +24,7 @@
  * 原型只有一个 `viewSettings`（`buddy-switch-prototype.html:3230`），靠
  * `r.cap && p.capabilities.includes(r.cap)` 做平台差异 ⇒ **子导航表本身没有平台分支**。
  * 本仓照此办理：WorkBuddy 设置页与 Trae 设置页**接同一个 `SETTINGS_SUBNAV`**，
- * 各自渲染自己的内容（§3.9 归位表：Trae 的 10 组已全部落进这 7 项；
+ * 各自渲染自己的内容（§3.9 归位表：Trae 的 10 组已全部落进这些分区；
  * 其中通用与备份属于全局设置，见 `global-settings-dialogs.tsx`）。
  * 若某天真出现「无处安放」的项，再按 D12 走平台专属子项，而不是在这里写 `if`。
  */
@@ -32,13 +32,14 @@
 import { SideSubnav, type SideSubnavItem } from "@/components/shell/side-subnav";
 import { useT } from "@/lib/i18n";
 
-/** 7 个设置分区的标识。 */
+/** 8 个设置分区的标识（`network` 仅 Qoder 使用）。 */
 export type SettingsSubnavId =
   | "account"
   | "checkin"
   | "gateway"
   | "schedule"
   | "client"
+  | "network"
   | "diagnostics"
   | "logs";
 
@@ -51,6 +52,9 @@ export const SETTINGS_SUBNAV: readonly SettingsSubnavItem[] = [
   { id: "gateway", labelKey: "settings.subnav.gateway" },
   { id: "schedule", labelKey: "settings.subnav.schedule" },
   { id: "client", labelKey: "settings.subnav.client" },
+  /* issue #111 收尾：Qoder 逐包取数的出站代理（按区域）。目前只有 Qoder 有内容，
+     WB / Trae / 全局设置页按自己的 id 收窄，不会渲染这一项。 */
+  { id: "network", labelKey: "settings.subnav.network" },
   { id: "diagnostics", labelKey: "settings.subnav.diagnostics" },
   { id: "logs", labelKey: "settings.subnav.logs" },
 ];

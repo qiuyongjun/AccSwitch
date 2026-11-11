@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { MonitorSmartphone, ShieldAlert } from "lucide-react";
+import { Globe, MonitorSmartphone, ShieldAlert } from "lucide-react";
 
 import { QoderLocalSourceRow } from "@/components/qoder/qoder-local-source-row";
 import { TimesEditor } from "@/components/schedule-times-editor";
@@ -12,11 +12,13 @@ import {
   type SettingsSubnavId,
 } from "@/components/settings/settings-subnav";
 import { ScopeChip } from "@/components/scope-chip";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import * as api from "@/lib/api";
-import type { QoderLocalSourcesView } from "@/lib/api";
+import type { QoderLocalSourcesView, QoderWebProxyConfig } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { platformOfPath } from "@/lib/platforms/registry";
 import {
@@ -41,15 +43,15 @@ import { toast } from "sonner";
  *
  * ## ★ 为什么只列「已有内容」的分区
  *
- * 表里 7 项是按 WB / Trae 的内容收敛出来的；Qoder 侧目前**只有两处有真内容**：
- * 客户端检测（本机凭据四态探测）、计划任务（签到 / 令牌保活排程）。
- * 其余五项（账号 / 签到 / 网关 / 权限与诊断 / 日志）在 Qoder 侧**没有设置项**
+ * 表里 8 项是按 WB / Trae 的内容收敛出来的；Qoder 侧目前**有三处有真内容**：
+ * 客户端检测（本机凭据四态探测）、逐包出站代理（`network`）、计划任务（签到 / 令牌保活排程）。
+ * 其余分区（账号 / 签到 / 网关 / 权限与诊断 / 日志）在 Qoder 侧**没有设置项**
  * —— 摆上去就是 §1.7 说的**假控件**（点了只有一句「尚未接入」，比不摆更糟）。
  * 通用与备份是全局设置，统一在顶栏 ⚙「应用设置」抽屉的弹框里，不属于本页。
  * 因此用 `SettingsSubnav` 的 `items` 收窄，而不是复制一份表（复制即漂移的种子）。
  * 对应功能落地后，把它的 id 加进 {@link QODER_SETTINGS_SECTIONS} 即可。
  */
-const QODER_SECTION_IDS: readonly SettingsSubnavId[] = ["client", "schedule"];
+const QODER_SECTION_IDS: readonly SettingsSubnavId[] = ["client", "network", "schedule"];
 
 /** 收窄后的子导航项（顺序取自共享表，不另排）。 */
 const QODER_SETTINGS_SECTIONS = SETTINGS_SUBNAV.filter((item) => QODER_SECTION_IDS.includes(item.id));
@@ -73,6 +75,51 @@ export default function QoderSettingsPage() {
     loadScheduleConfig,
   );
   const [scheduleSaving, setScheduleSaving] = useState(false);
+
+  /**
+   * 逐包取数的出站代理（issue #111 收尾）。
+   *
+   * 一份配置、两个区域（CN / 国际版）。草稿与已存值分家：输入过程中不触发保存，
+   * 点「保存」才整份提交 —— 后端按整份解析，避免半份覆盖。
+   */
+  const [proxy, setProxy] = useState<QoderWebProxyConfig | null>(null);
+  const [proxyDraft, setProxyDraft] = useState<QoderWebProxyConfig>({ cn: "", global: "" });
+  const [proxySaving, setProxySaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .qoderWebProxyGet()
+      .then((config) => {
+        if (cancelled) return;
+        setProxy(config);
+        setProxyDraft(config);
+      })
+      .catch(() => {
+        /* 读不到就保持空草稿：保存时后端会给形状校验错误，比静默失败好定位。 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveProxy() {
+    if (proxySaving) return;
+    const previous = proxy;
+    setProxySaving(true);
+    try {
+      const saved = await api.qoderWebProxySet(proxyDraft);
+      setProxy(saved.config);
+      setProxyDraft(saved.config);
+      toast.success(t("qoder.page.settings.proxy.saved"));
+    } catch (error) {
+      // 失败回滚草稿到已存值（后端校验错误会原样给用户看，改完再存）。
+      if (previous) setProxyDraft(previous);
+      toast.error(t("qoder.page.settings.proxy.saveFailed"), { description: api.asError(error) });
+    } finally {
+      setProxySaving(false);
+    }
+  }
 
   /**
    * 保存排程：乐观落本地 → **整份**提交 → 回读权威值；失败回滚并提示。
@@ -186,6 +233,61 @@ export default function QoderSettingsPage() {
           {/* ---- 计划任务：Qoder 的两类排程（自动签到 / 令牌保活）----
               排程是**全局单份**（`schedule_config.json`），本页只呈现 Qoder 的两类任务。
               两组同处一个分区，因为它们是同一份配置的两个字段。 */}
+          {/* ---- 网络：逐包取数的出站代理（issue #111 收尾）----
+              按区域分两份；留空 = 直连。★ 登录窗走的是系统代理（WebView2 继承），
+              不受这里影响 —— 文案必须写清，否则用户会以为配了代理反而把登录窗弄断。 */}
+          {section === "network" && (
+            <SettingsGroup id="qoder-settings-proxy" title={t("qoder.page.settings.proxy.group")}>
+              <CardContent className="space-y-0 p-0">
+                <SettingsFieldRow
+                  label={t("qoder.page.settings.proxy.cn")}
+                  description={t("qoder.page.settings.proxy.cnHint")}
+                  htmlFor="qoder-proxy-cn"
+                >
+                  <Input
+                    id="qoder-proxy-cn"
+                    value={proxyDraft.cn}
+                    placeholder="http://127.0.0.1:7890"
+                    className="h-8 w-64 font-mono text-[12px]"
+                    onChange={(event) => setProxyDraft((prev) => ({ ...prev, cn: event.target.value }))}
+                  />
+                </SettingsFieldRow>
+                <SettingsFieldRow
+                  label={t("qoder.page.settings.proxy.global")}
+                  description={t("qoder.page.settings.proxy.globalHint")}
+                  htmlFor="qoder-proxy-global"
+                >
+                  <Input
+                    id="qoder-proxy-global"
+                    value={proxyDraft.global}
+                    placeholder="http://127.0.0.1:7890"
+                    className="h-8 w-64 font-mono text-[12px]"
+                    onChange={(event) =>
+                      setProxyDraft((prev) => ({ ...prev, global: event.target.value }))
+                    }
+                  />
+                </SettingsFieldRow>
+                <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
+                  <p className="min-w-0 text-[11.5px] leading-relaxed text-muted-foreground">
+                    {t("qoder.page.settings.proxy.note")}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 shrink-0"
+                    disabled={proxySaving || !proxy}
+                    onClick={() => void saveProxy()}
+                  >
+                    <Globe className="size-3.5" />
+                    {proxySaving
+                      ? t("qoder.page.settings.proxy.saving")
+                      : t("qoder.page.settings.proxy.save")}
+                  </Button>
+                </div>
+              </CardContent>
+            </SettingsGroup>
+          )}
+
           {section === "schedule" && (
             <>
               <SettingsGroup

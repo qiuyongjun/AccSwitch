@@ -1043,6 +1043,30 @@ pub async fn refresh_all_remaining() -> usize {
         .succeeded
 }
 
+/// 批量刷新积分时的账号并发上限。
+///
+/// 与 Qoder 额度查询的 `MAX_ACCOUNTS_IN_FLIGHT` 同档（4）：串行时 N 个账号就是 N 个
+/// 上游 RTT（Trae 客户端的单请求超时是 120s，一个账号卡住会拖住后面的全部）；
+/// 无上限并发又会把同一 IP 的突发流量放大到触发风控。4 是这两者之间的折中。
+const REFRESH_ALL_CONCURRENCY: usize = 4;
+
+/// 单个账号的并发取数结果 —— 网络请求并发跑，**合并仍按账号原始顺序**执行。
+enum RefreshOneOutcome {
+    Ok {
+        credits: f64,
+        expire_at: Option<i64>,
+        purchased: f64,
+        packages: Vec<CreditPackage>,
+    },
+    Err {
+        reason: String,
+        /// 是否属于「凭据被上游拒绝」（决定要不要落永久冷却）。
+        credential_rejected: bool,
+        /// 判定时的 JWT `exp` 指纹；`jwt::parse` 读不到时同样为 `None`。
+        credential_exp: Option<i64>,
+    },
+}
+
 /// 批量刷新**该变体**所有账号的剩余积分，返回成功 / 失败汇总。
 ///
 /// 顺带执行**自动解冻**：某账号查询成功且剩余积分 > 0 时清除冷却（**含 `SessionDead`**）。
@@ -1050,6 +1074,9 @@ pub async fn refresh_all_remaining() -> usize {
 /// 判据是「这份凭据刚刚成功访问了上游」—— 一个独立的**正向事实**，不是对
 /// 「账号库变没变」的推断（后者已被 WorkBuddy 侧论证为不可靠）。
 /// issue #108 §P0-C：排除 `SessionDead` 会让永久记录没有任何自愈路径。
+///
+/// ★ 2026-11-10：取数改为**有界并发**（`REFRESH_ALL_CONCURRENCY`），合并仍按
+/// 账号原始顺序 —— 结果、失败清单、解冻日志的顺序都与串行版逐条一致，只缩短耗时。
 pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummary {
     let accounts = crate::modules::trae::account::entries_for(variant);
     let total = accounts.len();
@@ -1061,9 +1088,52 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut cooldowns_dirty = false;
 
-    for (uid, account) in &accounts {
-        match calc_remaining_credits(&account.jwt).await {
-            Ok((credits, expire_at, purchased, packages)) => {
+    let mut outcomes: Vec<Option<RefreshOneOutcome>> = (0..total).map(|_| None).collect();
+    {
+        let mut queue = accounts.iter().enumerate();
+        let mut tasks = tokio::task::JoinSet::new();
+        loop {
+            while tasks.len() < REFRESH_ALL_CONCURRENCY {
+                let Some((index, (_, account))) = queue.next() else {
+                    break;
+                };
+                let jwt = account.jwt.clone();
+                tasks.spawn(async move {
+                    let result = calc_remaining_credits(&jwt).await;
+                    (index, result, jwt)
+                });
+            }
+            let Some(joined) = tasks.join_next().await else {
+                break;
+            };
+            /* 任务 panic 时拿不到 index：对应条目保持 `None`，下面按失败计入（绝不报成功）。 */
+            if let Ok((index, result, jwt)) = joined {
+                outcomes[index] = Some(match result {
+                    Ok((credits, expire_at, purchased, packages)) => RefreshOneOutcome::Ok {
+                        credits,
+                        expire_at,
+                        purchased,
+                        packages,
+                    },
+                    Err(error) => RefreshOneOutcome::Err {
+                        // 指纹取判定时那份 JWT 的 `exp`：换号 / 续期后自动失效（issue #108 §P0-A）。
+                        credential_rejected: error.is_credential_rejected(),
+                        credential_exp: crate::modules::trae::jwt::parse(&jwt).exp_timestamp,
+                        reason: error.to_string(),
+                    },
+                });
+            }
+        }
+    }
+
+    for (index, (uid, account)) in accounts.iter().enumerate() {
+        match outcomes[index].take() {
+            Some(RefreshOneOutcome::Ok {
+                credits,
+                expire_at,
+                purchased,
+                packages,
+            }) => {
                 remaining.credits.insert(uid.clone(), credits);
                 if let Some(expire_at) = expire_at {
                     remaining.expire_times.insert(uid.clone(), expire_at);
@@ -1094,16 +1164,16 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
                     );
                 }
             }
-            Err(error) => {
-                let reason = error.to_string();
+            Some(RefreshOneOutcome::Err {
+                reason,
+                credential_rejected,
+                credential_exp,
+            }) => {
                 /* 凭据被上游拒绝 ⇒ 落永久冷却，让账号卡持续显示「需重新登录」。
                 否则批量刷新只回一行失败数，页面关掉提示后看不出哪个账号坏了。
                 ⚠️ 写**内存里的** `cooldowns`，与自动解冻共用末尾那一次落盘 ——
                 中途单独 `save_cooldown_for` 会被后面的解冻写回覆盖掉。 */
-                if error.is_credential_rejected() {
-                    // 指纹取判定时那份 JWT 的 `exp`：换号 / 续期后自动失效（issue #108 §P0-A）。
-                    let credential_exp =
-                        crate::modules::trae::jwt::parse(&account.jwt).exp_timestamp;
+                if credential_rejected {
                     cooldowns
                         .cooldowns
                         .insert(uid.clone(), session_dead_entry(&reason, credential_exp));
@@ -1118,6 +1188,10 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
                     ),
                 );
                 failures.push((uid.clone(), reason));
+            }
+            None => {
+                /* 并发任务异常退出（panic / 取消）：不能当作成功，也不静默丢弃这个账号。 */
+                failures.push((uid.clone(), "账号刷新任务异常退出".to_string()));
             }
         }
     }

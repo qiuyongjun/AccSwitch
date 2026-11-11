@@ -38,7 +38,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Ellipsis, FolderTree, Info, StickyNote, Trash2 } from "lucide-react";
+import { Ellipsis, FolderTree, Globe, Info, PackageSearch, StickyNote, Trash2 } from "lucide-react";
 
 import {
   AVATAR_TEXT_CLASS,
@@ -56,6 +56,7 @@ import {
   formatCredits,
   nextExpiryLabel,
 } from "@/components/account-card";
+import { QoderPacksPopover } from "@/components/qoder/qoder-packs-popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -72,7 +73,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { AccountRefreshKind } from "@/lib/account-refresh";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
-import type { QoderAccountView, QoderProgramStatus } from "@/lib/api";
+import type { QoderAccountView, QoderProgramStatus, QoderWebCreditPacks } from "@/lib/api";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
@@ -340,6 +341,15 @@ export interface QoderAccountCardProps {
   onSwitch?: (program: QoderProgramStatus) => void;
   /** 「更多 → 设置分组」。 */
   onSetGroup?: (account: QoderAccountView) => void;
+  /** 「更多 → 登录 Qoder 网页端」（issue #111；不传 ⇒ 不渲染该项）。 */
+  onWebLogin?: (account: QoderAccountView) => void;
+  /** 「更多 → 读取逐包明细」/ 浮层里的显式读取入口（不传 ⇒ 不渲染）。 */
+  onReadPacks?: (account: QoderAccountView) => void;
+  /** 该账号的逐包明细（`undefined` = 还没请求；`null` = 请求过但没结果）。 */
+  packs?: QoderWebCreditPacks | null;
+  packsLoading?: boolean;
+  /** 打开浮层时触发取数（缓存与 TTL 由页面持有）。 */
+  onRequestPacks?: (account: QoderAccountView) => void;
   /** 标签 / 指标直达详情页签（R10）。 */
   onOpenTab?: (account: QoderAccountView, tab: DrawerTab) => void;
   /**
@@ -373,6 +383,11 @@ export function QoderAccountCard({
   programs = null,
   onSwitch,
   onSetGroup,
+  onWebLogin,
+  onReadPacks,
+  packs,
+  packsLoading = false,
+  onRequestPacks,
   onOpenTab,
   onRefreshPart,
   refreshingKinds,
@@ -543,6 +558,19 @@ export function QoderAccountCard({
             <MenuGroupLabel>{t("shared.cardMenu.accountGroup")}</MenuGroupLabel>
           </>
         )}
+        {onWebLogin && (
+          <DropdownMenuItem onSelect={() => onWebLogin(account)}>
+            <Globe />
+            {t("qoder.page.accounts.web.loginMenu")}
+          </DropdownMenuItem>
+        )}
+        {onReadPacks && (
+          <DropdownMenuItem onSelect={() => onReadPacks(account)}>
+            <PackageSearch />
+            {t("qoder.page.accounts.web.read")}
+          </DropdownMenuItem>
+        )}
+        {(onWebLogin || onReadPacks) && <DropdownMenuSeparator />}
         <DropdownMenuItem disabled={!onEditRemark} onSelect={() => onEditRemark?.(account)}>
           <StickyNote />
           {t("qoder.page.accounts.card.editRemark")}
@@ -696,6 +724,14 @@ export function QoderAccountCard({
               {priorityNote}
             </>
           )}
+          {/* 两级显示的**第二级入口**：聚合行照旧，逐包在浮层里（issue #111 R6）。 */}
+          <QoderPacksPopover
+            packs={packs}
+            loading={packsLoading}
+            onRequest={() => onRequestPacks?.(account)}
+            onWebLogin={() => onWebLogin?.(account)}
+            onReadPacks={() => onReadPacks?.(account)}
+          />
         </div>
         {/* ★ 2026-10-27（T02 完成后与 WB / Trae 同批）：指标行下面单起一行给出**凭据到期**
             —— `expiresAt` 已由 core 的 `normalize_expiry_ms` 归一成 Unix 毫秒（无效 ⇒ null），

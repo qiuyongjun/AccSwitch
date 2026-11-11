@@ -1,15 +1,18 @@
 /**
  * 首次引导条 —— P6 / `P6-ARCH.md` §1.5。
  *
- * ## 为什么内容要「由真实绑定派生」
+ * ## 内容：讲「怎么开始用」而不是「快捷键怎么按」
  *
- * 原型引导条（`index.html:128-132`）**写死**了几条快捷键。真实应用里那样会制造
- * 「引导里列了、按了却没反应」的**假承诺**（§3.4 规则 1）。因此这里：
- * - `⌘K` **恒列**（命令面板总在）；
- * - `⌘1..N` **仅在 `planScopeShortcuts` 的 `bindings` 非空时**才出现；
- * - `/`（列表搜索，`AccountsPage` 已实现）可列。
+ * 快捷键在命令面板入口 / 设置里都能查到，首次进入的用户更需要的是**基本流程**：
+ * 选作用域 → 添加账号 → 切换程序位 → 一键刷新 / 签到。四步与页面上真实存在的
+ * 控件逐字对应，不写「引导里有、界面找不到」的假承诺（§3.4 规则 1）。
  *
- * 降级（>9 个作用域 / 用户关闭）⇒ 那一行**根本不渲染**，与快捷键的绑定状态同源。
+ * ⚠️ 早期版本列的是 `⌘K` / `⌘1..N` / `/`。实测首次用户看完仍不知道账号从哪来、
+ * 程序位怎么切 —— 快捷键是**熟练后的加速器**，不是上手路径。
+ *
+ * 四步里的按钮名**不写死**：`添加账号` / `一键刷新` / `一键签到` 取自真实词条
+ * （`shared.addDrawer.title` / `shared.toolbar.quickRefresh` / `quickCheckin`），
+ * 界面改名时引导自动跟随，不会出现「引导里写着旧按钮名」。
  *
  * ## 形态与退场
  *
@@ -27,15 +30,12 @@
  * 刻意不做「自动退场」—— 那会让每次冷启动都重来一遍。
  */
 
-import { useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useState } from "react";
+import { Sparkles, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { dismissFirstRunHint, shouldShowFirstRunHint } from "@/lib/first-run";
 import { useT } from "@/lib/i18n";
-import { planScopeShortcuts } from "@/lib/scope-shortcuts";
-import { useShortcutsEnabled } from "@/lib/shortcut-preference";
-import { useVisibleScopes } from "@/lib/scope-visibility";
 
 /** 取可用的 `localStorage`（不可用返回 `undefined`）。 */
 function safeStorage(): Storage | undefined {
@@ -46,21 +46,42 @@ function safeStorage(): Storage | undefined {
   }
 }
 
+/** 单步卡片：序号 + 动作名 + 一句说明（说明与标题左对齐，避免「密文感」）。 */
+function StepItem({ index, title, description }: { index: number; title: string; description: string }) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/40 px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/10 text-[11px] font-semibold tabular-nums text-primary">
+          {index}
+        </span>
+        <span className="text-[11.5px] font-medium text-foreground">{title}</span>
+      </div>
+      <p className="mt-1.5 pl-7 text-[11.5px] leading-[1.55] text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
 export function FirstRunHint() {
   const t = useT();
-  const [shortcutsEnabled] = useShortcutsEnabled();
-  const visibleScopes = useVisibleScopes((s) => s.visibleScopes);
   const [dismissed, setDismissed] = useState(() => !shouldShowFirstRunHint(safeStorage()));
-
-  const plan = useMemo(
-    () => planScopeShortcuts({ scopes: visibleScopes, enabled: shortcutsEnabled }),
-    [visibleScopes, shortcutsEnabled],
-  );
 
   if (dismissed) return null;
 
-  // ⌘1..N 只在**绑定存在**时列出（降级 ⇒ 不写进引导，避免假承诺）。
-  const scopeHint = plan.bindings.size > 0 ? `⌘1–⌘${plan.bindings.size}` : null;
+  const steps = [
+    { title: t("firstRun.step.scope.title"), description: t("firstRun.step.scope.desc") },
+    {
+      title: t("firstRun.step.account.title"),
+      description: t("firstRun.step.account.desc", { add: t("shared.addDrawer.title") }),
+    },
+    { title: t("firstRun.step.switch.title"), description: t("firstRun.step.switch.desc") },
+    {
+      title: t("firstRun.step.daily.title"),
+      description: t("firstRun.step.daily.desc", {
+        refresh: t("shared.toolbar.quickRefresh"),
+        checkin: t("shared.toolbar.quickCheckin"),
+      }),
+    },
+  ];
 
   function dismiss() {
     dismissFirstRunHint(safeStorage());
@@ -68,24 +89,39 @@ export function FirstRunHint() {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
-      <div className="pointer-events-auto flex w-full max-w-[760px] items-start gap-3 rounded-[12px] border border-border bg-popover px-3.5 py-2.5 text-xs shadow-overlay">
-        <span className="shrink-0 font-medium text-primary">{t("firstRun.title")}</span>
-      <ul className="min-w-0 flex-1 space-y-0.5 text-muted-foreground">
-        <li>{t("firstRun.openPalette", { shortcut: "⌘K" })}</li>
-        {scopeHint ? <li>{t("firstRun.scopeShortcut", { shortcut: scopeHint })}</li> : null}
-        <li>{t("firstRun.listSearch")}</li>
-      </ul>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 shrink-0 px-2 text-xs"
-        onClick={dismiss}
+    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+      <section
+        aria-label={t("firstRun.title")}
+        className="pointer-events-auto w-full max-w-[720px] animate-in rounded-2xl border border-border/80 bg-popover/95 p-4 shadow-overlay backdrop-blur-sm fade-in-0 slide-in-from-bottom-2 duration-300 motion-reduce:animate-none"
       >
-        <X className="size-3.5" aria-hidden="true" />
-        {t("firstRun.dismiss")}
-      </Button>
-      </div>
+        <header className="flex items-start gap-2.5">
+          <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+            <Sparkles className="size-3.5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-[13px] font-semibold">{t("firstRun.title")}</h2>
+            <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+              {t("firstRun.subtitle")}
+            </p>
+          </div>
+          <div className="grow" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-[11.5px] text-muted-foreground hover:text-foreground"
+            onClick={dismiss}
+          >
+            <X className="size-3.5" aria-hidden="true" />
+            {t("firstRun.dismiss")}
+          </Button>
+        </header>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {steps.map((step, i) => (
+            <StepItem key={step.title} index={i + 1} title={step.title} description={step.description} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

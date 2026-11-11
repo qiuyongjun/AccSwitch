@@ -47,7 +47,7 @@ WebviewWindowBuilder::new(app, "companion", WebviewUrl::App("index.html?window=c
 
 | 项 | 规则 |
 |:---|:---|
-| **创建时机** | **懒创建**：首次需要显示时 `ensure()`；或启动时按偏好创建（隐藏）。**不写进 `tauri.conf.json` 的 `windows[]`** —— 那会在启动时无条件创建，与「默认显示由偏好决定」冲突，且透明 / 置顶等属性在主窗口配置里不适用 |
+| **创建时机** | **懒创建**：首次需要显示时 `ensure()`；或启动时按偏好创建（隐藏）。**不写进 `tauri.conf.json` 的 `windows[]`** —— 那会在启动时无条件创建，与「默认隐藏由偏好决定」冲突，且透明 / 置顶等属性在主窗口配置里不适用 |
 | **默认位置** | 主显示器**右下角**，距边 18px（与原型 `right:18px; bottom:18px` 对齐） |
 | **位置记忆** | 用户拖动后记忆：Rust 监听 `WindowEvent::Moved` → 持久化到应用配置（**Rust 侧**，见 §4.2）—— **不在前端**（前端 `decorations(false)` 下拖拽由 `data-tauri-drag-region` 触发原生移动，Rust 是唯一知道最终坐标的一侧） |
 | **关闭语义** | `CloseRequested` → `api.prevent_close()` + `window.hide()`（**隐藏而非销毁**）+ `emit("companion-visibility", false)`。与主窗口 `tray.rs:74-84` 同一套「关闭 = 隐藏」纪律 |
@@ -102,7 +102,7 @@ WebviewWindowBuilder::new(app, "companion", WebviewUrl::App("index.html?window=c
 
 **可见性偏好（§2.7：用户偏好，非 `capabilities`；§2.1 L0）**：
 
-- **默认 = 显示**（§3.16「默认显示」）。
+- **默认 = 隐藏**（2026-11-06 调整：悬浮窗多数时候没有数据，常驻显示等于长期占着一块空窗；按需从侧栏左下角 / 托盘打开）。
 - 载体：**L0 localStorage**（§2.1 表：「桌面悬浮窗可见性 → localStorage」）。键名与 scope 无关（**全局一个**）。
 - **单一真值**：两入口 + 窗口内的关闭按钮都通过 `companion_set_visible(bool)` 命令改同一份状态；主窗口 `useCompanionVisibility()` 与托盘勾选态都 **`listen("companion-visibility")`** 同步（沿用 `main-window-visible` 的既有事件模式，`tray.rs:114-116`）。
 
@@ -165,7 +165,7 @@ WebviewWindowBuilder::new(app, "companion", WebviewUrl::App("index.html?window=c
 
 | # | 原型断言（`verify-behaviors.cjs`） | 行号 | 真实实现要求 | 能否照搬 |
 |:--|:---|:--|:---|:--|
-| B1 | **默认显示，四态齐备**（运行中/待确认/已完成/失败） | `:1173-1183` | 默认可见（偏好默认 true）；**四态各有渲染分支、可被数据驱动** | ⚠️ **部分**：「默认显示」照搬；「恰好 4 行」**不照搬**（数据决定行数） |
+| B1 | **默认显示，四态齐备**（运行中/待确认/已完成/失败） | `:1173-1183` | **默认隐藏**（偏好默认 false；用户从侧栏 / 托盘手动打开）；**四态各有渲染分支、可被数据驱动** | ⚠️ **部分**：「默认显示」**不照搬**（2026-11-06 改为默认隐藏）；「恰好 4 行」**不照搬**（数据决定行数） |
 | B2 | **只读：不含任何写操作**（§3.16「不做的」） | `:1185-1192` | 命令面**只有读 / 显隐 / 聚焦**；`forbidden = [switch, delete, batch-delete, batch-checkin, model-disable, bk-export, acct-prog, pin]` **一条都不许出现在 companion** | ✅ **照搬**（这是红线，见 §6 R1） |
 | B3 | **标题默认模糊，悬停才展开** | `:1194-1202` | **未悬停 / 未聚焦渲染占位符**（完整标题不进 DOM）；`:hover` **与 `:focus-visible`** 才展开（✅ #3，§1.6） | ⚠️ **加强**：原型只 `blur`（DOM 仍含明文）；本期改为**数据防线**（占位符），不照搬 `blur` |
 | B4 | **可关闭 + 侧栏左下角重开（入口不是一次性的）** | `:1204-1212` | 关闭 = 隐藏；侧栏左下角图标 + 托盘重开 | ✅ 照搬（**并补托盘入口**） |
@@ -275,7 +275,7 @@ export function useCompanionStatus(): {
 } ; // 内部：挂载拉一次 + 20s 轮询 + listen(既有进度事件) 触发即时刷新
 
 export function useCompanionVisibility(): [boolean, (next: boolean) => void];
-// 载体：L0 localStorage（默认 true）；写时调 companion_set_visible；
+// 载体：L0 localStorage（默认 false）；写时调 companion_set_visible；
 // 并 listen("companion-visibility") 与托盘 / 窗口内关闭按钮同步。
 ```
 
@@ -353,7 +353,7 @@ sequenceDiagram
   participant Comp as 悬浮窗 webview(companion)
   participant Src as 只读会话状态源(本期:已有数据源)
 
-  Note over Rust: 启动：按偏好决定是否 ensure()（默认显示）
+  Note over Rust: 启动：按偏好决定是否 ensure()（默认隐藏）
   U->>SB: 点「会话悬浮窗」
   SB->>Main: setVisible(!visible)
   Main->>Rust: companion_set_visible(true)
@@ -427,7 +427,7 @@ sequenceDiagram
   - 修改 `src-tauri/src/tray.rs`（勾选态随 `companion-visibility` 刷新，若 T01 未含）
   - 修改 `src/locales/domains/shared.zh.ts` / `.en.ts`（入口 tooltip / 无障碍标签）
 - **依赖**：T01、T03
-- **要点**：入口**不占侧栏 5 项**（放底部 `<section>`）；侧栏 / 托盘 / 窗口内关闭按钮**读写同一份偏好**（经 `companion_set_visible` 收敛，**不许出现第二个「看起来能切」的控件**）；默认可见；**不改**路由与导航。
+- **要点**：入口**不占侧栏 5 项**（放底部 `<section>`）；侧栏 / 托盘 / 窗口内关闭按钮**读写同一份偏好**（经 `companion_set_visible` 收敛，**不许出现第二个「看起来能切」的控件**）；默认隐藏（按需打开）；**不改**路由与导航。
 
 ### T05 · 验证与门禁（含**独立键盘可达性**）｜ P0
 - **源文件**：无源码改动（跑门禁 + 手工回归 + 变异验证 + 独立键盘验证）
@@ -441,7 +441,7 @@ sequenceDiagram
     3. **入口非一次性**：删掉侧栏左下角图标 ⇒ 期望「可从入口重开」断言变红。
     4. **capability**：从 `capabilities/companion.json` 移除窗口 label ⇒ 期望拖拽 / 事件**静默失败**（暴露权限缺失）。
     5. **不造假数据**：provider 置为不可用 ⇒ 期望渲染**空态**（而非演示数据）。
-  - 手工回归：默认显示、四态渲染、关闭后可重开（侧栏 + 托盘）、位置记忆、多显示器拔插、截图不外泄完整标题。
+  - 手工回归：默认隐藏 + 手动打开、四态渲染、关闭后可重开（侧栏 + 托盘）、位置记忆、多显示器拔插、截图不外泄完整标题。
 
 ---
 

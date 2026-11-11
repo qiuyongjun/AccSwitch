@@ -74,6 +74,8 @@ pub mod region;
 // 派生层由 `Scope::all()` 生成 ⇒ 新增平台时命名空间自动出现；详见模块头。
 pub mod gateway_namespace;
 pub mod rotate;
+// 本工具**自身**的运行日志（纯文本、按日分片；设置页「日志」读它）。
+pub mod runtime_log;
 pub mod schedule;
 pub mod scheduler;
 pub mod school;

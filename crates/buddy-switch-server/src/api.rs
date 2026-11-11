@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 use buddy_switch_core::modules::{
     account, auth_file, backup, checkin, client_limits, client_settings, config, credit_usage,
     credits, diagnostics, export_import, growth_tasks, migrate, oauth, process, programs, qoder,
-    refresh, region::Region, region::RegionFilter, rotate, schedule, scheduler, session, skill,
-    switch, token_daily, token_stats, trae, travel, update, vscode_session,
+    refresh, region::Region, region::RegionFilter, rotate, runtime_log, schedule, scheduler,
+    session, skill, switch, token_daily, token_stats, trae, travel, update, vscode_session,
 };
 use buddy_switch_gateway::unified::UnifiedGatewayConfig;
 use buddy_switch_gateway::GatewayProduct;
@@ -201,6 +201,11 @@ fn api_routes() -> Router {
         .route("/api/switch", post(api_switch))
         // Q1 · 诊断包导出（只读；凭据闸门在 core 内，命中即拒绝发出）。
         .route("/api/diagnostics/export", post(api_export_diagnostic))
+        // 运行日志（本工具自身，排查问题用）：读 / 清 / 开目录。
+        // ⚠️ 与 `src-tauri/src/commands.rs` 的三条同名命令**一一对应**（刻意不去重）。
+        .route("/api/logs/runtime", get(api_runtime_logs))
+        .route("/api/logs/runtime/clear", post(api_clear_runtime_logs))
+        .route("/api/logs/open-dir", post(api_open_logs_dir))
         .route("/api/switch/progress", get(api_switch_progress))
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/replicas", get(api_session_replicas))
@@ -485,6 +490,46 @@ fn api_routes() -> Router {
             post(api_qoder_set_account_group),
         )
         .route("/api/qoder/usage", get(api_qoder_usage))
+        // ---- Qoder 网页端逐资源包明细（issue #111）----
+        // ★ 以下链路**只对桌面端成立**：逐包数据在网页端私有接口，只认浏览器登录后的
+        //   会话 Cookie，而只有 Tauri 的 `Webview::cookies()` 能读到它。本进程是
+        //   headless 服务端（Docker / npm CLI / 裸二进制），没有 `Webview` ⇒ 原理上做不到。
+        //   ⇒ 结构化拒绝，**不返回空包列表**（那会被读成「该账号没有资源包」）。
+        .route(
+            "/api/qoder/web/login-open",
+            post(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/login-close",
+            post(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/credit-packs/probe",
+            post(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/credit-packs",
+            get(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/session/status",
+            get(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/session/window-cookies",
+            get(api_qoder_web_desktop_only),
+        )
+        .route(
+            "/api/qoder/web/session/logout",
+            post(api_qoder_web_desktop_only),
+        )
+        // ---- Qoder 逐包出站代理（issue #111 收尾）----
+        // ★ 这是**纯配置**，不是「仅桌面端可用」：headless 服务端只要有会话文件同样要取
+        //   逐包，代理通道（国际版按 IP 判地区）对它是同等需要的能力 ⇒ 真实读写。
+        .route(
+            "/api/qoder/web/proxy",
+            get(api_qoder_web_proxy_get).post(api_qoder_web_proxy_set),
+        )
         // ---- Qoder API 网关（管理面；网关本体走独立端口 57895，**不** merge 进本 Router）----
         // ⚠️ 一个监听、两个区域：区域由请求所用 API Key 的归属决定（`QoderKeyRegion`），
         //   状态 / 模型两条按 `scope` 看对应的那本账号库（fail-closed）。
@@ -703,8 +748,8 @@ async fn api_status(RawQuery(query): RawQuery) -> Response {
         }))
     });
     // ★ 只解析一次：`appPath` 与 `installed` 是**同一份探测**的两个投影。
-    // 分开调用会让每次状态刷新重复跑「进程探测 → 缓存 → 注册表 → 盘符」
-    // （与 Tauri 侧 `build_app_status` 同构；2026-11-11）。
+    //   `workbuddy_app_path_for` 在 Windows 上可能包含 PowerShell / 注册表 / 盘符探测
+    //   （每次可达 ~1s）；此前两处各调一次，一次状态查询要付两遍，缓存缺失时还会重复扫盘。
     let app_path = auth_file::workbuddy_app_path_for(region);
     json_ok(json!({
         // 展示口径：core 的 1 秒进程快照与 Tauri 侧共用，不再单独缓存。
@@ -2016,6 +2061,52 @@ async fn api_export_diagnostic() -> Response {
             json_ok(json!({ "name": name, "text": text }))
         }
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
+/// GET /api/logs/runtime —— 读取本工具**自身**的运行日志。
+///
+/// 参数：`level`（最低级别）/ `date`（`YYYY-MM-DD`）/ `keyword` / `limit`，全部可选。
+/// 过滤与解析逻辑只在 core（`runtime_log::read`）—— 两宿主共用一份，杜绝形状漂移。
+async fn api_runtime_logs(RawQuery(query): RawQuery) -> Response {
+    let read = |key: &str| query_value(query.as_deref(), key);
+    let limit = read("limit").and_then(|value| value.parse::<u64>().ok());
+    let params = json!({
+        "level": read("level"),
+        "date": read("date"),
+        "keyword": read("keyword"),
+        "limit": limit,
+    });
+    match tokio::task::spawn_blocking(move || runtime_log::read(&params)).await {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(
+            format!("读取运行日志失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/logs/runtime/clear —— 清空全部运行日志（**不可逆**，前端须二次确认）。
+async fn api_clear_runtime_logs() -> Response {
+    match tokio::task::spawn_blocking(runtime_log::clear).await {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("清空运行日志失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/logs/open-dir —— 在文件管理器中打开日志目录（不存在则先创建）。
+async fn api_open_logs_dir() -> Response {
+    match tokio::task::spawn_blocking(runtime_log::open_logs_dir).await {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("打开日志目录失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -7558,6 +7649,49 @@ async fn api_qoder_usage(RawQuery(query): RawQuery) -> Response {
 // 与 Trae 侧的管理面形状一致（config / status / models / keys / logs），差异有两处：
 // ① 归属轴是**区域**而不是程序位（Key 绑定 `region`）；② **一个监听服务两个区域** ——
 //    监听是否起来、端口是多少是两区域共用的事实，只有池 / Key 前缀按 `scope` 分家。
+
+/// POST /api/qoder/web/{login-open,login-close,credit-packs/probe} —— Qoder 网页端逐包链路。
+///
+/// ★ **仅桌面端可用**，且是**原理性**限制而非未实现：逐包数据在网页端私有接口
+/// `/api/v2/me/usages/big_model_credits`，只认浏览器登录后的会话 Cookie；本进程是
+/// headless 服务端（Docker / npm CLI / 裸二进制），没有 Tauri 的 `Webview` ⇒ 拿不到
+/// 那份 Cookie。**不假装成功**：尤其不能返回 `packs: []` —— 那会被前端读成
+/// 「该账号没有资源包」，与「当前形态拿不到」是两件完全不同的事。
+async fn api_qoder_web_desktop_only() -> Response {
+    json_err(
+        "Qoder 逐包明细需要桌面版：当前运行的是一体化服务端/命令行形态，没有内嵌浏览器，无法采集网页会话。聚合额度（剩余/已用/总量）在任意形态都可用。".to_string(),
+        StatusCode::BAD_REQUEST,
+    )
+}
+
+/// GET /api/qoder/web/proxy —— 读逐包出站代理配置（两个区域各一个 URL；空 = 直连）。
+async fn api_qoder_web_proxy_get() -> Response {
+    match serde_json::to_value(
+        buddy_switch_core::modules::qoder::web_proxy::WebProxyConfig::load(),
+    ) {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(error.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// POST /api/qoder/web/proxy —— 保存逐包出站代理配置（两个字段都先过形状校验）。
+async fn api_qoder_web_proxy_set(Json(body): Json<Value>) -> Response {
+    let submitted = body.get("config").cloned().unwrap_or(body);
+    let config: buddy_switch_core::modules::qoder::web_proxy::WebProxyConfig =
+        match serde_json::from_value(submitted) {
+            Ok(config) => config,
+            Err(error) => {
+                return json_err(
+                    format!("代理配置格式错误: {error}"),
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        };
+    if let Err(error) = config.save() {
+        return json_err(error, StatusCode::BAD_REQUEST);
+    }
+    json_ok(json!({ "ok": true, "config": config }))
+}
 
 /// GET /api/qoder/gateway/config —— Qoder 网关配置（**全局唯一**，不分区域）。
 async fn api_qoder_gateway_config() -> Response {

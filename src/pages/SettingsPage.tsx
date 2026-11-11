@@ -6,7 +6,6 @@ import {
   Play,
   RefreshCw,
   Save,
-  ScrollText,
   ShieldAlert,
   Stethoscope,
   Trash2,
@@ -24,11 +23,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EmptyState } from "@/components/ui/empty-state";
 import { ScopeChip } from "@/components/scope-chip";
 import { SettingsFieldRow, SettingsGroup, SettingsRow } from "@/components/settings-primitives";
-// 子导航只留客户端相关分区（7 项）；通用 / 备份与恢复是全局设置，在顶栏 ⚙ 抽屉里以弹框承载。
-import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
+import { RuntimeLogCard } from "@/components/settings/runtime-log-card";
+// 子导航只留客户端相关分区（7 项 + Qoder 专属 network）；通用 / 备份与恢复是全局设置，在顶栏 ⚙ 抽屉里以弹框承载。
+import { parseSettingsSubnav, SettingsSubnav, SETTINGS_SUBNAV, type SettingsSubnavId } from "@/components/settings/settings-subnav";
 // 时点表编辑器与 Trae 设置页**共用同一份实现**（校验规则属于规则，不属于版式）。
 import { TimesEditor } from "@/components/schedule-times-editor";
 import { Input } from "@/components/ui/input";
@@ -1614,14 +1613,14 @@ function ScheduleCard() {
 }
 
 /**
- * 设置页：**产品级**设置（**7 项子导航**，§3.9）。
+ * 设置页：**产品级**设置（**8 项子导航**，§3.9；`network` 仅 Qoder）。
  *
  * ## 为什么从「一屏长滚动」改成子导航
  *
  * 现状是 7 张卡纵向堆叠（Trae 侧 10 组），用户找一项设置要滚很久、且看不出「还有哪些类」。
  * 子导航先把**有哪几类**摆出来，再按类展示 —— 与 Trae 设置页共用同一套分区名。
  *
- * ## 7 项与内容的对应（WB 侧）
+ * ## 分区与内容的对应（WB 侧）
  *
  * | 子导航 | 内容 |
  * |:---|:---|
@@ -1653,9 +1652,10 @@ export default function SettingsPage() {
      解析走 `parseSettingsSubnav`（与网关页的 `parseGatewaySubnav` 同一形状），
      Trae 设置页接的是同一个函数 —— 两平台同一件事只有一份实现。 */
   const [searchParams, setSearchParams] = useSearchParams();
-  const [section, setSection] = useState<SettingsSubnavId>(() =>
-    parseSettingsSubnav(searchParams.get("section")),
-  );
+  const [section, setSection] = useState<SettingsSubnavId>(() => {
+    const parsed = parseSettingsSubnav(searchParams.get("section"));
+    return parsed === "network" ? "account" : parsed;
+  });
 
   /**
    * 切换分区：**同时写 URL**（与网关页同构 —— 位置真值在 URL，刷新 / 前进后退行为一致）。
@@ -1688,7 +1688,12 @@ export default function SettingsPage() {
           `[data-split-layout]` 里（含 900px 转纵向），故这里不再写 `flex-col` /
           `lg:flex-row` / `gap-*` —— utilities 会盖过 base 层，导致断点失效。 */}
       <div data-split-layout className="min-w-0">
-        <SettingsSubnav active={section} onSelect={goSection} />
+        <SettingsSubnav
+          active={section}
+          onSelect={goSection}
+          /* 「网络」是 Qoder 逐包代理的专属分区；本页没有对应内容，别摆空壳。 */
+          items={SETTINGS_SUBNAV.filter((item) => item.id !== "network")}
+        />
 
         {/* 主区 `.split-main`：分区之间 16px（原型 `:378`）。 */}
         <div className="min-w-0 flex-1 space-y-4">
@@ -1728,18 +1733,7 @@ export default function SettingsPage() {
             </>
           )}
 
-          {section === "logs" && (
-            <EmptyState
-              icon={ScrollText}
-              title={t("settings.logs.emptyTitle")}
-              description={t("settings.logs.emptyBody")}
-              action={
-                <Button variant="outline" size="sm" onClick={() => goSection("gateway")}>
-                  {t("settings.logs.emptyAction")}
-                </Button>
-              }
-            />
-          )}
+          {section === "logs" && <RuntimeLogCard />}
 
         </div>
       </div>

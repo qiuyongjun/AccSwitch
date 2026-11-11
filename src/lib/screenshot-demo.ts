@@ -6,7 +6,8 @@ import type {
   ClientSettingsBackupsResponse, ClientSettingsDiffResponse, ClientSettingsFingerprint,
   ClientSettingsProxyGroup, ClientSettingsReadResponse, ClientSettingsSlot, ClientSettingsSlotsResponse,
   CreditOfficialUsageModel, CreditStatistics, GatewayConfig, GatewayLogEntry, GatewayPoolAccount,
-  GatewayStatus, GatewayTokenTrend, GithubConfig, Region, RotateLog, RotateStatus, ScheduleConfig, TokenStatistics,
+  GatewayStatus, GatewayTokenTrend, GithubConfig, Region, RotateLog, RotateStatus, ScheduleConfig,
+  RuntimeLogLevel, RuntimeLogsResponse, TokenStatistics,
   Session, SessionReplicaResponse,
   SkillListResponse,
   TokenStatsGroup, TokenStatsSource,
@@ -1777,6 +1778,60 @@ function demoQoderCredits(scope: string, accountIds?: string[]): unknown {
   };
 }
 
+/**
+ * 演示用：Qoder 逐包明细（issue #111）。
+ *
+ * 刻意给四种形态：**正常 / 临期（5 天后）/ 已过期 / 零额度套餐条目** ——
+ * 否则演示站只能看到一种颜色，等于没演示行内差异。
+ */
+function demoQoderWebPacks(uid: string): unknown {
+  const DAY = 24 * 3600 * 1000;
+  const now = Date.now();
+  const pack = (
+    id: string,
+    group: string,
+    source: string,
+    limit: number,
+    used: number,
+    expiresAtMs: number,
+  ) => ({
+    id,
+    group,
+    source,
+    status: expiresAtMs > 0 && expiresAtMs < now ? "EXPIRED" : "ACTIVE",
+    limit,
+    used,
+    remaining: Math.max(0, limit - used),
+    unit: "credits",
+    usagePercentage: limit > 0 ? Math.round((used / limit) * 100) : 0,
+    isActive: !(expiresAtMs > 0 && expiresAtMs < now),
+    expiresAtMs: expiresAtMs > 0 ? expiresAtMs : undefined,
+  });
+
+  const packs =
+    uid === "q2"
+      ? [pack("demo-p3", "resource_package_quota", "RESOURCE_PACKAGE_SOURCE_BONUS", 100, 100, now - DAY)]
+      : [
+          pack("demo-p0", "plan_quota", "PLAN", 0, 0, 0),
+          pack("demo-p1", "resource_package_quota", "RESOURCE_PACKAGE_SOURCE_BONUS", 100, 0, now + 30 * DAY),
+          pack("demo-p2", "resource_package_quota", "RESOURCE_PACKAGE_SOURCE_BONUS", 500, 110, now + 5 * DAY),
+        ];
+
+  const counted = packs.filter((p) => p.limit > 0);
+  return {
+    available: true,
+    packs,
+    summary: {
+      count: counted.length,
+      zeroCount: packs.length - counted.length,
+      limit: counted.reduce((n, p) => n + p.limit, 0),
+      used: counted.reduce((n, p) => n + p.used, 0),
+      remaining: counted.reduce((n, p) => n + p.remaining, 0),
+    },
+    verifiedAtMs: now,
+  };
+}
+
 function demoQoderCheckinStatus(scope: string): unknown {
   const global = scope.endsWith("global");
   if (global) {
@@ -2739,6 +2794,59 @@ function demoTraeTokenStatistics(days?: number): TraeTokenStatistics {
  * 文案逐字取自 `store::append_log` 的真实调用点，这样演示站看到的行
  * 与真实运行时的行是同一种形状，视觉核对才有意义。
  */
+/**
+ * 运行日志（本工具自身）的演示数据。
+ *
+ * ⚠️ 演示站**只**演示读；`clear_runtime_logs` / `open_runtime_logs_dir` 是动作，
+ * 刻意不在此列（演示环境不能真删本机日志或弹文件管理器）。
+ */
+function demoRuntimeLogs(args?: Record<string, unknown>): RuntimeLogsResponse {
+  const day0 = localDate(0);
+  const day1 = localDate(1);
+  const stamp = (daysAgo: number, hour: number, minute: number, second = 0) => {
+    const date = new Date(atLocalTime(daysAgo, hour, minute));
+    date.setSeconds(second);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
+  };
+  const all = [
+    { level: "info" as const, scope: "startup", time: stamp(1, 9, 2), ts: atLocalTime(1, 9, 2), message: "AccSwitch 桌面端 启动 · 版本 2026.11.101547 · windows x86_64 · pid 18244 · 日志级别 info" },
+    { level: "info" as const, scope: "gateway", time: stamp(1, 9, 2, 1), ts: atLocalTime(1, 9, 2) + 1000, message: "已启动: http://127.0.0.1:57891" },
+    { level: "warn" as const, scope: "trae-gateway", time: stamp(1, 9, 2, 2), ts: atLocalTime(1, 9, 2) + 2000, message: "启动失败: 端口 57894 已被占用" },
+    { level: "info" as const, scope: "switch", time: stamp(0, 9, 14), ts: atLocalTime(0, 9, 14), message: "切换成功 · 目标账号 7481999 · 客户端已重启" },
+    { level: "error" as const, scope: "checkin", time: stamp(0, 8, 6), ts: atLocalTime(0, 8, 6), message: "签到失败: 上游返回 401（凭据可能已过期）" },
+    { level: "debug" as const, scope: "pool", time: stamp(0, 9, 15), ts: atLocalTime(0, 9, 15), message: "选号明细: 可用 3 / 冷却 1 / 熔断 0" },
+  ].filter((entry) => entry.time.startsWith(day0) || entry.time.startsWith(day1));
+
+  const level = typeof args?.level === "string" ? (args.level as RuntimeLogLevel) : "";
+  const date = typeof args?.date === "string" ? args.date : "";
+  const keyword = typeof args?.keyword === "string" ? args.keyword.toLowerCase() : "";
+  const order: RuntimeLogLevel[] = ["error", "warn", "info", "debug"];
+  const minRank = level ? order.indexOf(level) : -1;
+  const entries = all.filter((entry) => {
+    if (date && !entry.time.startsWith(date)) return false;
+    if (minRank >= 0 && order.indexOf(entry.level) > minRank) return false;
+    if (keyword && !`${entry.scope} ${entry.message}`.toLowerCase().includes(keyword)) return false;
+    return true;
+  });
+
+  const counts: Record<RuntimeLogLevel, number> = { error: 0, warn: 0, info: 0, debug: 0 };
+  for (const entry of all) counts[entry.level] += 1;
+
+  return {
+    entries: entries.slice().sort((a, b) => b.ts - a.ts),
+    total: entries.length,
+    truncated: false,
+    limit: 500,
+    dates: [day0, day1],
+    counts,
+    level: "info",
+    logDir: "/demo/accswitch/logs",
+    keepDays: 7,
+    maxPartBytes: 4194304,
+    maxPartsPerDay: 4,
+  };
+}
+
 function demoTraeLogs(args?: Record<string, unknown>): TraeLogsResponse {
   const day0 = localDate(0);
   const day1 = localDate(1);
@@ -3120,6 +3228,7 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_trae_token_statistics":
       return demoTraeTokenStatistics(typeof args?.days === "number" ? args.days : undefined);
     case "get_trae_logs": return demoTraeLogs(args);
+    case "runtime_logs": return demoRuntimeLogs(args);
     case "get_trae_gateway_config": return demoTraeGatewayConfig();
     case "trae_gateway_status": return demoTraeGatewayStatus();
     case "get_trae_gateway_models": return demoTraeGatewayModels(args);
@@ -3171,6 +3280,30 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
         Array.isArray(creditArgs?.accountIds) ? creditArgs.accountIds.map(String) : undefined,
       );
     }
+    /* issue #111：逐包明细 / 网页会话 / 登录窗 Cookie / 代理配置（只读）。 */
+    case "qoder_web_credit_packs": {
+      const uid = String((args as { uid?: unknown } | undefined)?.uid ?? "");
+      return demoQoderWebPacks(uid);
+    }
+    case "qoder_web_session_status":
+      return {
+        hasSession: true,
+        expired: false,
+        pending: false,
+        source: "stored",
+        cookieNames: ["qoder_session"],
+        savedAtMs: Date.now() - 3_600_000,
+        verifiedAtMs: Date.now() - 600_000,
+      };
+    case "qoder_web_window_cookies":
+      return {
+        windowOpen: false,
+        cookieCount: 0,
+        cookieNames: [] as string[],
+        fingerprint: "",
+      };
+    case "qoder_web_proxy_get":
+      return { cn: "", global: "" };
     case "qoder_checkin_status": {
       const scope = String((args as { scope?: unknown } | undefined)?.scope ?? "");
       return demoQoderCheckinStatus(scope);
