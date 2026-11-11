@@ -164,6 +164,84 @@ pub fn data_dir_names_for(variant: super::variant::TraeVariant) -> &'static [&'s
     super::variant::variant_spec(variant).data_dir_names
 }
 
+// ---------------------------------------------------------------------------
+// 安装探测缓存
+// ---------------------------------------------------------------------------
+
+/// 安装探测结果的缓存时长。
+///
+/// ## 为什么要缓存（2026-11-11）
+///
+/// 探测要枚举盘符并对每个候选做 `is_file()`（见 [`secondary_drive_roots`]），
+/// 而同一份事实会被反复问：账号页刷新的 `get_trae_env` / `get_trae_variants`、
+/// `useScopeStatus` 的 60 秒轮询、侧栏 `useTraeVariantRunning` 的 60 秒轮询。
+/// 安装状态只在安装 / 卸载 / 升级时变化，每次都重新扫盘是白付 IO；
+/// 若某块固定盘响应慢（BitLocker、故障盘、虚拟盘），还会把刷新拖住。
+///
+/// ## 为什么是 30 秒
+///
+/// 它必须显著大于「一次刷新里连续问几次」的间隔（毫秒级），又必须足够短，
+/// 让「刚装完客户端 → 点重新检测」最多等 30 秒。设置里的客户端路径变更
+/// 走 [`invalidate_install_probe_cache`] **立即**失效，不受这个窗口影响。
+const INSTALL_PROBE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 一条缓存记录：探测值 + 写入时刻（TTL 判据）。
+struct InstallProbeCacheEntry {
+    at: std::time::Instant,
+    probe: InstallProbe,
+}
+
+type InstallProbeCache =
+    std::sync::Mutex<std::collections::HashMap<String, InstallProbeCacheEntry>>;
+
+fn install_probe_cache() -> &'static InstallProbeCache {
+    static CACHE: std::sync::OnceLock<InstallProbeCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 清空安装探测缓存。
+///
+/// 设置里的客户端路径变更后**必须**调用（由 [`super::settings::save`] 统一触发）——
+/// 否则用户改完路径后，30 秒内仍会看到旧的探测结果。
+pub(crate) fn invalidate_install_probe_cache() {
+    install_probe_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+}
+
+/// 命中 TTL 内的缓存则直接返回，否则执行 `probe` 并写回。
+///
+/// 锁只保护缓存读写，**不覆盖 `probe()`**：探测是文件 IO，不能把其它调用方
+/// 堵在锁上；并发未命中时各探一次、后写者覆盖 —— 同一份本机事实，结果相同。
+fn cached_install_probe(key: String, probe: impl FnOnce() -> InstallProbe) -> InstallProbe {
+    let cache = install_probe_cache();
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache
+            .get(&key)
+            .filter(|entry| entry.at.elapsed() < INSTALL_PROBE_TTL)
+        {
+            return entry.probe.clone();
+        }
+    }
+
+    let probe = probe();
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            key,
+            InstallProbeCacheEntry {
+                at: std::time::Instant::now(),
+                probe: probe.clone(),
+            },
+        );
+    probe
+}
+
 /// 在**单个变体**的候选里探测该产品线的安装（不跨变体）。
 ///
 /// 与 [`detect_install`] 的区别：后者接受一个自定义路径并横跨全部变体按最近活跃挑，
@@ -181,6 +259,18 @@ pub fn data_dir_names_for(variant: super::variant::TraeVariant) -> &'static [&'s
 /// ⚠️ 但**跨区域**仍然必须拦住：国内路径填进国际区域会让国际页显示成已安装
 /// （实测过：国内版页签显示国际版客户端 `v1.107.1` + `…\TRAE SOLO`）。
 pub fn detect_install_for(variant: super::variant::TraeVariant) -> InstallProbe {
+    // 缓存键带上 store 目录：设置里的自定义客户端路径按 home 分家，
+    // 测试里每个 `TempEnv` 又是独立的 home ⇒ 不同 home 的探测结果不能互相复用。
+    let key = format!(
+        "variant:{}:{}",
+        variant.as_str(),
+        crate::modules::config::store_dir().display()
+    );
+    cached_install_probe(key, || detect_install_for_uncached(variant))
+}
+
+/// [`detect_install_for`] 的**未缓存**实现（缓存见 [`cached_install_probe`]）。
+fn detect_install_for_uncached(variant: super::variant::TraeVariant) -> InstallProbe {
     let settings = crate::modules::trae::settings::load();
     if let Some(custom) = settings.path_for(variant.region()) {
         let path = PathBuf::from(custom);
@@ -586,11 +676,23 @@ fn windows_install_roots() -> Vec<PathBuf> {
 /// 「盘符数 × 名字数 × exe 数」压到只剩真实存在的那些。`C:` 不重复探测
 /// （`%LOCALAPPDATA%\Programs` 与 `ProgramFiles` 已覆盖）。
 ///
-/// 已知代价：盘符里若挂着**已断开的网络驱动器**，`is_dir()` 可能要等超时。
-/// 这里接受该代价 —— 探测只发生在「环境状态」查询上，不是热路径。
+/// ## ★ 必须先按盘符类型过滤，不能直接 `is_dir()`（2026-11-11 实测）
+///
+/// 直接 `is_dir()` 会对每个盘符发一次真实 IO。本机挂着一个映射到
+/// `\\192.168.10.12\d` 的 `Z:`，共享不可达时一次 `is_dir()` 要等 SMB 超时
+/// **10–30 秒**；而账号页刷新会调用 `get_trae_env` / `get_trae_variants`，
+/// 两者各自做 1–2 轮盘符探测 ⇒ 一次「刷新」被拖成 20–55 秒
+/// （用户报障「Trae 刷新很慢」的直接原因）。
+///
+/// [`crate::modules::process::is_fixed_windows_drive`] 走 `GetDriveTypeW`，
+/// 只读**本地挂载表**、不碰远端，断开的网络盘也会立即返回。非固定盘（网络盘 /
+/// 光驱 / 可移动盘）一律不扫：这类位置装 Trae 的几率极低，而代价是每次刷新都
+/// 可能卡到超时；真装在这些位置时用户仍可在设置里填**自定义路径**
+/// （`detect_install_for` 会先看它）。
 #[cfg(windows)]
 fn secondary_drive_roots() -> Vec<PathBuf> {
     (b'D'..=b'Z')
+        .filter(|letter| crate::modules::process::is_fixed_windows_drive(*letter as char))
         .map(|letter| PathBuf::from(format!("{}:\\Programs", letter as char)))
         .filter(|dir| dir.is_dir())
         .collect()
@@ -810,6 +912,13 @@ pub struct InstallProbe {
 /// 仍然覆盖不到的只剩「装在任意自定义目录」（例如 `D:\Apps\Trae\`），
 /// 该场景由 `custom` 兜底，且报错文案会主动提示这一点。
 pub fn detect_install(custom: &[String]) -> InstallProbe {
+    // 自定义路径是唯一入参 ⇒ 直接进键：路径一变，缓存自然不命中。
+    let key = format!("custom:{}", custom.join("\u{1f}"));
+    cached_install_probe(key, || detect_install_uncached(custom))
+}
+
+/// [`detect_install`] 的**未缓存**实现（缓存见 [`cached_install_probe`]）。
+fn detect_install_uncached(custom: &[String]) -> InstallProbe {
     for raw in custom {
         let path = raw.trim();
         if path.is_empty() {
@@ -3193,5 +3302,78 @@ mod tests {
         assert_eq!(probe.exe.as_deref(), Some(exe.as_path()));
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// 安装探测缓存：TTL 内复用；显式失效后必须重新探测。
+    ///
+    /// 用**闭包计数器**代替真实扫盘 —— 断言的是缓存本身，不依赖本机装没装 Trae。
+    #[test]
+    fn install_probe_cache_reuses_within_ttl_and_invalidates_explicitly() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // 缓存是进程级共享状态：与「设置变更会清缓存」的用例串行，否则对方在中途
+        // 合法地清掉本用例的条目，会让「TTL 内必须复用」的断言假红。
+        let _lock = crate::modules::config::env_lock();
+
+        let key = format!("test:install-probe:{}", uuid::Uuid::new_v4().simple());
+        let calls = AtomicUsize::new(0);
+        let probe = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            InstallProbe {
+                installed: true,
+                exe: None,
+                version: Some("9.9.9".into()),
+            }
+        };
+
+        let first = cached_install_probe(key.clone(), probe);
+        let second = cached_install_probe(key.clone(), probe);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "TTL 内必须复用缓存，不能重复探测"
+        );
+        assert_eq!(first.version.as_deref(), Some("9.9.9"));
+        assert_eq!(second.version.as_deref(), Some("9.9.9"));
+
+        invalidate_install_probe_cache();
+        let _third = cached_install_probe(key, probe);
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "显式失效后必须重新探测");
+    }
+
+    /// 改设置里的客户端路径后必须**立即**失效，不能等 30 秒 TTL。
+    ///
+    /// 这条钉的是 [`crate::modules::trae::settings::save`] 对
+    /// [`invalidate_install_probe_cache`] 的调用：漏掉它时，用户改完路径后
+    /// 30 秒内仍看到旧结果（症状是「改了设置没反应」）。
+    #[test]
+    fn saving_client_path_invalidates_install_probe_cache() {
+        let _env = crate::modules::trae::test_support::TempEnv::empty();
+        let variant = super::super::variant::TraeVariant::Trae;
+
+        // 先探一次，把当前 home 的结果写进缓存（内容无关，只为「缓存已热」）。
+        let _ = detect_install_for(variant);
+
+        let dir = std::env::temp_dir().join(format!(
+            "buddy-switch-probe-cache-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).expect("临时目录应能创建");
+        let exe = dir.join("Trae CN.exe");
+        std::fs::write(&exe, b"stub").expect("应能写临时 exe");
+
+        crate::modules::trae::settings::patch(serde_json::json!({
+            "traePaths": { "cn": exe.to_string_lossy() }
+        }))
+        .expect("保存自定义路径应成功");
+
+        let probe = detect_install_for(variant);
+        assert_eq!(
+            probe.exe.as_deref(),
+            Some(exe.as_path()),
+            "设置变更后必须立即重新探测，不能返回 30 秒内的旧缓存"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

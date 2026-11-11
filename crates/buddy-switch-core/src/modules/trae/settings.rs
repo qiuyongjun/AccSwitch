@@ -307,7 +307,11 @@ pub fn load() -> TraeSettings {
 
 /// 全量写入设置。
 pub fn save(settings: &TraeSettings) -> Result<(), String> {
-    store::write_json(&paths::settings_file(), settings)
+    store::write_json(&paths::settings_file(), settings)?;
+    // 客户端路径（`traePaths`）可能变了 ⇒ 安装探测缓存立即失效，
+    // 否则用户改完路径后 30 秒内仍会看到旧结果（见 `platform` 的缓存说明）。
+    crate::modules::trae::platform::invalidate_install_probe_cache();
+    Ok(())
 }
 
 /// 局部更新：仅覆盖 `patch` 中出现的字段，其余保持原值。

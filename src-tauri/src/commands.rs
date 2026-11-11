@@ -129,11 +129,6 @@ fn mismatch_json(mismatch: &auth_file::RegionMismatch) -> Value {
     })
 }
 
-/// 该 region 客户端是否已安装（跨平台：解析出的应用路径真实存在）。
-fn region_installed(region: Region) -> bool {
-    auth_file::workbuddy_app_path_for(region).exists()
-}
-
 /// 切换进度缓存：桌面端也可通过 `switch_progress` 轮询（与 webui 的
 /// `/api/switch/progress` 同契约）。事件 `switch-progress` 仍照常派发。
 static SWITCH_PROGRESS: Mutex<Option<String>> = Mutex::new(None);
@@ -193,6 +188,10 @@ fn build_app_status(region: Region) -> AppStatus {
             "email": account::display_str(&acct, "email"),
         }))
     });
+    // ★ 只解析一次：`appPath` 与 `installed` 是**同一份探测**的两个投影。
+    // 此前两处各调一次 `workbuddy_app_path_for` ⇒ 每次状态刷新跑两轮
+    // 「进程探测 → 缓存 → 注册表 → 盘符」；缓存缺失时会重复扫盘（2026-11-11）。
+    let app_path = auth_file::workbuddy_app_path_for(region);
     AppStatus {
         // 展示口径：core 的 1 秒进程快照（与 HTTP 通道共用）。
         running: process::is_workbuddy_running_display_for(region),
@@ -201,11 +200,9 @@ fn build_app_status(region: Region) -> AppStatus {
             .to_string_lossy()
             .to_string(),
         current,
-        app_path: auth_file::workbuddy_app_path_for(region)
-            .to_string_lossy()
-            .to_string(),
+        app_path: app_path.to_string_lossy().to_string(),
         version: update::APP_VERSION.to_string(),
-        installed: region_installed(region),
+        installed: app_path.exists(),
         region_mismatch,
     }
 }

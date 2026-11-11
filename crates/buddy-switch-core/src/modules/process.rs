@@ -882,10 +882,42 @@ pub(crate) fn wait_windows_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32
     }
 }
 
+/// 该盘符是不是**本地固定盘**（`DRIVE_FIXED`）。
+///
+/// ## ★ 为什么不能用 `Path::exists()` / `is_dir()` 判存在（2026-11-11 实测）
+///
+/// 对盘符根目录发真实 IO 会被**不可达的网络盘**拖住：本机挂着映射到
+/// `\\192.168.10.12\d` 的 `Z:`，一次 `is_dir("Z:\\Programs")` 要等 SMB 超时
+/// **10–155 秒**。而盘符枚举发生在「找客户端 exe」的兜底路径上，会被账号页刷新 /
+/// 顶栏状态轮询反复调用 ⇒ 一次刷新被拖成几十秒。
+///
+/// `GetDriveTypeW` 只读**本地挂载表**、不碰远端，断开的网络盘也立即返回。
 #[cfg(target_os = "windows")]
-pub(crate) fn existing_windows_drives() -> Vec<char> {
+pub(crate) fn is_fixed_windows_drive(letter: char) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    // Win32 `DRIVE_FIXED`。不引入 `Win32_System_WindowsProgramming` 特性只为拿
+    // 这一个常量（会扩大编译面）；取值来自 Win32 API 文档，稳定不变。
+    const DRIVE_FIXED: u32 = 3;
+
+    let root: Vec<u16> = format!("{letter}:\\")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `root` 以 NUL 结尾且在调用期间存活；GetDriveTypeW 只读该字符串。
+    unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == DRIVE_FIXED }
+}
+
+/// 本机**本地固定盘**的盘符（A–Z）。
+///
+/// 只返回固定盘，理由见 [`is_fixed_windows_drive`]：网络盘 / 光驱 / 可移动盘的
+/// 真实 IO 可能阻塞数秒到数分钟，而这些位置装客户端的概率极低；真装在那里时
+/// 用户可在设置里填自定义路径（Trae）或依赖已落盘的 exe 缓存（WorkBuddy）。
+#[cfg(target_os = "windows")]
+pub(crate) fn fixed_windows_drives() -> Vec<char> {
     ('A'..='Z')
-        .filter(|c| Path::new(&format!(r"{c}:\")).exists())
+        .filter(|letter| is_fixed_windows_drive(*letter))
         .collect()
 }
 
@@ -1010,7 +1042,7 @@ pub fn windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
     let pf = std::env::var("PROGRAMFILES").ok();
     let pf86 = std::env::var("PROGRAMFILES(X86)").ok();
     let user = std::env::var("USERNAME").ok();
-    let drives = existing_windows_drives();
+    let drives = fixed_windows_drives();
     let candidates = windows_fallback_exe_candidates_for(
         region,
         local.as_deref(),
@@ -3307,5 +3339,31 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
 
         assert_eq!(bundle_executable(&app), None);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 盘符枚举必须只返回**本地固定盘**，且不重复、按 A–Z 升序。
+    ///
+    /// ## 为什么这条非钉不可（2026-11-11）
+    ///
+    /// 旧实现是 `('A'..='Z').filter(|c| Path::new("c:\\").exists())`：对**每个**盘符
+    /// 发一次真实 IO。本机挂着不可达的网络盘 `Z:`，一次 `is_dir` 要等 SMB 超时
+    /// 10–155 秒 ⇒ 每次账号页刷新 / 顶栏状态轮询都被拖成几十秒。
+    /// 现在改问 `GetDriveTypeW`（只读本地挂载表），网络盘 / 光驱 / 可移动盘直接排除。
+    ///
+    /// 断言只取**可移植**的部分：系统盘 `C:` 在任何 Windows 环境里都是固定盘。
+    /// 「`Z:` 不在结果里」只能在本机成立，写进来会让别的机器随机红。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fixed_windows_drives_contains_system_drive_and_is_sorted() {
+        let drives = fixed_windows_drives();
+        assert!(drives.contains(&'C'), "系统盘必须是固定盘: {drives:?}");
+        assert!(
+            drives.iter().all(|letter| letter.is_ascii_uppercase()),
+            "只允许大写盘符: {drives:?}"
+        );
+        let mut sorted = drives.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(drives, sorted, "结果必须去重且升序: {drives:?}");
     }
 }

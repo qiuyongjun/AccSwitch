@@ -548,7 +548,7 @@ fn windows_cn_exe_path_resolved() -> Option<PathBuf> {
     let pf = std::env::var("PROGRAMFILES").ok();
     let pf86 = std::env::var("PROGRAMFILES(X86)").ok();
     let user = std::env::var("USERNAME").ok();
-    let drives = process::existing_windows_drives();
+    let drives = process::fixed_windows_drives();
     for p in windows_cn_fallback_exe_candidates(
         local.as_deref(),
         pf.as_deref(),
@@ -979,7 +979,10 @@ pub fn status() -> Value {
     // ⇒ 下次 `status()` 看到目录存在就报 `installed = true` ⇒ 界面显示「已接入」
     // 并放开 IDE 切换，而客户端根本没装。上游 issue #91 修的就是这个形状
     // （「installed 收敛为客户端存在性」）。
-    let installed = codebuddy_cn_app_path().is_some();
+    // 只解析一次：`installed` 与 `appPath` 是同一份探测的两个投影。
+    // 此前两处各调一次 ⇒ 未安装时每轮状态都要重复跑「进程 → 缓存 → 注册表 → 盘符」。
+    let app_path = codebuddy_cn_app_path();
+    let installed = app_path.is_some();
     let db_exists = db_path.as_ref().map(|p| p.exists()).unwrap_or(false);
     let running = is_codebuddy_cn_running();
 
@@ -1001,7 +1004,7 @@ pub fn status() -> Value {
         "dataDir": data_dir.map(|p| p.to_string_lossy().to_string()),
         "dbPath": db_path.map(|p| p.to_string_lossy().to_string()),
         "dbExists": db_exists,
-        "appPath": codebuddy_cn_app_path().map(|p| p.to_string_lossy().to_string()),
+        "appPath": app_path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "activeAccountId": active_account_id,
         "activeAccountName": active_account_name,
         "detectedFrom": "state",
