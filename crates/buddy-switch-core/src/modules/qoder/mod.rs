@@ -55,6 +55,9 @@ pub mod switch;
 pub mod token;
 pub mod trash;
 pub mod usage;
+pub mod web_proxy;
+pub mod web_session;
+pub mod web_usage;
 
 // ---------------------------------------------------------------------------
 // 上游 API 路径（两个区域共用；端点基址在 `region::realm_spec` 里按区查表）

@@ -277,3 +277,33 @@ URL query `Encode=1` 决定「先解码再按 JSON 解析」还是「直接按 J
 6. 前端：程序位、凭据导入方式（OAuth / PAT / 本机导入）、模型清单展示。
 7. **命名空间护栏**：解析只做整段精确匹配；测试输入必须含「比基准长一截」的形状
    （如 `qoder-cn-x`），否则前缀实现与精确实现在现有输入集上等价、断言恒绿。
+
+---
+
+## 12. 网页端逐资源包明细（issue #111，上游 2026-10-27 落地；本仓 2026-11-11 移植）
+
+**数据源**：`GET {website}/api/v2/me/usages/big_model_credits`。该接口只认浏览器登录后的
+会话 Cookie；openapi 的设备令牌（`Bearer dt-…`）实测一律 401。因此逐包链路**不能**复用
+`/api/v2/quota/usage` 的鉴权，必须单独走网页会话。
+
+**链路**：
+
+1. 桌面端打开独立登录窗（`src-tauri/src/qoder_web.rs`），载 `{website}/account/usage`；
+2. 用户登录一次后，用 `Webview::cookies_for_url()` 收割 Cookie（关窗前 + 窗口存活时两处读取，
+   都要求 async command + 独立线程，Windows 同步调用会死锁）；
+3. Cookie 暂存进程内存 → `qoder_web_credit_packs_probe` 认领并校验 `user_id`（fail-closed：
+   归属不符即丢弃）→ 成功后才写入 `web_session.{cn|global}.json`；
+4. 渲染路径 `qoder_web_credit_packs` 只读已认领会话，解析 `quota_detail` 的逐包行
+   （`expires_at` 毫秒/秒都归一，`0`/缺失 = 无到期）；
+5. 会话缓存 7 天（`web_session::MAX_AGE_MS`），绑定 uid；Cookie 与账号库同防护等级
+   （0600 + 原子写），**不导出、不进备份、不进日志、不进错误消息**；
+6. 国际版按 IP 判地区，逐包取数支持按区域配置出站代理（`qoder/proxy.json`，
+   `qoder_web_proxy_get/set`），代理只作用于逐包请求，登录窗走系统代理。
+
+**降级**：拿不到逐包时**回落聚合额度行**，并在抽屉/浮层按结构化原因引导
+（`no_session` / `session_expired` / `session_mismatch` / `upstream`）；headless 服务端返回
+「仅桌面端可用」，**绝不返回空包列表**冒充「该账号没有资源包」。
+
+**代码**：`qoder/web_usage.rs`（协议与解析）、`qoder/web_session.rs`（缓存）、
+`qoder/web_proxy.rs`（按区域代理）、`src-tauri/qoder_web.rs`（登录窗与命令）、
+`src/components/qoder/qoder-packs-popover.tsx`、`src/pages/QoderCreditsPage.tsx`。

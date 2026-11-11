@@ -57,6 +57,9 @@ function PopoverContent({
         sideOffset={sideOffset}
         className={cn(
           "z-50 rounded-lg border bg-popover p-1.5 text-popover-foreground shadow-overlay outline-none",
+          /* ★ 浮层必须限高可滚（本仓硬约束）：不限高 + 内容长 ⇒ 超出窗口的部分被切掉
+             且没有滚动条。用 Radix 给的可用高度变量，窗口再小也不会溢出。 */
+          "max-h-[var(--radix-popover-content-available-height)] overflow-y-auto",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           "data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
           className,

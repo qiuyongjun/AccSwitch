@@ -11,7 +11,8 @@ use buddy_switch_core::modules::{
     account, app_prefs, auth_file, backup, cache, capability, checkin, client_limits,
     client_settings, config, credit_usage, credits, diagnostics, export_import, growth_tasks,
     migrate, oauth, process, programs, qoder, refresh, region::Region, region::RegionFilter,
-    rotate, session, skill, switch, token_daily, token_stats, trae, travel, update, vscode_session,
+    rotate, runtime_log, session, skill, switch, token_daily, token_stats, trae, travel, update,
+    vscode_session,
 };
 use tauri::{Emitter, Manager};
 // P5 §2.5 第 (2) 条：capability **默认拒绝**。表数据只在 core（`product_spec`），本文件只查表。
@@ -2282,6 +2283,45 @@ pub fn get_app_prefs() -> Value {
 #[tauri::command]
 pub fn set_app_prefs(prefs: Value) -> Result<Value, String> {
     app_prefs::save_app_prefs(&prefs).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// 运行日志（仅桌面端命令面；webui 有同名路由，见 server api.rs）
+// ---------------------------------------------------------------------------
+
+/// GET /api/logs/runtime —— 读取本工具**自身**的运行日志。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn runtime_logs(
+    level: Option<String>,
+    date: Option<String>,
+    keyword: Option<String>,
+    limit: Option<u64>,
+) -> Result<Value, String> {
+    let args = json!({
+        "level": level,
+        "date": date,
+        "keyword": keyword,
+        "limit": limit,
+    });
+    tauri::async_runtime::spawn_blocking(move || runtime_log::read(&args))
+        .await
+        .map_err(|error| format!("读取运行日志失败: {error}"))
+}
+
+/// POST /api/logs/runtime/clear —— 清空全部运行日志（**不可逆**）。
+#[tauri::command]
+pub async fn clear_runtime_logs() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(runtime_log::clear)
+        .await
+        .map_err(|error| format!("清空运行日志失败: {error}"))?
+}
+
+/// POST /api/logs/open-dir —— 在文件管理器中打开日志目录（不存在则先创建）。
+#[tauri::command]
+pub async fn open_runtime_logs_dir() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(runtime_log::open_logs_dir)
+        .await
+        .map_err(|error| format!("打开日志目录失败: {error}"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -4824,6 +4864,77 @@ pub async fn qoder_credits(
     let scope = resolve_scope_param(Some(&scope))?;
     let region = require_qoder_region(scope)?;
     Ok(qoder::credits::region_view(region, account_ids.as_deref()).await)
+}
+
+// ---------------------------------------------------------------------------
+// Qoder 网页端逐包链路（issue #111）
+//
+// 实现全在 [`crate::qoder_web`]，这里只是薄包装 —— 与本文件其余命令同构。
+// ⚠️ **必须包在 `commands.rs` 里**：`scripts/check-api-contract.cjs` 只把
+// `commands::<name>` 形态认作「已登记」，直接写 `qoder_web::<name>` 会被判未登记。
+// ---------------------------------------------------------------------------
+
+/// POST /api/qoder/web/login-open —— 打开（或前置）Qoder 网页端登录窗。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_login_open(app: tauri::AppHandle, scope: String) -> Result<Value, String> {
+    crate::qoder_web::login_open(&app, scope).await
+}
+
+/// POST /api/qoder/web/login-close —— 关闭登录窗（幂等）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_login_close(app: tauri::AppHandle) -> Result<Value, String> {
+    crate::qoder_web::login_close(&app).await
+}
+
+/// POST /api/qoder/web/credit-packs/probe —— 收割会话 Cookie 并探一次逐包接口。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_credit_packs_probe(
+    app: tauri::AppHandle,
+    scope: String,
+    uid: String,
+) -> Result<Value, String> {
+    crate::qoder_web::credit_packs_probe(&app, scope, uid).await
+}
+
+/// GET /api/qoder/web/session/status —— 本区域有没有可用的网页会话（只读）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_session_status(scope: String, uid: String) -> Result<Value, String> {
+    crate::qoder_web::session_status(scope, uid).await
+}
+
+/// GET /api/qoder/web/session/window-cookies —— 登录窗里现有的 Cookie **名称与条数**。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_window_cookies(
+    app: tauri::AppHandle,
+    scope: String,
+) -> Result<Value, String> {
+    crate::qoder_web::window_cookies(&app, scope).await
+}
+
+/// GET /api/qoder/web/credit-packs —— 读**已缓存**会话取逐包明细（渲染用，不弹窗）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_credit_packs(scope: String, uid: String) -> Result<Value, String> {
+    crate::qoder_web::credit_packs(scope, uid).await
+}
+
+/// POST /api/qoder/web/session/logout —— 清除本地会话缓存（幂等）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_session_logout(scope: String) -> Result<Value, String> {
+    crate::qoder_web::session_logout(scope).await
+}
+
+/// GET /api/qoder/web/proxy —— 读出站代理配置（逐包取数用；空 = 直连）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_proxy_get() -> Result<Value, String> {
+    crate::qoder_web::web_proxy_config()
+}
+
+/// POST /api/qoder/web/proxy —— 保存出站代理配置（两个字段都先过形状校验）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn qoder_web_proxy_set(config: Value) -> Result<Value, String> {
+    let parsed: buddy_switch_core::modules::qoder::web_proxy::WebProxyConfig =
+        serde_json::from_value(config).map_err(|error| format!("代理配置格式错误: {error}"))?;
+    crate::qoder_web::web_proxy_config_save(parsed)
 }
 
 /// POST /api/qoder/oauth/start —— 发起设备授权，返回 `{ loginId, verificationUri, expiresIn }`。

@@ -960,4 +960,8 @@ export const zh = {
   "shared.srv.localUnavailableDesc": "改用「浏览器授权登录」或「粘贴授权凭据」；也可以在装了客户端的机器上导出备份再导入",
   "shared.srv.oauthTitle": "浏览器授权登录",
   "shared.srv.oauthDesc": "生成链接与二维码，用任意设备浏览器授权，服务端自己收结果",
+
+  // ---- 积分视图（自动刷新节奏 / 上次刷新）----
+  "shared.credit.autoEvery": "每 {n} 分钟自动刷新",
+  "shared.credit.lastRefresh": "上次刷新 {time}",
 } as const;

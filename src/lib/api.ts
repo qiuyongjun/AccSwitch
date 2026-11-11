@@ -56,6 +56,9 @@ import type {
   RegionFilter,
   RotateLog,
   RotateStatus,
+  RuntimeLogClearResult,
+  RuntimeLogQuery,
+  RuntimeLogsResponse,
   ScheduleConfig,
   ScheduleRunResult,
   Session,
@@ -188,6 +191,10 @@ const DEMO_READ_COMMANDS = new Set([
   // 限流探测的只读状态命令（probe_status）：演示站需返回未跑过（phase=idle）的快照。
   // ⚠️ probe_start / probe_cancel 是**写**操作（会真发上游请求 / 置取消位），一律不进这里。
   "probe_status",
+  // 运行日志（**只读**）：演示站需返回虚构数据，否则 build:demo 报错。
+  // ⚠️ clear_runtime_logs（删文件）/ open_runtime_logs_dir（起 GUI 进程）是**动作**，
+  //    一律不进这里 —— 演示环境绝不能真的删本机日志或弹文件管理器。
+  "runtime_logs",
   // 「今日 Token」（**只读**观测）：演示站需返回虚构数据，否则 build:demo 报错。
   "get_account_token_today",
   // 网关**逐日**趋势（只读 `token_daily` 历史）：趋势页的网关小图用，演示站同样要虚构数据。
@@ -229,6 +236,10 @@ const DEMO_READ_COMMANDS = new Set([
   //（保存配置 / 建 Key / 吊销 / 恢复 / 删除 / 清日志）。
   "get_qoder_accounts", "get_qoder_local_sources", "qoder_program_status", "qoder_usage",
   "qoder_credits", "qoder_checkin_status",
+  // Qoder 逐包（#111）的**只读**命令：演示站需返回虚构数据。
+  // ⚠️ login-open / login-close / probe / session-logout / proxy-set 是动作，不进这里。
+  "qoder_web_credit_packs", "qoder_web_session_status", "qoder_web_window_cookies",
+  "qoder_web_proxy_get",
   // issue #47：逐账号「今日签到状态」（**只读**）。
   "qoder_checkin_status_map",
   "get_qoder_gateway_config", "qoder_gateway_status", "get_qoder_gateway_models",
@@ -347,6 +358,10 @@ const ROUTES: Record<string, Route> = {
   restore_auto_backup: { method: "POST", path: "/api/backup/auto/restore" },
   // Q1 · 诊断包导出（只读；凭据闸门在 core，命中即拒绝发出）。
   export_diagnostic: { method: "POST", path: "/api/diagnostics/export" },
+  // 运行日志（本工具自身，排查问题用）：读 / 清 / 开目录。
+  runtime_logs: { method: "GET", path: "/api/logs/runtime" },
+  clear_runtime_logs: { method: "POST", path: "/api/logs/runtime/clear" },
+  open_runtime_logs_dir: { method: "POST", path: "/api/logs/open-dir" },
   get_auto_backup_config: { method: "GET", path: "/api/backup/auto/config" },
   save_auto_backup_config: { method: "POST", path: "/api/backup/auto/config" },
   switch_account: { method: "POST", path: "/api/switch" },
@@ -579,6 +594,17 @@ const ROUTES: Record<string, Route> = {
   qoder_switch_account: { method: "POST", path: "/api/qoder/accounts/switch" },
   qoder_set_account_group: { method: "POST", path: "/api/qoder/accounts/group" },
   qoder_usage: { method: "GET", path: "/api/qoder/usage" },
+  // Qoder 网页端逐包链路（#111）：仅桌面端有实现；webui 路由返回结构化「仅桌面端可用」。
+  qoder_web_login_open: { method: "POST", path: "/api/qoder/web/login-open" },
+  qoder_web_login_close: { method: "POST", path: "/api/qoder/web/login-close" },
+  qoder_web_credit_packs_probe: { method: "POST", path: "/api/qoder/web/credit-packs/probe" },
+  qoder_web_credit_packs: { method: "GET", path: "/api/qoder/web/credit-packs" },
+  qoder_web_session_status: { method: "GET", path: "/api/qoder/web/session/status" },
+  qoder_web_window_cookies: { method: "GET", path: "/api/qoder/web/session/window-cookies" },
+  qoder_web_session_logout: { method: "POST", path: "/api/qoder/web/session/logout" },
+  // 代理是纯配置：webui 也真实读写（headless 服务端有会话文件同样要取逐包）。
+  qoder_web_proxy_get: { method: "GET", path: "/api/qoder/web/proxy" },
+  qoder_web_proxy_set: { method: "POST", path: "/api/qoder/web/proxy" },
   // Qoder API 网关管理面（网关本体走独立端口 57895，见 src/pages/QoderApiServicePage）。
   // ⚠️ **一个监听、两个区域**：状态 / 清单两条按 `scope` 看对应的那本账号库（fail-closed）；
   //   配置与监听是否起来是两区域共用的事实（故 config 不带 scope）。
@@ -1113,6 +1139,35 @@ export function listAutoBackups(): Promise<{ backups: AutoBackupEntry[] }> {
  */
 export function exportDiagnostic(): Promise<{ name: string; text: string }> {
   return call<{ name: string; text: string }>("export_diagnostic");
+}
+
+/**
+ * 读取本工具**自身**的运行日志（设置页「日志」分区）。
+ *
+ * 与 `getTraeLogs` 的区别：那个读的是 **Trae 客户端**的日志；本函数读的是
+ * **本工具**写的 `~/.buddy-switch/logs/runtime-*.log`。两者数据源互不相干。
+ */
+export function runtimeLogs(query?: RuntimeLogQuery): Promise<RuntimeLogsResponse> {
+  const args: Record<string, unknown> = {};
+  if (query?.level) args.level = query.level;
+  if (query?.date) args.date = query.date;
+  if (query?.keyword) args.keyword = query.keyword;
+  if (query?.limit) args.limit = query.limit;
+  return call("runtime_logs", Object.keys(args).length > 0 ? args : undefined);
+}
+
+/**
+ * 清空运行日志（**不可逆**）。
+ *
+ * 只删本工具自己写的 `runtime-*.log`；同目录其它文件一律不碰。
+ */
+export function clearRuntimeLogs(): Promise<RuntimeLogClearResult> {
+  return call("clear_runtime_logs");
+}
+
+/** 在文件管理器中打开日志目录（不存在则先创建）。 */
+export function openRuntimeLogsDir(): Promise<{ ok: boolean; path: string }> {
+  return call("open_runtime_logs_dir");
 }
 
 /** P7 T02：从自动备份 / 导入前快照**恢复**（覆盖策略；恢复本身也可撤销）。 */
@@ -3452,6 +3507,184 @@ export function qoderCredits(scope: Scope, accountIds?: string[]): Promise<Qoder
     scope,
     ...(accountIds !== undefined ? { accountIds } : {}),
   });
+}
+
+// ---------------------------------------------------------------------------
+// issue #111 · Qoder 网页端逐资源包明细
+// ---------------------------------------------------------------------------
+//
+// ⚠️ 这些命令**仅桌面端可用**：逐包数据在网页端私有接口，只认浏览器登录后的会话
+// Cookie，而只有 Tauri 的 `Webview::cookies()` 能读到它。headless 形态（Docker /
+// npm CLI / 裸二进制）调用会得到结构化的「仅桌面端可用」错误 —— 那**不是**「该账号
+// 没有资源包」，两者不得混为一谈。
+
+/** 逐包探针结果（认领会话 + 取一次明细；`raw` 是上游原始响应，不含 Cookie）。 */
+export interface QoderWebCreditProbe {
+  /** 是否拿到了会话（`window` 现读 / `staged` 关窗前暂存 / `stored` 缓存）。 */
+  hasSession: boolean;
+  /** 会话来源：登录窗现读 / 关窗前暂存 / 本地缓存 / 无。 */
+  source?: "window" | "staged" | "stored" | "none";
+  cookieCount: number;
+  /** 只给名称，**不含值**（Cookie 等价于完整身份凭据）。 */
+  cookieNames: string[];
+  /** 会话归属者是否与 `uid` 一致；不一致 ⇒ 明细必须丢弃。 */
+  uidMatches?: boolean;
+  /** 响应形状摘要（分组名 / 行数 / 行内键名），不含额度数值。 */
+  shape?: unknown;
+  /** 解析后的资源包（字段映射由真样本锚定）。 */
+  packs?: QoderCreditPack[];
+  /** 上游原始响应（仅探针返回）。 */
+  raw?: unknown;
+  message?: string;
+}
+
+/** 打开（或前置）Qoder 网页端登录窗，供用户登录一次。 */
+export function qoderWebLoginOpen(
+  scope: Scope,
+): Promise<{ opened: boolean; url: string }> {
+  return call<{ opened: boolean; url: string }>("qoder_web_login_open", { scope });
+}
+
+/** 关闭 Qoder 网页端登录窗（已关闭 ⇒ `closed=false`，不报错）。 */
+export function qoderWebLoginClose(): Promise<{ closed: boolean }> {
+  return call<{ closed: boolean }>("qoder_web_login_close", {});
+}
+
+/** 收割会话 Cookie 并探一次逐包接口（取证；命中即缓存，供下次免登录）。 */
+export function qoderWebCreditPacksProbe(
+  scope: Scope,
+  uid: string,
+): Promise<QoderWebCreditProbe> {
+  return call<QoderWebCreditProbe>("qoder_web_credit_packs_probe", { scope, uid });
+}
+
+/** 网页会话状态（前端据此决定显示「登录」还是「已登录 / 需重新登录」）。 */
+export interface QoderWebSessionStatus {
+  /** 有新鲜且 uid 匹配的会话。 */
+  hasSession: boolean;
+  /** 有缓存但已过期或换过账号 ⇒ 该引导重新登录，而非当作「已登录」。 */
+  expired: boolean;
+  /**
+   * 有会话但**还没被 uid 认领**（关窗前刚收割到）。
+   *
+   * ★ 这是「登录完关窗、还没探过一次」这个真实时刻的状态：此时 `hasSession` 仍是 false，
+   * 但用户已经登录了 —— 界面必须给「读取逐包」而不是再说一次「去登录」。
+   */
+  pending?: boolean;
+  source: "window" | "staged" | "stored" | "none";
+  cookieNames: string[];
+  savedAtMs: number;
+  verifiedAtMs: number;
+}
+
+/**
+ * 登录窗里现有的 Cookie（**只有名称 / 条数 / 指纹，没有值**）。
+ *
+ * 用途：前端轮询它来判断「用户是否已经在窗口里登录完」。为什么不轮询 probe ——
+ * probe 一旦拿到非空 Cookie 就会真打上游，未登录时的匿名 Cookie 换来 401，
+ * 401 又会清缓存，40 次轮询就是一串注定失败的请求 + 反复抹掉刚写的缓存。
+ */
+export interface QoderWebWindowCookies {
+  /** 登录窗当前是否开着。 */
+  windowOpen: boolean;
+  cookieCount: number;
+  cookieNames: string[];
+  /** 集合指纹（不可逆）；空串 = 窗口没开 / 还没读到。变了即「登录态可能变了」。 */
+  fingerprint: string;
+}
+
+/** 一个 Qoder 资源包（积分包）。字段名与上游 snake_case 逐字对应。 */
+export interface QoderCreditPack {
+  group: string;
+  id?: string;
+  source?: string;
+  status?: string;
+  limit: number;
+  used: number;
+  remaining: number;
+  unit?: string;
+  usagePercentage: number;
+  isActive: boolean;
+  /** 毫秒；缺省 = 无到期时间（上游 `expires_at = 0`）。 */
+  expiresAtMs?: number;
+}
+
+/** 逐包汇总（后端算好，前端只显示）。 */
+export interface QoderPackSummary {
+  /** 有额度的包数（`limit > 0`）。 */
+  count: number;
+  /** 额度为 0 的占位条目数（套餐条目）。 */
+  zeroCount: number;
+  limit: number;
+  used: number;
+  remaining: number;
+}
+
+/** 「拿不到逐包」的原因 —— 前端按它选文案，不要统一显示「出错了」。 */
+export type QoderPacksUnavailableReason =
+  | "no_session"
+  | "session_expired"
+  | "session_mismatch"
+  | "upstream";
+
+export interface QoderWebCreditPacks {
+  available: boolean;
+  reason?: QoderPacksUnavailableReason;
+  message?: string;
+  packs: QoderCreditPack[];
+  summary?: QoderPackSummary;
+  verifiedAtMs?: number;
+}
+
+/** 读已缓存的网页会话取逐包明细（不弹登录窗；拿不到时给结构化原因）。 */
+export function qoderWebCreditPacks(
+  scope: Scope,
+  uid: string,
+): Promise<QoderWebCreditPacks> {
+  return call<QoderWebCreditPacks>("qoder_web_credit_packs", { scope, uid });
+}
+
+/** 查询网页会话状态（只读）。 */
+export function qoderWebSessionStatus(
+  scope: Scope,
+  uid: string,
+): Promise<QoderWebSessionStatus> {
+  return call<QoderWebSessionStatus>("qoder_web_session_status", { scope, uid });
+}
+
+/** 逐包取数的出站代理配置（两个区域各一个 URL；空 = 直连）。 */
+export interface QoderWebProxyConfig {
+  /** 国内版。缺省直连，一般不用填。 */
+  cn: string;
+  /** 国际版。国内网络直连会被上游按 IP 拦下 ⇒ 通常要填。 */
+  global: string;
+}
+
+/** 读逐包出站代理配置（只读）。 */
+export function qoderWebProxyGet(): Promise<QoderWebProxyConfig> {
+  return call<QoderWebProxyConfig>("qoder_web_proxy_get", {});
+}
+
+/** 保存逐包出站代理配置（两个 URL 都先过后端形状校验）。 */
+export function qoderWebProxySet(
+  config: QoderWebProxyConfig,
+): Promise<{ ok: boolean; config: QoderWebProxyConfig }> {
+  return call("qoder_web_proxy_set", { config });
+}
+
+/**
+ * 读登录窗里现有的 Cookie **名称与条数**（只读、不打上游）。
+ *
+ * 登录窗开着时轮询它：`fingerprint` 变化 ⇒ 用户在窗口里登录完了 ⇒ 再调一次
+ * {@link qoderWebCreditPacksProbe} 认领会话。
+ */
+export function qoderWebWindowCookies(scope: Scope): Promise<QoderWebWindowCookies> {
+  return call<QoderWebWindowCookies>("qoder_web_window_cookies", { scope });
+}
+
+/** 清除本地网页会话（「退出网页登录」；幂等）。 */
+export function qoderWebSessionLogout(scope: Scope): Promise<{ cleared: boolean }> {
+  return call<{ cleared: boolean }>("qoder_web_session_logout", { scope });
 }
 
 /**

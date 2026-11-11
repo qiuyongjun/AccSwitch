@@ -44,8 +44,10 @@ import { useLocation, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
+  Globe,
   KeyRound,
   Loader2,
+  PackageSearch,
   Plus,
   RefreshCw,
   ShieldAlert,
@@ -114,6 +116,7 @@ import {
 } from "@/lib/account-list-view";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
 import { formatDate } from "@/lib/format";
+import { PACKS_TTL_MS, packSourceLabel, packState } from "@/lib/qoder-packs";
 import {
   QuickActionButton,
   QuickRefreshAction,
@@ -130,7 +133,6 @@ import {
   creditMetricTip,
   drawerTabOpenAria,
   expiryTooltipLines,
-  formatCreditExpiry,
   formatCredits,
   nextExpiryLabel,
 } from "@/components/account-card";
@@ -277,6 +279,26 @@ function QoderAccountsPanel({
   const [exportOpen, setExportOpen] = useState(false);
   const [exportTargets, setExportTargets] = useState<QoderAccountView[] | null>(null);
   const [detail, setDetail] = useState<QoderAccountView | null>(null);
+  /**
+   * 逐包明细（issue #111）：按 uid 缓存。
+   *
+   * ⚠️ 与 `credits` **并存、不互替**：`credits` 是 openapi 的聚合三标量（任何形态都有），
+   * 逐包要走网页会话（仅桌面端 + 需登录一次）。拿不到逐包时**回落聚合行**，
+   * 绝不显示空区块 —— 那是「不知道」伪装成「没有」。
+   */
+  const [webPacks, setWebPacks] = useState<Record<string, api.QoderWebCreditPacks>>({});
+  /** 正在取逐包的账号（浮层里显示「读取中」而不是「未登录」）。 */
+  const [packsLoading, setPacksLoading] = useState<Record<string, boolean>>({});
+  /** 每账号上次取数时刻（TTL 用 ref：改它不该触发重渲染）。 */
+  const packsFetchedAt = useRef<Record<string, number>>({});
+
+  /* 切换区域（Qoder CN ↔ 国际版）时清空逐包缓存：UID 在两个区域可能相同，
+     不清会把上一个区域的包/到期日显示到当前账号上。 */
+  useEffect(() => {
+    setWebPacks({});
+    setPacksLoading({});
+    packsFetchedAt.current = {};
+  }, [scope]);
   /** 本次打开要直达的页签（`null` = 按账号记忆）。只在本次打开生效，关闭即清。 */
   const [detailTab, setDetailTab] = useState<DrawerTab | null>(null);
   const [detailAutoEditRemark, setDetailAutoEditRemark] = useState(false);
@@ -1302,6 +1324,123 @@ function QoderAccountsPanel({
   }
 
   /**
+   * 取某账号的逐包明细（带 TTL；`force` 绕过 TTL）。
+   *
+   * ★ 并发去重：浮层与抽屉可能同时触发同一个账号 —— 用 `packsLoading` 挡第二次，
+   * 否则会并发打两次上游（逐包接口要带会话 Cookie，重复调用没有意义）。
+   */
+  async function loadPacks(uid: string, force = false) {
+    if (!uid) return;
+    if (packsLoading[uid]) return;
+    const last = packsFetchedAt.current[uid] ?? 0;
+    if (!force && webPacks[uid] && Date.now() - last < PACKS_TTL_MS) return;
+    setPacksLoading((prev) => ({ ...prev, [uid]: true }));
+    try {
+      const result = await api.qoderWebCreditPacks(scope, uid);
+      packsFetchedAt.current[uid] = Date.now();
+      setWebPacks((prev) => ({ ...prev, [uid]: result }));
+    } catch {
+      /* 静默：详情拿不到不是错误，浮层会按 `packs` 为空给出引导。 */
+    } finally {
+      setPacksLoading((prev) => {
+        const next = { ...prev };
+        delete next[uid];
+        return next;
+      });
+    }
+  }
+
+  /**
+   * 探一次逐包接口：**认领**登录窗里的会话（带 uid 归属校验），成功即刷新该账号逐包。
+   */
+  async function probeAndLoad(account: QoderAccountView): Promise<boolean> {
+    const uid = account.uid;
+    setPacksLoading((prev) => ({ ...prev, [uid]: true }));
+    try {
+      const probe = await api.qoderWebCreditPacksProbe(scope, uid);
+      if (!probe.hasSession) return false;
+      if (probe.uidMatches === false) {
+        // 归属不符：后端已丢弃该会话，界面必须说清楚「不是这个账号」。
+        toast.error(t("qoder.page.accounts.web.readMismatch"));
+        await loadPacks(uid, true);
+        return false;
+      }
+      await loadPacks(uid, true);
+      toast.success(t("qoder.page.accounts.web.readDone", { n: String(probe.packs?.length ?? 0) }));
+      return true;
+    } catch {
+      /* 上游拒绝 / 网络失败：让浮层与抽屉按结构化原因给下一步，这里不重复报错。 */
+      await loadPacks(uid, true);
+      return false;
+    } finally {
+      setPacksLoading((prev) => {
+        const next = { ...prev };
+        delete next[uid];
+        return next;
+      });
+    }
+  }
+
+  /**
+   * 「我已登录，读取逐包明细」：登录在另一个窗口完成，用户很可能登录完直接关窗；
+   * 给一个能自己按的入口，比让用户猜「是不是还要再等」强。
+   */
+  async function readPacks(account: QoderAccountView) {
+    const ok = await probeAndLoad(account);
+    if (!ok) toast.error(t("qoder.page.accounts.web.readFailed"));
+  }
+
+  /** 「退出网页登录」：清除本机会话缓存（会话等价于完整身份凭据，必须给出口）。 */
+  async function logoutWebSession() {
+    try {
+      await api.qoderWebSessionLogout(scope);
+      setWebPacks({});
+      packsFetchedAt.current = {};
+      toast.success(t("qoder.page.accounts.web.logoutDone"));
+      const uid = detail?.uid;
+      if (uid) await loadPacks(uid, true);
+    } catch (e) {
+      toast.error(api.asError(e));
+    }
+  }
+
+  /**
+   * 「登录 Qoder 网页端」：开一个独立窗口让用户登录一次。
+   *
+   * 两段式轮询：先问登录窗里的 cookie 集合变没变（本地命令，不打上游），变了才探一次
+   * 逐包接口认领会话。不要改成每 2 秒直接 probe —— 未登录时的匿名 Cookie 会换来 401，
+   * 而 401 会清缓存，等于打出一串注定失败的请求。
+   */
+  async function openWebLogin(account: QoderAccountView) {
+    try {
+      await api.qoderWebLoginOpen(scope);
+      toast.success(t("qoder.page.accounts.web.loginToast"));
+    } catch (e) {
+      toast.error(api.asError(e));
+      return;
+    }
+    const baseline = await api.qoderWebWindowCookies(scope).catch(() => null);
+    let seen = baseline?.fingerprint ?? "";
+    let probes = 0;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const current = await api.qoderWebWindowCookies(scope).catch(() => null);
+      if (!current) continue;
+      if (!current.windowOpen) {
+        /* 关窗前后端已兜底收割；`pending` 为真才值得探一次。 */
+        const status = await api.qoderWebSessionStatus(scope, account.uid).catch(() => null);
+        if (status?.pending) await probeAndLoad(account);
+        return;
+      }
+      if (!current.fingerprint || current.fingerprint === seen) continue;
+      seen = current.fingerprint;
+      probes += 1;
+      if (await probeAndLoad(account)) return;
+      if (probes >= 3) return;
+    }
+  }
+
+  /**
    * 签到状态的**显式取值**（菜单与卡片共用同一个判据）。
    * 未知 / 读取失败 / 未开放各自成态，绝不把「不知道」画成「未签到」。
    */
@@ -1346,6 +1485,25 @@ function QoderAccountsPanel({
           setExportTargets([account]);
           setExportOpen(true);
         }}
+        extraActions={
+          api.isWebui()
+            ? undefined
+            : [
+                {
+                  id: "qoder-web-login",
+                  label: t("qoder.page.accounts.web.loginMenu"),
+                  icon: <Globe className="size-4" />,
+                  onSelect: () => void openWebLogin(account),
+                },
+                {
+                  id: "qoder-read-packs",
+                  label: t("qoder.page.accounts.web.read"),
+                  icon: <PackageSearch className="size-4" />,
+                  busy: !!packsLoading[account.uid],
+                  onSelect: () => void readPacks(account),
+                },
+              ]
+        }
         onDelete={() => setPendingDelete(account)}
       />
     );
@@ -1641,14 +1799,52 @@ function QoderAccountsPanel({
     : null;
 
   /**
-   * 抽屉的积分包 —— **只在拿到额度时**渲染（`packs` 空数组 = 抽屉不渲染该区块）。
+   * 抽屉的积分包 —— **有逐包用逐包，没有回落聚合行**（不是空区块）。
    *
-   * Qoder 的额度是**一整包**：`userQuota` 与 `addOnQuota` 共用顶层 `expiresAt`
-   * （Unix **毫秒**，Qoder SDK 口径）⇒ 只有一行，剩余即「到期时会作废的积分数」。
-   * 缺 `expiresAt` ⇒ 到期写「—」（不编日期）。
+   * 逐包来自网页会话（`qoderWebCreditPacks`），需要桌面端 + 登录过一次；
+   * 聚合三标量在任意形态都拿得到，所以回落行永远有内容。
    */
   const detailPacks = useMemo<DetailPack[]>(() => {
     if (!detail) return [];
+    const web = webPacks[detail.uid];
+
+    // ① 有逐包 ⇒ 逐条渲染（回答「我有几个包、各剩多少、何时到期」）。
+    if (web?.available && web.packs.length > 0) {
+      const now = Date.now();
+      const seen = new Map<string, number>();
+      return web.packs.map((pack, index) => {
+        const source = packSourceLabel(t, pack.source);
+        const ordinal = (seen.get(source) ?? 0) + 1;
+        seen.set(source, ordinal);
+        const state = packState(pack, now);
+        const expired = state === "expired";
+        const expiringSoon = state === "expiring";
+        const ratio =
+          pack.limit > 0
+            ? Math.min(100, Math.max(0, (pack.remaining / pack.limit) * 100))
+            : 0;
+        return {
+          key: pack.id ?? `${pack.group}-${index}`,
+          name: t("qoder.page.accounts.web.packName", {
+            source,
+            n: String(ordinal),
+          }),
+          remainingText: String(pack.remaining),
+          totalText: String(pack.limit),
+          usedText: String(pack.used),
+          expiryText: expired
+            ? t("qoder.page.accounts.web.expired")
+            : pack.expiresAtMs !== undefined
+              ? formatAbsoluteTime(pack.expiresAtMs)
+              : t("qoder.page.accounts.web.neverExpires"),
+          expired,
+          expiringSoon,
+          ratio,
+        };
+      });
+    }
+
+    // ② 没有逐包 ⇒ 回落聚合行（聚合三标量在任意形态都拿得到）。
     const row = credits[detail.uid];
     if (!row || !row.ok) return [];
     const remaining = row.remaining ?? 0;
@@ -1669,14 +1865,49 @@ function QoderAccountsPanel({
             ? "—"
             : expiresAt <= now
               ? t("qoder.page.accounts.metric.expired")
-              : t("qoder.page.accounts.metric.expiresOn", { date: formatCreditExpiry(expiresAt, t) }),
+              : formatAbsoluteTime(expiresAt),
         expired: expiresAt != null && expiresAt <= now,
-        /* 与 WB / Trae 同一窗口（7 天）：下界 `> now` 不能省 —— 已过期的包只算 expired。 */
         expiringSoon: expiresAt != null && expiresAt > now && expiresAt - now <= 7 * 86_400_000,
         ratio: total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0,
       },
     ];
-  }, [detail, credits, t]);
+  }, [detail, credits, t, webPacks]);
+
+  /**
+   * 抽屉积分包区块下方的说明与动作（#111）。
+   *
+   * 三态：拿到逐包 ⇒ 「N 个包 · 会话已存本机」+「退出网页登录」；
+   * 没拿到（桌面端）⇒ 「需要登录一次」+「读取逐包明细」；headless ⇒ 不渲染。
+   */
+  const detailPacksNotice = useMemo(() => {
+    if (!detail) return null;
+    const web = webPacks[detail.uid];
+    if (web?.available) {
+      return {
+        text: t("qoder.page.accounts.web.packsNoticeReady", { n: String(web.packs.length) }),
+        actionLabel: t("qoder.page.accounts.web.logout"),
+        onAction: () => void logoutWebSession(),
+        busy: false,
+      };
+    }
+    if (api.isWebui()) return null;
+    return {
+      text: t("qoder.page.accounts.web.packsNotice"),
+      actionLabel: t("qoder.page.accounts.web.read"),
+      onAction: () => detail && void readPacks(detail),
+      busy: !!packsLoading[detail.uid],
+    };
+    // `logoutWebSession` / `readPacks` 每次渲染都是新函数，进依赖会让 memo 恒失效。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, webPacks, packsLoading, t]);
+
+  /** 打开抽屉时取一次逐包（TTL 内不重复请求；切区域后重新取）。 */
+  useEffect(() => {
+    const uid = detail?.uid;
+    if (uid) void loadPacks(uid);
+    // `loadPacks` 是纯读取 + setState；只按 uid / scope 变化触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.uid, scope]);
 
   /** 抽屉的签到区 —— 只在签到状态**明确可读**时渲染（未知 = 不摆「+0」）。 */
   /**
@@ -2165,6 +2396,11 @@ function QoderAccountsPanel({
               checkinToday={checkinTodayOf(account)}
               creditPriority={account.uid === priorityAccountId}
               programs={programs}
+              packs={webPacks[account.uid]}
+              packsLoading={!!packsLoading[account.uid]}
+              onRequestPacks={(target) => void loadPacks(target.uid)}
+              onWebLogin={(target) => void openWebLogin(target)}
+              onReadPacks={(target) => void readPacks(target)}
               onSwitch={(program) => setSwitchTarget({ account, program })}
             />
           );
@@ -2313,6 +2549,7 @@ function QoderAccountsPanel({
         avatarSeed={detail ? qoderAccountName(detail) : ""}
         sections={detail ? [{ key: "account", title: t("qoder.page.accounts.drawer.info"), rows: detailRows }] : []}
         packs={detailPacks}
+        packsNotice={detailPacksNotice}
         stats={detailStats}
         refreshingKinds={detail ? refreshPartBusy.kindsOf(detail.uid) : []}
         onRefreshPart={detailLive ? (kind) => void onRefreshPart(detailLive, kind) : undefined}

@@ -4801,17 +4801,18 @@ const APP_SETTINGS_SNAPSHOT = "src/lib/app-settings-snapshot.ts";
 const BACKUP_LOCALE_ZH = "src/locales/domains/backup.zh.ts";
 const BACKUP_LOCALE_EN = "src/locales/domains/backup.en.ts";
 
-check("★ 设置子导航 7 项：通用 / 备份与恢复已移出客户端设置（全局设置抽屉承载）", () => {
-  /* 为什么改：这两项对所有客户端生效，留在每个客户端的设置页会让同一份全局配置
-     在 WB / Trae / Qoder 三处重复出现。现在统一挂在顶栏 ⚙「应用设置」抽屉里作入口，
-     点击打开弹框（`global-settings-dialogs.tsx`），抽屉不再平铺整页设置。
+check("★ 设置子导航 8 项：通用 / 备份与恢复已移出客户端设置，网络分区只给 Qoder", () => {
+  /* 为什么改：通用 / 备份对所有客户端生效，留在每个客户端的设置页会让同一份全局配置
+     在 WB / Trae / Qoder 三处重复出现；现在统一挂在顶栏 ⚙「应用设置」抽屉里作入口。
+     `network` 是 Qoder 逐包取数的出站代理（issue #111）：只有 Qoder 设置页把它收进
+     自己的分区集，全局设置页显式过滤掉，避免摆一个空分区。
      变异①：把 general / backup 加回子导航表 ⇒ 本条变红。
      变异②：抽屉只剩平铺内容、没有两个入口（或入口没接 onClick）⇒ 本条变红。 */
   const code = readCode(BACKUP_SUBNAV);
   const m = code.match(/SETTINGS_SUBNAV[\s\S]*?=\s*\[([\s\S]*?)\];/);
   if (!m) throw new Error("找不到 `SETTINGS_SUBNAV` 表");
   const ids = [...m[1].matchAll(/id:\s*"([a-z]+)"/g)].map((x) => x[1]);
-  const want = ["account", "checkin", "gateway", "schedule", "client", "diagnostics", "logs"];
+  const want = ["account", "checkin", "gateway", "schedule", "client", "network", "diagnostics", "logs"];
   if (ids.join(",") !== want.join(",")) {
     throw new Error(`子导航应为 ${want.join(" / ")}，实际 ${ids.join(" / ") || "（空）"}`);
   }

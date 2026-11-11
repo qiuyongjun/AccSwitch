@@ -24,7 +24,7 @@ import { DemoAction } from "@/components/demo-action";
 import { TimesEditor } from "@/components/schedule-times-editor";
 import { ScopeChip } from "@/components/scope-chip";
 // 设置子导航**与 WorkBuddy 设置页共用同一张表 / 同一个解析函数**（PLAN §3.9、D12）。
-import { parseSettingsSubnav, SettingsSubnav, type SettingsSubnavId } from "@/components/settings/settings-subnav";
+import { parseSettingsSubnav, SettingsSubnav, SETTINGS_SUBNAV, type SettingsSubnavId } from "@/components/settings/settings-subnav";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1057,9 +1057,12 @@ export default function TraeSettingsPage() {
    * 切换时写回 URL（保留式，不动 `line` 等其他查询参数）：刷新 / 前进后退行为一致。
    */
   const [searchParams, setSearchParams] = useSearchParams();
-  const [section, setSection] = useState<SettingsSubnavId>(() =>
-    parseSettingsSubnav(searchParams.get("section")),
-  );
+  const [section, setSection] = useState<SettingsSubnavId>(() => {
+    const parsed = parseSettingsSubnav(searchParams.get("section"));
+    /* `network` 是 Qoder 逐包代理的专属分区；Trae 自己没有该分区（端口与网络在客户端区），
+       非法值 fail-closed 回第一项，避免渲染空主区。 */
+    return parsed === "network" ? "account" : parsed;
+  });
 
   function goSection(id: SettingsSubnavId) {
     setSection(id);
@@ -1277,7 +1280,12 @@ export default function TraeSettingsPage() {
           `[data-split-layout]`（含 900px 转纵向），故这里不再写 `flex-col` / `lg:flex-row`。
           此前这里是**一屏长滚动**（`space-y-12`、无子导航），与 WorkBuddy 设置页结构不同。 */}
       <div data-split-layout className="min-w-0">
-        <SettingsSubnav active={section} onSelect={goSection} />
+        <SettingsSubnav
+          active={section}
+          onSelect={goSection}
+          /* 「网络」只属于 Qoder 逐包代理；Trae 的端口与网络在客户端分区里。 */
+          items={SETTINGS_SUBNAV.filter((item) => item.id !== "network")}
+        />
 
         {/* 主区 `.split-main`：分区之间 16px（原型 `:378`）。 */}
         <div className="min-w-0 flex-1 space-y-4">

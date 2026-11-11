@@ -57,6 +57,7 @@ const CreditStatsPage = lazy(() => import("@/pages/CreditStatsPage"));
 const TraeTokenStatsPage = lazy(() => import("@/pages/TraeTokenStatsPage"));
 const TraeCreditsPage = lazy(() => import("@/pages/TraeCreditsPage"));
 const QoderUsagePage = lazy(() => import("@/pages/QoderUsagePage"));
+const QoderCreditsPage = lazy(() => import("@/pages/QoderCreditsPage"));
 
 /** 一级四视图（与原型 `tabs` 一一对应）。 */
 export type UsageTab = "trend" | "models" | "sessions" | "keys" | "credits";
@@ -93,11 +94,9 @@ const PLATFORM_TABS: Record<Product, UsageTab[]> = {
      缺数据源就**不画空壳**（§6 #5）—— 一张全是「无密钥调用」的表比没有这一页更糟。 */
   workbuddy: ["trend", "models", "sessions", "keys", "credits"],
   trae: ["trend", "models", "keys", "credits"],
-  /* ⚠️ Qoder **只开「趋势」与「密钥」**：模型 / 会话 / 积分三个视图的数据源
-     （`qoder_usage.byModel` / `qoder_usage.sessions` / `qoder_credits`）在本分支
-     尚未落地 ⇒ 缺数据源就**不画空壳**（同 Trae 不渲染「会话」的判据）。
-     本提交给 Qoder 日志接上了 `keyId` ⇒「密钥」视图有真实数据，可以开。 */
-  qoder: ["trend", "keys"],
+  /* ⚠️ Qoder 的「趋势」与「密钥」早就有数据源；「积分」在 #111 落地后有了
+     余额快照（`qoder_credits`）⇒ 现在开三项。模型 / 会话仍缺数据源，不画空壳。 */
+  qoder: ["trend", "keys", "credits"],
 };
 
 /** 平台 → 子页面（Token 页 / 积分页）。 */
@@ -124,14 +123,14 @@ const USAGE_PAGES: Record<
     mergeScopes: true,
   },
   /* Qoder：**单位是 credits，不是 Token**（客户端按 credits 计费、token 计数恒为 0，
-     三处取证见 `QoderUsagePage` 文件头）⇒ 只有一张 credits 视图。
-     「积分」页也指向同一张：quota 是**余额快照**（实时查询），与「逐日用量」是两个口径。
+     三处取证见 `QoderUsagePage` 文件头）。
+     积分页用 `QoderCreditsPage`（实时余额快照），趋势页仍是本地会话记录。
      `tokenViews: false` 因为它不消费 `view` 参数（没有视图可切）。
      ⚠️ `mergeScopes: false`（2026-10-18）：Qoder 用量来自**本机客户端会话记录**，
         只扫当前区域的目录 ⇒ 合并两个区域没有可合并的数据，参数条那枚控件是死的。 */
   qoder: {
     tokens: QoderUsagePage,
-    credits: QoderUsagePage,
+    credits: QoderCreditsPage,
     tokenViews: false,
     mergeScopes: false,
   },
