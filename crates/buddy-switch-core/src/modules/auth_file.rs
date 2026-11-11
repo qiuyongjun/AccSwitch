@@ -87,7 +87,8 @@ pub fn workbuddy_app_path_for(region: Region) -> PathBuf {
 
     #[cfg(target_os = "windows")]
     {
-        // 探测顺序：运行进程 Path → 缓存 → 注册表 → 环境变量/盘符扫描。
+        // 探测顺序见 `process::windows_workbuddy_exe_path_for`：进程内缓存 →
+        // 上次成功路径缓存 → 运行进程 → 注册表 → 环境变量/盘符扫描。
         // 都找不到时返回 LOCALAPPDATA 默认路径，供启动失败文案写出尝试路径。
         if let Some(exe) = crate::modules::process::windows_workbuddy_exe_path_for(region) {
             return exe;

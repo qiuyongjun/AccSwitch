@@ -370,9 +370,9 @@ fn windows_ide_process_rows() -> Vec<process::WindowsProcessRow> {
         })
         .unwrap_or_default();
     if rows.is_empty() {
-        // CIM 不可用时退回 tasklist（拿到 PID 关闭，但丢失 exe 路径 → 无法重开）。
+        // CIM 不可用时退回原生进程枚举（拿到 PID 关闭，但丢失 exe 路径 → 无法重开）。
         for image in ["idea64.exe", "pycharm64.exe", "idea.exe", "pycharm.exe"] {
-            rows.extend(process::windows_tasklist_image_rows(image));
+            rows.extend(process::windows_process_rows_for_image(image));
         }
     }
     rows.retain(|row| {

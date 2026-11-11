@@ -211,42 +211,40 @@ fn campaign_entry(
     })
 }
 
-/// 区域签到状态视图：逐账号状态 + 汇总。`unavailable` 是**区域级**结论。
-pub async fn status_for(region: QoderRegion) -> Value {
-    let file = account::load_accounts_for(region);
-    let mut rows = Vec::new();
-    let mut unavailable = false;
-    let mut unavailable_reason: Option<String> = None;
-
-    for account in &file.accounts {
-        let name = account::display_name(account);
-        let Some(access) = access_token_of(account) else {
-            rows.push(json!({
-                "uid": account.uid,
+/// 单账号签到状态的**只读**查询。
+///
+/// 返回 `(row, region_unavailable_reason)`：第二个值只在「旧通道整区不可用」
+/// （404/405/410）时出现，供 [`status_for`] 汇总成区域级结论。
+async fn status_row_for(
+    region: QoderRegion,
+    uid: String,
+    name: String,
+    access: Option<String>,
+    stamped_today: bool,
+) -> (Value, Option<String>) {
+    let Some(access) = access else {
+        return (
+            json!({
+                "uid": uid,
                 "name": name,
                 "ok": false,
                 "error": "没有可调用的 access token（PAT 不能用于签到端点）",
                 "unavailable": false,
-            }));
-            continue;
-        };
-        // ── 活动平台优先 ──
-        let stamped_today = account::checkin_stamp_day(account) == Some(store::today().as_str());
-        let snapshot = campaign::fetch_campaigns(region, &account.uid, access).await;
-        if snapshot.ok {
-            rows.push(campaign_entry(
-                &account.uid,
-                &name,
-                &snapshot,
-                stamped_today,
-            ));
-            continue;
-        }
-        if snapshot.available {
-            // 账号级失败（网络 / 鉴权 / 响应格式）：如实报错，**不**回落旧通道 ——
-            // 旧通道已关停，回落只会把一个真实错误变成一句「未开放」。
-            rows.push(json!({
-                "uid": account.uid,
+            }),
+            None,
+        );
+    };
+    // ── 活动平台优先 ──
+    let snapshot = campaign::fetch_campaigns(region, &uid, &access).await;
+    if snapshot.ok {
+        return (campaign_entry(&uid, &name, &snapshot, stamped_today), None);
+    }
+    if snapshot.available {
+        // 账号级失败（网络 / 鉴权 / 响应格式）：如实报错，**不**回落旧通道 ——
+        // 旧通道已关停，回落只会把一个真实错误变成一句「未开放」。
+        return (
+            json!({
+                "uid": uid,
                 "name": name,
                 "ok": false,
                 "error": snapshot.error,
@@ -255,49 +253,115 @@ pub async fn status_for(region: QoderRegion) -> Value {
                 "identity": snapshot.identity,
                 "machineHeaders": snapshot.machine_headers,
                 "hint": snapshot.hint,
-            }));
-            continue;
-        }
-        // ── 整区没有活动平台（404/405/410）⇒ 旧通道兜底 ──
-        match api::checkin_status(region, &account.uid, access).await {
-            Ok(status) => {
-                rows.push(json!({
-                    "uid": account.uid,
-                    "name": name,
-                    "ok": true,
-                    "status": status.status,
-                    "active": status.active,
-                    "todayCheckedIn": status.today_checked_in,
-                    "streakDays": status.streak_days,
-                    "totalClaimDays": status.total_claim_days,
-                    "rewardCredits": status.reward_credits,
-                    "totalRewardCredits": status.total_reward_credits,
-                    "nextClaimAt": status.next_claim_at,
-                    "lastClaimedAt": status.last_claimed_at,
-                    "unavailable": false,
-                }));
+            }),
+            None,
+        );
+    }
+    // ── 整区没有活动平台（404/405/410）⇒ 旧通道兜底 ──
+    match api::checkin_status(region, &uid, &access).await {
+        Ok(status) => (
+            json!({
+                "uid": uid,
+                "name": name,
+                "ok": true,
+                "status": status.status,
+                "active": status.active,
+                "todayCheckedIn": status.today_checked_in,
+                "streakDays": status.streak_days,
+                "totalClaimDays": status.total_claim_days,
+                "rewardCredits": status.reward_credits,
+                "totalRewardCredits": status.total_reward_credits,
+                "nextClaimAt": status.next_claim_at,
+                "lastClaimedAt": status.last_claimed_at,
+                "unavailable": false,
+            }),
+            None,
+        ),
+        Err(error) if error.starts_with(api::CHECKIN_REASON_NOT_FOUND) => (
+            // 区域级结论：接口不存在 ⇒ 整区标记，逐账号不再重复报。
+            json!({
+                "uid": uid,
+                "name": name,
+                "ok": false,
+                "error": error,
+                "unavailable": true,
+            }),
+            Some(error),
+        ),
+        Err(error) => (
+            json!({
+                "uid": uid,
+                "name": name,
+                "ok": false,
+                "error": error,
+                "unavailable": false,
+            }),
+            None,
+        ),
+    }
+}
+
+/// 区域签到状态视图：逐账号状态 + 汇总。`unavailable` 是**区域级**结论。
+///
+/// ## 为什么这里可以并发
+///
+/// 本函数**只读**（活动列表 / 旧通道状态查询），不领取任何东西；与
+/// [`run_cycle_for`] 的「签到写操作逐个来，避免风控」是两条纪律。
+/// 逐账号串行时，打开账号页要等 N 个 RTT；有界并发（上限与 `status_map_for`
+/// 相同）把等待压到「一批」——首开与「一键刷新」的签到查询从此同一节奏。
+/// 输出仍按账号库原序，调用方拿到的行序不变。
+pub async fn status_for(region: QoderRegion) -> Value {
+    let file = account::load_accounts_for(region);
+    let total = file.accounts.len();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(STATUS_MAP_MAX_INFLIGHT));
+    let mut tasks = Vec::with_capacity(total);
+    for account in &file.accounts {
+        let permit = semaphore.clone();
+        let uid = account.uid.clone();
+        let name = account::display_name(account);
+        let access = access_token_of(account).map(str::to_string);
+        let stamped_today = account::checkin_stamp_day(account) == Some(store::today().as_str());
+        tasks.push((
+            uid.clone(),
+            name.clone(),
+            tokio::spawn(async move {
+                let Ok(_permit) = permit.acquire_owned().await else {
+                    return (
+                        json!({
+                            "uid": uid,
+                            "name": name,
+                            "ok": false,
+                            "error": "并发闸门已关闭",
+                            "unavailable": false,
+                        }),
+                        None,
+                    );
+                };
+                status_row_for(region, uid, name, access, stamped_today).await
+            }),
+        ));
+    }
+
+    let mut rows = Vec::with_capacity(total);
+    let mut unavailable = false;
+    let mut unavailable_reason: Option<String> = None;
+    for (uid, name, task) in tasks {
+        match task.await {
+            Ok((row, reason)) => {
+                if let Some(reason) = reason {
+                    unavailable = true;
+                    unavailable_reason.get_or_insert(reason);
+                }
+                rows.push(row);
             }
-            Err(error) if error.starts_with(api::CHECKIN_REASON_NOT_FOUND) => {
-                // 区域级结论：接口不存在 ⇒ 整区标记，逐账号不再重复报。
-                unavailable = true;
-                unavailable_reason.get_or_insert(error.clone());
-                rows.push(json!({
-                    "uid": account.uid,
-                    "name": name,
-                    "ok": false,
-                    "error": error,
-                    "unavailable": true,
-                }));
-            }
-            Err(error) => {
-                rows.push(json!({
-                    "uid": account.uid,
-                    "name": name,
-                    "ok": false,
-                    "error": error,
-                    "unavailable": false,
-                }));
-            }
+            // 任务 panic 时仍保留一行可诊断的失败，绝不让账号从列表里静默消失。
+            Err(_) => rows.push(json!({
+                "uid": uid,
+                "name": name,
+                "ok": false,
+                "error": "签到状态任务异常终止",
+                "unavailable": false,
+            })),
         }
     }
 
@@ -310,7 +374,7 @@ pub async fn status_for(region: QoderRegion) -> Value {
         "unavailable": unavailable,
         "reason": unavailable_reason,
         "summary": {
-            "total": file.accounts.len(),
+            "total": total,
             "checked": checked,
             "claimable": rows.iter().filter(|row| row["active"] == Value::Bool(true) && row["todayCheckedIn"] != Value::Bool(true)).count(),
         },

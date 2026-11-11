@@ -2212,6 +2212,132 @@ check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 �
   return "单航班复用 · 全量时刻独立 · TTL 读全量时刻 · 无 30 分钟定时器 · 一键刷新按层判定 · Qoder 快照契约";
 });
 
+check("★ 冷启动提速（spec §12.9）：负缓存期保便宜层 · Trae 单航班 · 状态闸门只挡事件路径", () => {
+  /* 变异清单（每条都对应一个**用户能看见**的退化）：
+       ① 负缓存直接返回 None ⇒ 运行中新装客户端停在「未安装」占位，而「重新检测」
+          与轮询走同一条命令，5 分钟内救不回来；
+       ② 便宜探测跑空后刷新结论时刻 ⇒ 负缓存被轮询续期，永不过期；
+       ③ 启动失败不作废进程内结论 ⇒ 用户被同一个死路径报同样的错直到 TTL 到期；
+       ④ 去掉 `variantsInflight` ⇒ 切到 Trae 分区一轮打两次 `get_trae_variants`；
+       ⑤ 闸门挪进 `refreshStatus` ⇒ 定时轮询与闸门同归于尽。 */
+  const process = readCode("crates/buddy-switch-core/src/modules/process.rs");
+  const probeArmStart = process.indexOf("WindowsExeCacheLookup::MissFreshProbeDue =>");
+  if (probeArmStart < 0) {
+    throw new Error("负缓存分支不见了 —— 运行中新装的客户端只能等 5 分钟负缓存过期");
+  }
+  const probeArm = process.slice(probeArmStart, process.indexOf("WindowsExeCacheLookup::Stale =>", probeArmStart));
+  if (!probeArm.includes("windows_fallback_exe_probe_for")) {
+    throw new Error("负缓存期不再跑便宜候选 —— 装到默认目录的客户端也要等满 5 分钟才被发现");
+  }
+  for (const expensive of ["windows_running_workbuddy_exe_for", "windows_registry_exe_candidates_for"]) {
+    if (probeArm.includes(expensive)) {
+      throw new Error(`负缓存期又调了 ${expensive}（会 spawn PowerShell）—— 负缓存白加`);
+    }
+  }
+  // 便宜层跑空时只能推进节流时间戳：一旦调 `remember_windows_exe_path(region, None)`
+  // 就把结论时刻也刷新了，5 分钟窗口被轮询不断续期 ⇒ 永远等不到完整重探。
+  if (!probeArm.includes("touch_windows_exe_cheap_probe(region);")) {
+    throw new Error("便宜探测没有推进自己的节流时间戳 —— 每次焦点刷新都会重跑一串 stat");
+  }
+  if (probeArm.includes("remember_windows_exe_path(region, None)")) {
+    throw new Error("便宜探测跑空时刷新了结论时刻 —— 负缓存被轮询续期，永远等不到重探");
+  }
+  if (!probeArm.includes("None => None,")) {
+    throw new Error("负缓存期跑空不再返回「没找到」—— 调用方会拿到一个不存在的路径");
+  }
+  if (!/invalidate_windows_exe_cache\(region\);\s*return Err\(/.test(process)) {
+    throw new Error("启动失败没有作废进程内结论 —— 同一个死路径会被报满整个 TTL");
+  }
+
+  const variants = readCode("src/lib/trae-variant-status.ts");
+  if (!/if \(variantsInflight\) return variantsInflight;/.test(variants)) {
+    throw new Error("Trae 变体探测丢了在途单航班 —— 切区时 App 与页面同拍各探一次");
+  }
+  if (!/if \(variantsInflight === run\) variantsInflight = null;/.test(variants)) {
+    throw new Error("Trae 变体单航班没有清理 —— 一次失败会把后续调用钉在旧结果上");
+  }
+
+  const refresh = readCode("src/lib/use-workbuddy-status-refresh.ts");
+  if (!/performance\.now\(\) - lastRefreshAt < WORKBUDDY_STATUS_FOCUS_MIN_INTERVAL_MS/.test(refresh)) {
+    throw new Error("状态刷新闸门不见了 —— 每次 alt-tab 都要付一轮 `get_status`");
+  }
+  if (!/lastRefreshAt = Number\.NEGATIVE_INFINITY/.test(refresh)) {
+    throw new Error("闸门初值不是 -Infinity —— `performance.now()` 从页面加载起算，首屏刷新会被自己吞掉");
+  }
+  const plainRefresh = refresh.slice(
+    refresh.indexOf("function refreshStatus()"),
+    refresh.indexOf("function refreshStatusOnEvent"),
+  );
+  if (plainRefresh.includes("WORKBUDDY_STATUS_FOCUS_MIN_INTERVAL_MS")) {
+    throw new Error("闸门挪进了 `refreshStatus` —— 定时轮询会被一起吞掉（应只装在事件包装里）");
+  }
+  if (!/setInterval\(refreshStatus, WORKBUDDY_STATUS_REFRESH_INTERVAL_MS\)/.test(refresh)) {
+    throw new Error("定时器没挂在无闸门的 `refreshStatus` 上");
+  }
+
+  // ⑥ 账号页的 CLI / IDE / 插件探测必须延后到首屏之后：它们每个都要 spawn
+  //    PowerShell（Windows 实测 ~1s），回到挂载同步执行就是首屏前的进程风暴。
+  const wbPage = readCode("src/pages/AccountsPage.tsx");
+  if (!/LOCAL_PROBE_DEFER_MS\s*=\s*1200/.test(wbPage)) {
+    throw new Error("账号页的本机探测延时常量不见了 —— 4–6 个 PowerShell 会回到首屏前与状态/积分抢资源");
+  }
+  if (
+    !/setTimeout\(\(\) => \{[\s\S]*?refreshCodebuddyCliStatus[\s\S]*?\}, LOCAL_PROBE_DEFER_MS\)/.test(
+      wbPage,
+    )
+  ) {
+    throw new Error("延时常量存在，但探测 effect 没有接到它上（或又被改回挂载即执行）");
+  }
+  return "负缓存期保便宜层 · 便宜探测不续期 · 启动失败作废结论 · Trae 单航班 · 闸门只挡事件路径 · 账号页探测延后";
+});
+
+check("★ Win32 原生进程枚举（spec §12.9）：展示 / 守卫 / 运行路径不再起 tasklist / PowerShell", () => {
+  /* 变异清单（每条都对应一次实测过的退化）：
+       ① 全量枚举回到 `tasklist` ⇒ 每次冷快照 +~0.5s（实测 516–574ms → 原生 ~9ms）；
+       ② 运行路径探测回到 PowerShell ⇒ 缓存缺失时每次 +~1s；
+       ③ 写前守卫改用展示快照 ⇒ 1 秒陈旧，可能放过正在写文件的客户端。 */
+  const src = readCode("crates/buddy-switch-core/src/modules/process.rs");
+  if (!src.includes("CreateToolhelp32Snapshot")) {
+    throw new Error("找不到 ToolHelp 实现 —— 原生枚举被整体删掉了");
+  }
+  const enumFn = src.slice(
+    src.indexOf("fn enumerate_windows_process_rows"),
+    src.indexOf("fn snapshot_engine"),
+  );
+  if (!enumFn.includes("win_proc::snapshot_rows()")) {
+    throw new Error("全量枚举没有走原生快照（展示 / 实时 / 守卫全部退化为子进程）");
+  }
+  if (enumFn.includes('run_cmd_timeout("tasklist"')) {
+    throw new Error("全量枚举又回到了 tasklist 子进程（每次冷快照 +~0.5s）");
+  }
+
+  const runningFn = src.slice(
+    src.indexOf("fn windows_running_workbuddy_exe_for"),
+    src.indexOf("const WINDOWS_REGISTRY_SCRIPT"),
+  );
+  if (runningFn.includes("ps_output")) {
+    throw new Error("运行路径探测又回到了 PowerShell（缓存缺失时 +~1s）");
+  }
+  if (!runningFn.includes("win_proc::snapshot_rows")) {
+    throw new Error("运行路径探测没有用原生快照");
+  }
+  if (!runningFn.includes("win_proc::image_path")) {
+    throw new Error("运行路径探测没有按匹配映像名取路径");
+  }
+
+  const guardFn = src.slice(
+    src.indexOf("pub fn is_image_running"),
+    src.indexOf("fn windows_rows_match_image"),
+  );
+  if (!guardFn.includes("fresh_process_rows()")) {
+    throw new Error("写前守卫没有走实时进程枚举");
+  }
+  if (guardFn.includes('"tasklist"')) {
+    throw new Error("写前守卫又回到了 tasklist 子进程");
+  }
+  return "ToolHelp 全量枚举 · 运行路径按名取路径 · 守卫实时枚举";
+});
+
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {
   /* 2026-10-23 用户反馈：卡上没有标签时读不出「已完成 / 没扫到 / 没有成长体系」。
      ⇒ 判据：

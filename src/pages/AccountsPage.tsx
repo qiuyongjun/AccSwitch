@@ -130,6 +130,19 @@ import { showUndoToast } from "@/lib/undo-toast";
 const WB_MENU_REFRESH_KINDS = ["credits", "travel", "checkin", "credential"] as const satisfies readonly AccountRefreshKind[];
 
 /**
+ * 本机编辑器 / 插件状态探测的**挂载延迟**（毫秒）。
+ *
+ * 这组探测（CodeBuddy CLI / CN IDE / VS Code 插件 / JetBrains 插件）在 Windows 上
+ * 每次都要 spawn PowerShell（实测每个 ~1s）。它们此前与账号列表、`get_status`、
+ * 积分请求同时起跑 —— 前 25ms 内 4–6 个 PowerShell 并发，和首屏抢 CPU / 磁盘，
+ * 把「当前登录」等核心读数一起拖慢。
+ *
+ * 它们只服务卡片上的辅助芯片，晚 1.2 秒无感；显式的「重新检测」入口仍走
+ * 各自函数，不受此延迟影响。
+ */
+const LOCAL_PROBE_DEFER_MS = 1200;
+
+/**
  * 需要走「统一重启确认」的客户端（PLAN §3.15.3）。
  *
  * - `cli`：**例外** —— 不重开客户端，但当前 CLI 会话会中断（确认框不渲染「自动重开」）；
@@ -1558,22 +1571,29 @@ function RegionPanel({ region }: { region: Region }) {
 
   useEffect(() => {
     let cancelled = false;
-    void refreshCodebuddyCliStatus();
-    /* 两个编辑器插件的状态：与 CLI / IDE 同批拉取（都是**本机只读探测**，无网络）。 */
-    void refreshVscodePluginStatus();
-    void refreshJetbrainsPluginStatus();
-    void (async () => {
-      if (!api.isDemoMode()) {
-        try {
-          await api.detectCodebuddyCnIdeAccount();
-        } catch {
-          /* 未登录或钥匙串拒绝时静默，下面仍拉安装/运行状态 */
+    /* ★ 延后到首屏之后：这些探测只服务辅助芯片，但每个都要起 PowerShell
+       （Windows 实测 ~1s），与首屏/状态/积分同拍会互相抢资源。见
+       `LOCAL_PROBE_DEFER_MS` 的说明。 */
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      void refreshCodebuddyCliStatus();
+      /* 两个编辑器插件的状态：与 CLI / IDE 同批拉取（都是**本机只读探测**，无网络）。 */
+      void refreshVscodePluginStatus();
+      void refreshJetbrainsPluginStatus();
+      void (async () => {
+        if (!api.isDemoMode()) {
+          try {
+            await api.detectCodebuddyCnIdeAccount();
+          } catch {
+            /* 未登录或钥匙串拒绝时静默，下面仍拉安装/运行状态 */
+          }
         }
-      }
-      if (!cancelled) await refreshCodebuddyCnIdeStatus();
-    })();
+        if (!cancelled) await refreshCodebuddyCnIdeStatus();
+      })();
+    }, LOCAL_PROBE_DEFER_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [accounts.length]);
 

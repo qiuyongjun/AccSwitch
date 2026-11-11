@@ -370,49 +370,77 @@ function QoderAccountsPanel({
   }, [refreshAccounts, refreshSources]);
 
   /**
-   * 拉额度与签到状态。
+   * 拉额度 / 签到 / 程序位（三路互不依赖）。
    *
-   * ⚠️ `allSettled`：两条互不依赖，**一条失败不该拖垮另一条**（区域未开放签到 ≠ 额度也拿不到）。
-   * 失败时**保持上一份快照**（不清空）—— 清空会把「暂时取不到」显示成「没有额度」。
+   * ⚠️ 每路独立结算：**一条失败不该拖垮另一条，也不该拖慢另一条**
+   * （区域未开放签到 ≠ 额度也拿不到；本机程序位更不能等上游）。失败时
+   * **保持上一份快照**（不清空）—— 清空会把「暂时取不到」显示成「没有额度」。
    */
   const loadEnrichment = useCallback(async () => {
     const request = ++enrichmentSeq.current;
-    const [creditsView, checkinView, programView] = await Promise.allSettled([
-      api.qoderCredits(scope),
-      api.qoderCheckinStatus(scope),
-      api.qoderProgramStatus(scope),
+    const live = () => request === enrichmentSeq.current;
+
+    /**
+     * ★ 分层落地，不再等 `Promise.allSettled` 齐活。
+     *
+     * 三路快慢差很大：程序位是本机文件探测（毫秒级），积分 / 签到是上游请求
+     * （实测 ~4s）。旧实现等三路全部结束才一起 setState ⇒ 本地的「程序位 / 当前登录」
+     * 被最慢的上游层拖到同一刻才显示。现在谁先回来谁先落地；模块级快照仍在
+     * 三路都结束后**整批**写（§12.7 的「同一时刻的三份数据」约束不变）。
+     */
+    const programTask = api.qoderProgramStatus(scope).then(
+      (view) => {
+        if (!live()) return null;
+        const next = view.programs ?? [];
+        setPrograms(next);
+        return next;
+      },
+      () => null,
+    );
+    const creditTask = api.qoderCredits(scope).then(
+      (view) => {
+        if (!live()) return null;
+        const next = Object.fromEntries(view.accounts.map((row) => [row.uid, row]));
+        setCredits(next);
+        return next;
+      },
+      () => null,
+    );
+    const checkinTask = api.qoderCheckinStatus(scope).then(
+      (view) => {
+        if (!live()) return null;
+        const next = Object.fromEntries(view.accounts.map((row) => [row.uid, row]));
+        const unavailable = Boolean(view.unavailable);
+        /* ★ `checkinLoaded` 的契约是「本轮区域快照**已尝试过**」：成功与失败都要置位，
+           否则抽屉的按需补取会永远等一个不会来的快照。 */
+        setCheckinLoaded(true);
+        setCheckinRows(next);
+        setCheckinUnavailable(unavailable);
+        return { rows: next, unavailable };
+      },
+      () => {
+        if (!live()) return null;
+        setCheckinLoaded(true);
+        return null;
+      },
+    );
+
+    const [nextPrograms, nextCredits, nextCheckin] = await Promise.all([
+      programTask,
+      creditTask,
+      checkinTask,
     ]);
-    /* 被更新的读取取代 ⇒ 丢弃整批（三份同批写入，保持同一时刻的快照）。 */
-    if (request !== enrichmentSeq.current) return;
-    setCheckinLoaded(true);
 
-    const nextPrograms =
-      programView.status === "fulfilled" ? (programView.value.programs ?? []) : null;
-    const nextCredits =
-      creditsView.status === "fulfilled"
-        ? Object.fromEntries(creditsView.value.accounts.map((row) => [row.uid, row]))
-        : null;
-    const nextCheckin =
-      checkinView.status === "fulfilled"
-        ? Object.fromEntries(checkinView.value.accounts.map((row) => [row.uid, row]))
-        : null;
-    const nextUnavailable =
-      checkinView.status === "fulfilled" ? Boolean(checkinView.value.unavailable) : null;
-
-    if (nextPrograms) setPrograms(nextPrograms);
-    if (nextCredits) setCredits(nextCredits);
-    if (nextCheckin) {
-      setCheckinRows(nextCheckin);
-      setCheckinUnavailable(nextUnavailable ?? false);
-    }
+    /* 被更新的读取取代 ⇒ 不再写快照（已落地的 state 由新请求覆盖）。 */
+    if (!live()) return;
 
     /* 只有真拿到至少一层结果才刷新快照：整批失败时保留旧缓存，下次重挂载仍有东西可看。 */
     if (nextPrograms || nextCredits || nextCheckin) {
       const previous = enrichmentCache.get(scope);
       enrichmentCache.set(scope, {
         credits: nextCredits ?? previous?.credits ?? {},
-        checkinRows: nextCheckin ?? previous?.checkinRows ?? {},
-        checkinUnavailable: nextUnavailable ?? previous?.checkinUnavailable ?? false,
+        checkinRows: nextCheckin?.rows ?? previous?.checkinRows ?? {},
+        checkinUnavailable: nextCheckin?.unavailable ?? previous?.checkinUnavailable ?? false,
         programs: nextPrograms ?? previous?.programs ?? null,
       });
     }

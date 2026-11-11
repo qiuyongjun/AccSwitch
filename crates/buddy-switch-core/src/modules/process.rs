@@ -24,6 +24,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::sync::{Mutex, OnceLock};
+
 use crate::modules::region::Region;
 
 // macOS 的 app 路径解析收敛在本模块内（`macos_workbuddy_app_path_*`），不再回引 auth_file。
@@ -368,6 +373,9 @@ pub(crate) struct WindowsProcessRow {
     pub(crate) exe_path: Option<PathBuf>,
 }
 
+/// tasklist 已不再是生产路径（展示 / 守卫 / 运行路径都走 `win_proc`）；
+/// 以下解析器只供单测构造历史格式的行，保留它们是为了不丢掉过滤器与快照引擎的用例。
+#[cfg(test)]
 fn parse_simple_csv_line(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -385,6 +393,7 @@ fn parse_simple_csv_line(line: &str) -> Vec<String> {
     out
 }
 
+#[cfg(test)]
 pub(crate) fn parse_tasklist_csv(stdout: &str) -> Vec<WindowsProcessRow> {
     stdout
         .lines()
@@ -435,6 +444,158 @@ pub(crate) fn parse_windows_process_rows(stdout: &str) -> Vec<WindowsProcessRow>
 }
 
 // ---------------------------------------------------------------------------
+// Windows 原生进程枚举（ToolHelp）
+// ---------------------------------------------------------------------------
+//
+// 为什么不再用 `tasklist`：它是**子进程**，单次实测 ~0.5s（本机 437 进程），而
+// ToolHelp 快照 ~10ms（60 倍）。展示快照、实时枚举、写前守卫、运行路径探测全部
+// 走这一份原生实现；不引入 Windows crate，只 link kernel32。
+//
+// 布局对应 Win32 `PROCESSENTRY32W`（x64 下 `th32DefaultHeapID` 是 ULONG_PTR，
+// 会自然插入 4 字节填充 —— `#[repr(C)]` 与 C 布局一致）。
+
+#[cfg(target_os = "windows")]
+mod win_proc {
+    use super::WindowsProcessRow;
+    use std::path::PathBuf;
+
+    // 用 `isize` 而不是 `*mut c_void`：`jetbrains.rs` 也声明了同名 Win32 函数
+    // （`OpenProcess` / `CloseHandle`），两处签名必须一致，否则触发
+    // `clashing_extern_declarations`（编译器警告在 `-D warnings` 下会变红）。
+    type Handle = isize;
+
+    #[repr(C)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: u32,
+        cnt_threads: u32,
+        th32_parent_process_id: u32,
+        pc_pri_class_base: i32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+
+    #[allow(non_snake_case)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateToolhelp32Snapshot(dw_flags: u32, th32_process_id: u32) -> Handle;
+        fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry32W) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+        fn QueryFullProcessImageNameW(
+            process: Handle,
+            flags: u32,
+            buffer: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+    }
+
+    const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const INVALID_HANDLE_VALUE: Handle = -1;
+
+    fn lossy_utf16(buffer: &[u16]) -> String {
+        let end = buffer
+            .iter()
+            .position(|&ch| ch == 0)
+            .unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..end])
+    }
+
+    /// 一次全量进程快照（PID + 映像名）。
+    ///
+    /// 与旧的 `parse_tasklist_run` 同口径：**空表 / 快照失败一律 `Err`** ——
+    /// 失败不得伪装成「没有任何进程」，否则写前守卫与展示状态都会误判。
+    pub(super) fn snapshot_rows() -> Result<Vec<WindowsProcessRow>, String> {
+        let mut rows = Vec::new();
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return Err(format!(
+                    "CreateToolhelp32Snapshot 失败: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let mut entry: ProcessEntry32W = std::mem::zeroed();
+            entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+            let mut has_row = Process32FirstW(snapshot, &mut entry) != 0;
+            while has_row {
+                rows.push(WindowsProcessRow {
+                    pid: entry.th32_process_id,
+                    name: lossy_utf16(&entry.sz_exe_file),
+                    // 与 tasklist 同口径：展示快照不需要路径；需要路径的调用方
+                    // 只对匹配项调 [`image_path`]（每次 ~10µs）。
+                    exe_path: None,
+                });
+                entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+                has_row = Process32NextW(snapshot, &mut entry) != 0;
+            }
+            CloseHandle(snapshot);
+        }
+        if rows.is_empty() {
+            return Err("ToolHelp 进程快照为空或无法解析".to_string());
+        }
+        Ok(rows)
+    }
+
+    /// 单个 PID 的完整可执行文件路径。
+    ///
+    /// `OpenProcess` / `QueryFullProcessImageNameW` 对受保护进程会拒绝访问 ⇒ `None`。
+    /// 调用方只应对**匹配的映像名**调用它，取不到时回退磁盘缓存 / 注册表。
+    pub(super) fn image_path(pid: u32) -> Option<PathBuf> {
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process == 0 {
+                return None;
+            }
+            let mut buffer = [0u16; 2048];
+            let mut size = buffer.len() as u32;
+            let ok = QueryFullProcessImageNameW(process, 0, buffer.as_mut_ptr(), &mut size) != 0;
+            CloseHandle(process);
+            if !ok {
+                return None;
+            }
+            Some(PathBuf::from(lossy_utf16(&buffer[..size as usize])))
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod win_proc_tests {
+    use super::win_proc;
+
+    /// 原生枚举必须能看到**自己**（否则「全量」就是假的；过滤器与守卫都会空转）。
+    ///
+    /// 可证伪：把 `Process32FirstW/NextW` 的循环写错 / `dw_size` 填错 ⇒ 本用例变红。
+    #[test]
+    fn snapshot_contains_the_current_process_by_image_name() {
+        let rows = win_proc::snapshot_rows().expect("原生快照应成功");
+        let me = rows
+            .iter()
+            .find(|row| row.pid == std::process::id())
+            .expect("快照应包含当前测试进程");
+        let exe = std::env::current_exe().expect("current_exe");
+        let name = exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("exe 文件名");
+        assert_eq!(me.name.to_ascii_lowercase(), name.to_ascii_lowercase());
+    }
+
+    /// 按 PID 取路径必须能拿到当前进程（运行路径探测依赖它替掉 PowerShell）。
+    #[test]
+    fn image_path_of_the_current_process_matches_exe_name() {
+        let path = win_proc::image_path(std::process::id()).expect("当前进程路径可读");
+        let exe = std::env::current_exe().expect("current_exe");
+        assert_eq!(path.file_name(), exe.file_name());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 展示用进程快照（一次全量枚举 + 1 秒 TTL + 并发合并）
 // ---------------------------------------------------------------------------
 //
@@ -450,7 +611,7 @@ pub(crate) fn parse_windows_process_rows(stdout: &str) -> Vec<WindowsProcessRow>
 ///
 /// 空输出、只有 `INFO:` 行、或全部行都解析不出 PID ⇒ `Err`：**失败不得伪装成
 /// 「没有任何进程」**（否则一次抖动就会把展示状态翻成「未运行」）。
-#[cfg(any(target_os = "windows", test))]
+#[cfg(test)]
 fn parse_tasklist_run(
     success: bool,
     exit_code: Option<i32>,
@@ -750,13 +911,22 @@ pub(crate) fn ps_output(script: &str, timeout_secs: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// 某个映像名的进程行（Windows）。
+///
+/// 走**实时**原生枚举（每次 ~10ms），不复用 1 秒展示快照 —— 这些调用方里既有
+/// 状态探测也有写前守卫，旧快照不能当放行依据。仍比旧的实现快两个数量级：
+/// 旧实现每枚映像名起一个 `tasklist`（实测 ~0.5s/枚）。
 #[cfg(target_os = "windows")]
-pub(crate) fn windows_tasklist_image_rows(image: &str) -> Vec<WindowsProcessRow> {
-    let filter = format!("IMAGENAME eq {image}");
-    let Some(out) = run_cmd_timeout("tasklist", &["/FI", &filter, "/FO", "CSV", "/NH"], 5) else {
-        return Vec::new();
-    };
-    parse_tasklist_csv(&String::from_utf8_lossy(&out.stdout))
+pub(crate) fn windows_process_rows_for_image(image: &str) -> Vec<WindowsProcessRow> {
+    match fresh_process_rows() {
+        Ok(rows) => rows
+            .iter()
+            .filter(|row| row.name.eq_ignore_ascii_case(image))
+            .cloned()
+            .collect(),
+        // 与旧实现同口径：枚举失败 ⇒ 空集（调用方按「没在跑」处理）。
+        Err(_) => Vec::new(),
+    }
 }
 
 /// 收集该 region 的 WorkBuddy/CodeBuddy 进程行，排除本工具、自身 PID 与 crashpad。
@@ -776,18 +946,16 @@ fn windows_workbuddy_process_rows_for(region: Region) -> Vec<WindowsProcessRow> 
         .collect()
 }
 
-/// Windows：**一次**全量枚举当前所有进程（PID + 映像名）。
+/// Windows：**一次**全量原生枚举当前所有进程（PID + 映像名）。
 ///
-/// 为什么是全量而不是按 PID / 映像名过滤：`tasklist` 是**子进程**，每次调用 100~200 ms。
-/// 全量只要 1 次 —— 而 `wait_windows_pids_gone` 每 500 ms 就轮一轮，
-/// N×轮数 个子进程会**直接叠加到「切换客户端要等多久」上**。
+/// 用 ToolHelp 而不是 `tasklist`：后者是子进程，单次实测 ~0.5s（本机 437 进程），
+/// 而原生快照 ~10ms。`wait_windows_pids_gone` 每 500ms 轮一轮、页面状态每轮冷快照
+/// 都要枚举 —— 子进程成本会直接叠加到「切换要等多久」与「状态多久出现」上。
 ///
-/// 超时 5 秒；执行失败、非零退出码、空输出或无法解析一律 `Err`。
+/// 快照失败 / 空表一律 `Err`（**失败不得伪装成「没有任何进程」**）。
 #[cfg(target_os = "windows")]
 fn enumerate_windows_process_rows() -> Result<Vec<WindowsProcessRow>, String> {
-    let out = run_cmd_timeout("tasklist", &["/FO", "CSV", "/NH"], 5)
-        .ok_or_else(|| "tasklist 执行失败或超时".to_string())?;
-    parse_tasklist_run(out.status.success(), out.status.code(), &out.stdout)
+    win_proc::snapshot_rows()
 }
 
 /// 进程快照的进程内单例（Windows）：展示读缓存，控制路径走 [`fresh_process_rows`]。
@@ -845,7 +1013,7 @@ fn windows_running_pids() -> Option<std::collections::HashSet<u32>> {
 /// 从「当前存活 PID 集合」里筛出仍存活的待观察 PID。
 ///
 /// `running = None` 表示**枚举失败** ⇒ 保守地返回全部（视为仍在运行）。
-/// 这条语义是本模块最容易改错的一处：把 `None` 当成「空集」会让一次 `tasklist` 抖动
+/// 这条语义是本模块最容易改错的一处：把 `None` 当成「空集」会让一次进程枚举抖动
 /// 直接变成「客户端已退出」的误判，随后就会去动它正在写的数据库 / 认证文件。
 /// 单独抽成纯函数就是为了让这条语义有**确定性**的测试（不依赖真实子进程）。
 #[cfg(target_os = "windows")]
@@ -863,9 +1031,10 @@ fn alive_pids_from(pids: &[u32], running: Option<&std::collections::HashSet<u32>
 /// 阻塞等待给定 PID 全部退出，返回**超时后仍存活**的 PID（空 = 全部已退出）。
 ///
 /// 语义要点（改这里之前先读）：
-/// - **查询失败视为「仍在运行」** —— 宁可多等一个超时，也不能因为一次 `tasklist` 抖动
+/// - **查询失败视为「仍在运行」** —— 宁可多等一个超时，也不能因为一次进程枚举抖动
 ///   就误判客户端已退出（见 [`alive_pids_from`]）。
-/// - 每轮只起**一个**子进程（见 [`windows_running_pids`]），不是每个 PID 一个。
+/// - 每轮只做**一次**进程表枚举（原生，**无子进程**；见 [`windows_running_pids`]），
+///   不是每个 PID 一个。
 #[cfg(target_os = "windows")]
 pub(crate) fn wait_windows_pids_gone(pids: &[u32], timeout: Duration) -> Vec<u32> {
     if pids.is_empty() {
@@ -889,25 +1058,17 @@ pub(crate) fn existing_windows_drives() -> Vec<char> {
         .collect()
 }
 
-/// 运行中进程探测脚本模板（`__PROCESS_NAMES__` 替换为该 region 的映像名列表）。
-#[cfg(target_os = "windows")]
-const WINDOWS_PROCESS_SCRIPT: &str = "Get-Process -Name __PROCESS_NAMES__ -ErrorAction SilentlyContinue | \
-     ForEach-Object { $p = ''; try { $p = $_.Path } catch {}; '{0}|{1}|{2}' -f $_.Id, $_.ProcessName, $p }";
-
+/// 运行中 WorkBuddy / CodeBuddy 的完整路径（按 region）。
+///
+/// 一次原生全量枚举，只对**匹配的映像名**取完整路径（本机实测 ~10ms）；不再 spawn
+/// PowerShell（旧实现每次 ~1s）。本函数只服务「磁盘缓存缺失 / 失效」的冷路径。
 #[cfg(target_os = "windows")]
 fn windows_running_workbuddy_exe_for(region: Region) -> Option<PathBuf> {
-    // 逐个映像名加单引号，避免有空格的产品名形态被 PowerShell 拆成多个名字。
-    let names = region_image_stems(region)
-        .iter()
-        .map(|stem| format!("'{stem}'"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let script = WINDOWS_PROCESS_SCRIPT.replace("__PROCESS_NAMES__", &names);
-    let stdout = ps_output(&script, 5)?;
-    for row in filter_windows_workbuddy_rows_for(region, &parse_windows_process_rows(&stdout)) {
-        if let Some(p) = row.exe_path {
-            if is_existing_workbuddy_exe_for(region, &p) {
-                return Some(p);
+    let rows = win_proc::snapshot_rows().ok()?;
+    for row in filter_windows_workbuddy_rows_for(region, &rows) {
+        if let Some(path) = win_proc::image_path(row.pid) {
+            if is_existing_workbuddy_exe_for(region, &path) {
+                return Some(path);
             }
         }
     }
@@ -980,23 +1141,357 @@ fn windows_registry_exe_candidates_for(region: Region) -> Vec<PathBuf> {
     parse_windows_registry_path_lines_for(region, &stdout)
 }
 
-/// Windows：按 region 动态查找 WorkBuddy 可执行文件路径。
-///
-/// 顺序：运行中进程 Path → 上次成功路径缓存 → 注册表 App Paths / Uninstall
-/// （含 WOW6432Node、DisplayIcon）→ LOCALAPPDATA/Program Files 与各盘符常见目录。
-/// 命中且文件存在则写入该 region 的缓存；缓存指向丢失文件则丢弃。
+/// 进程内路径缓存的条目。
 #[cfg(target_os = "windows")]
-pub fn windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
-    if let Some(p) = windows_running_workbuddy_exe_for(region) {
-        persist_workbuddy_exe_for(region, &p);
-        return Some(p);
+#[derive(Clone)]
+struct WindowsExeCacheEntry {
+    /// 上次得出**结论**（命中 / 未找到）的时刻，两个 TTL 都基于它判过期。
+    at: Instant,
+    /// 负缓存期间上一次跑「便宜候选」的时刻。
+    ///
+    /// 只用于节流 [`WINDOWS_EXE_CHEAP_PROBE_INTERVAL`]，**不参与**结论 TTL ——
+    /// 否则每次轮询都会把自己的「没找到」续期，5 分钟窗口永不过期。
+    cheap_at: Instant,
+    path: Option<PathBuf>,
+}
+
+/// 命中路径的进程内 TTL。
+///
+/// 应用位置极少变化，一分钟内复用足够；命中时仍会做一次 `is_file()` 校验，
+/// 路径被删除 / 搬走后会立刻重新探测。
+#[cfg(target_os = "windows")]
+const WINDOWS_EXE_HIT_TTL: Duration = Duration::from_secs(60);
+
+/// 「没找到」的进程内 TTL。
+///
+/// 未安装该区域的客户端时（常见：国内用户没装国际版），每次状态查询都会先跑
+/// PowerShell 进程扫描、再跑注册表扫描（实测各 ~1s）。负结果缓存 5 分钟，
+/// 把「每 60 秒轮询一次」的代价从 2 个 PowerShell 降到 5 分钟一次。
+///
+/// 代价：装在**非默认目录**（便携副本 / 自定义路径）的客户端，运行期间新装后
+/// 最多 5 分钟才被自动发现。默认目录不受此限 —— 见下一项。
+#[cfg(target_os = "windows")]
+const WINDOWS_EXE_MISS_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// 负缓存期间跑一次「便宜候选」的最小间隔。
+///
+/// 负缓存原本把「新装客户端」的发现推迟到 5 分钟后：卡片停在「未安装」占位，
+/// 启动按钮走 `launch_workbuddy_inner` 直接报「未找到程序」，而用户手上唯一的
+/// 「重新检测」按钮和轮询走的是同一条命令，救不回来。
+///
+/// 这里把两件事分开：**贵的**是两次 PowerShell（进程扫描 + 注册表），**便宜的**
+/// 是环境变量默认目录与各盘符常见目录的 `is_file`（纯 stat，不 spawn 进程）。
+/// 负缓存只跳过贵的，便宜层照跑 ⇒ 装到默认目录（NSIS 安装器的默认落点）的客户端
+/// 在下一次状态查询就被发现，而「没装」的机器每次轮询只付一串 stat。
+///
+/// 10 秒是为了挡住焦点抖动与并发查询把同一串 stat 重复打多遍。
+#[cfg(target_os = "windows")]
+const WINDOWS_EXE_CHEAP_PROBE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// 进程内缓存的查询结论。
+#[cfg(target_os = "windows")]
+enum WindowsExeCacheLookup {
+    /// 命中且文件仍在。
+    Hit(PathBuf),
+    /// 负缓存新鲜，便宜探测的节流窗口还没到 ⇒ 本轮直接报「没找到」。
+    MissFresh,
+    /// 负缓存新鲜，但允许跑一次便宜候选（只有它可能翻案）。
+    MissFreshProbeDue,
+    /// 无条目 / 结论过期 / 命中但文件已消失 ⇒ 需要完整重探。
+    Stale,
+}
+
+/// 缓存键里带上数据目录：单测会通过 `BUDDY_SWITCH_HOME` 切换 home，若只按 region
+/// 键控，前一个用例的解析结果会漏到下一个用例（缓存命中 ⇒ 读到错误的 home）。
+#[cfg(target_os = "windows")]
+type WindowsExeCacheKey = (PathBuf, Region);
+
+#[cfg(target_os = "windows")]
+fn windows_exe_cache() -> &'static Mutex<HashMap<WindowsExeCacheKey, WindowsExeCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<WindowsExeCacheKey, WindowsExeCacheEntry>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_exe_cache_key(region: Region) -> WindowsExeCacheKey {
+    (config::store_dir(), region)
+}
+
+/// 读进程内缓存并给出本轮该走哪条路。
+///
+/// 锁内只做判 TTL 与克隆，**文件存在性校验放在锁外** —— `is_file()` 是一次数
+/// 文件系统访问，持锁做它会把两个 region 的状态查询串在这把全局锁上。
+#[cfg(target_os = "windows")]
+fn lookup_windows_exe_cache(region: Region) -> WindowsExeCacheLookup {
+    let (age, cheap_age, path) = {
+        let Ok(cache) = windows_exe_cache().lock() else {
+            return WindowsExeCacheLookup::Stale;
+        };
+        let Some(entry) = cache.get(&windows_exe_cache_key(region)) else {
+            return WindowsExeCacheLookup::Stale;
+        };
+        (
+            entry.at.elapsed(),
+            entry.cheap_at.elapsed(),
+            entry.path.clone(),
+        )
+    };
+
+    match path {
+        Some(path) if age < WINDOWS_EXE_HIT_TTL => {
+            // 命中时仍校验文件仍在：路径被删除 / 搬走后**立刻**重探，不返回死路径。
+            if path.is_file() {
+                WindowsExeCacheLookup::Hit(path)
+            } else {
+                WindowsExeCacheLookup::Stale
+            }
+        }
+        Some(_) => WindowsExeCacheLookup::Stale,
+        None if age >= WINDOWS_EXE_MISS_TTL => WindowsExeCacheLookup::Stale,
+        None if cheap_age >= WINDOWS_EXE_CHEAP_PROBE_INTERVAL => {
+            WindowsExeCacheLookup::MissFreshProbeDue
+        }
+        None => WindowsExeCacheLookup::MissFresh,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn remember_windows_exe_path(region: Region, path: Option<&PathBuf>) {
+    if let Ok(mut cache) = windows_exe_cache().lock() {
+        let now = Instant::now();
+        cache.insert(
+            windows_exe_cache_key(region),
+            WindowsExeCacheEntry {
+                at: now,
+                cheap_at: now,
+                path: path.cloned(),
+            },
+        );
+    }
+}
+
+/// 只推进「便宜探测」的节流时间戳，**不动**结论时刻。
+///
+/// 便宜候选跑空时用它：结论仍是「没找到」，5 分钟窗口按原时刻计，不因轮询续期。
+#[cfg(target_os = "windows")]
+fn touch_windows_exe_cheap_probe(region: Region) {
+    if let Ok(mut cache) = windows_exe_cache().lock() {
+        if let Some(entry) = cache.get_mut(&windows_exe_cache_key(region)) {
+            entry.cheap_at = Instant::now();
+        }
+    }
+}
+
+/// 丢掉该 region 的进程内结论（下次查询完整重探）。
+///
+/// 供「已知结论过期」的路径显式调用（例如启动前发现算出来的路径不存在）；
+/// **轮询不要调它** —— 那等于把负缓存的收益还回去。
+#[cfg(target_os = "windows")]
+fn invalidate_windows_exe_cache(region: Region) {
+    if let Ok(mut cache) = windows_exe_cache().lock() {
+        cache.remove(&windows_exe_cache_key(region));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_exe_cache_tests {
+    use super::*;
+    use crate::modules::config::HomeOverrideGuard;
+
+    /// 隔离 home：缓存键含 `store_dir()`，各用例各占一个目录 ⇒ 互不串味。
+    fn isolated_home(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "buddy-switch-exe-cache-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp home");
+        dir
     }
 
+    fn insert_entry(region: Region, entry: WindowsExeCacheEntry) {
+        windows_exe_cache()
+            .lock()
+            .expect("cache lock")
+            .insert(windows_exe_cache_key(region), entry);
+    }
+
+    fn entry_aged(
+        age: Duration,
+        cheap_age: Duration,
+        path: Option<&PathBuf>,
+    ) -> WindowsExeCacheEntry {
+        let now = Instant::now();
+        WindowsExeCacheEntry {
+            at: now.checked_sub(age).unwrap_or(now),
+            cheap_at: now.checked_sub(cheap_age).unwrap_or(now),
+            path: path.cloned(),
+        }
+    }
+
+    #[test]
+    fn hit_is_rechecked_against_the_filesystem() {
+        let home = isolated_home("hit");
+        let _guard = HomeOverrideGuard::set(&home);
+        let exe = home.join("WorkBuddy.exe");
+        std::fs::write(&exe, b"stub").expect("write stub exe");
+
+        remember_windows_exe_path(Region::Cn, Some(&exe));
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Cn),
+            WindowsExeCacheLookup::Hit(path) if path == exe
+        ));
+
+        // 文件被删 / 搬走 ⇒ 命中项立刻失效，绝不把死路径继续返回。
+        std::fs::remove_file(&exe).expect("remove stub exe");
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Cn),
+            WindowsExeCacheLookup::Stale
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn fresh_miss_leashes_the_cheap_probe_without_renewing_the_window() {
+        let home = isolated_home("miss");
+        let _guard = HomeOverrideGuard::set(&home);
+
+        // 刚得出「没找到」⇒ 便宜探测也刚跑过，本轮不再探。
+        remember_windows_exe_path(Region::Global, None);
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Global),
+            WindowsExeCacheLookup::MissFresh
+        ));
+
+        // 节流窗口过去 ⇒ 允许跑一次便宜候选（新装客户端因此不必等满 5 分钟）。
+        insert_entry(
+            Region::Global,
+            entry_aged(
+                Duration::from_secs(30),
+                WINDOWS_EXE_CHEAP_PROBE_INTERVAL,
+                None,
+            ),
+        );
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Global),
+            WindowsExeCacheLookup::MissFreshProbeDue
+        ));
+
+        // 便宜层跑空后只推进节流时间戳：结论时刻不动，5 分钟窗口不被轮询续期。
+        touch_windows_exe_cheap_probe(Region::Global);
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Global),
+            WindowsExeCacheLookup::MissFresh
+        ));
+        let age = windows_exe_cache()
+            .lock()
+            .expect("cache lock")
+            .get(&windows_exe_cache_key(Region::Global))
+            .map(|entry| entry.at.elapsed())
+            .expect("entry still present");
+        assert!(
+            age >= Duration::from_secs(29),
+            "结论时刻被便宜探测续期了（{age:?}）——负缓存会永不过期"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn miss_expires_after_the_miss_ttl() {
+        let home = isolated_home("ttl");
+        let _guard = HomeOverrideGuard::set(&home);
+        insert_entry(
+            Region::Cn,
+            entry_aged(
+                WINDOWS_EXE_MISS_TTL + Duration::from_secs(1),
+                Duration::from_secs(0),
+                None,
+            ),
+        );
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Cn),
+            WindowsExeCacheLookup::Stale
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn invalidation_forces_a_full_resolve() {
+        let home = isolated_home("invalidate");
+        let _guard = HomeOverrideGuard::set(&home);
+        remember_windows_exe_path(Region::Cn, None);
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Cn),
+            WindowsExeCacheLookup::MissFresh
+        ));
+        invalidate_windows_exe_cache(Region::Cn);
+        assert!(matches!(
+            lookup_windows_exe_cache(Region::Cn),
+            WindowsExeCacheLookup::Stale
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+/// Windows：按 region 动态查找 WorkBuddy 可执行文件路径。
+///
+/// 顺序：**进程内缓存 → 上次成功路径缓存 → 运行中进程 Path → 注册表
+/// App Paths / Uninstall（含 WOW6432Node、DisplayIcon）→ LOCALAPPDATA /
+/// Program Files 与各盘符常见目录**。命中且文件存在则写入该 region 的磁盘缓存；
+/// 缓存指向丢失文件则丢弃。
+///
+/// ★ 磁盘缓存必须在「运行中进程探测」**之前**：后者每次都要 spawn 一个
+/// PowerShell 取进程路径（实测 ~1s），而本函数是页面状态 / 焦点刷新 / 60 秒轮询的
+/// 热路径。缓存里的路径已经过文件存在性校验，运行进程探测只在首装 / 搬家 /
+/// 卸载（缓存缺失或失效）时才需要。
+///
+/// ★ 负缓存期（5 分钟）里仍跑**便宜层**：只查环境变量默认目录与各盘符常见目录
+/// （纯 `is_file`，不 spawn 进程），见 [`WINDOWS_EXE_CHEAP_PROBE_INTERVAL`]。
+/// 否则运行期间新装的客户端会一直显示「未安装」，而「重新检测」按钮走的也是这条
+/// 函数，用户没有任何办法自救。
+///
+/// 代价：若应用正在从一个与缓存不同的路径运行（例如便携副本），本函数返回的是
+/// 缓存路径 —— 卡片上的「已安装」与「启动」都以它为准。**切换账号不受影响**：
+/// 认证文件在 `AppData`，与安装位置无关，写盘始终打到真实账号文件。
+#[cfg(target_os = "windows")]
+pub fn windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
+    match lookup_windows_exe_cache(region) {
+        WindowsExeCacheLookup::Hit(path) => Some(path),
+        WindowsExeCacheLookup::MissFresh => None,
+        WindowsExeCacheLookup::MissFreshProbeDue => {
+            // 先推进节流时间戳再探测：探测本身可能较慢，不能让并发调用者排队重跑。
+            touch_windows_exe_cheap_probe(region);
+            match windows_fallback_exe_probe_for(region) {
+                Some(path) => {
+                    persist_workbuddy_exe_for(region, &path);
+                    remember_windows_exe_path(region, Some(&path));
+                    Some(path)
+                }
+                // 便宜层跑空 ⇒ 结论仍是「没找到」，但**不刷新**结论时刻（不续期）。
+                None => None,
+            }
+        }
+        WindowsExeCacheLookup::Stale => {
+            let resolved = resolve_windows_workbuddy_exe_path_for(region);
+            remember_windows_exe_path(region, resolved.as_ref());
+            resolved
+        }
+    }
+}
+
+/// Windows：完整探测（可能 spawn PowerShell）。只在缓存缺失 / 失效时走这里。
+#[cfg(target_os = "windows")]
+fn resolve_windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
     if let Some(cached) = config::load_workbuddy_exe_cache_for(region) {
         if is_existing_workbuddy_exe_for(region, &cached) {
             return Some(cached);
         }
         config::clear_workbuddy_exe_cache_for(region);
+    }
+
+    if let Some(p) = windows_running_workbuddy_exe_for(region) {
+        persist_workbuddy_exe_for(region, &p);
+        return Some(p);
     }
 
     for p in windows_registry_exe_candidates_for(region) {
@@ -1006,6 +1501,18 @@ pub fn windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
         }
     }
 
+    if let Some(p) = windows_fallback_exe_probe_for(region) {
+        persist_workbuddy_exe_for(region, &p);
+        return Some(p);
+    }
+    None
+}
+
+/// Windows「便宜层」：环境变量默认目录 + 各盘符常见目录，纯 `is_file`。
+///
+/// 不 spawn 任何进程，也不会读注册表 —— 这是负缓存期唯一还有机会翻案的一层。
+#[cfg(target_os = "windows")]
+fn windows_fallback_exe_probe_for(region: Region) -> Option<PathBuf> {
     let local = std::env::var("LOCALAPPDATA").ok();
     let pf = std::env::var("PROGRAMFILES").ok();
     let pf86 = std::env::var("PROGRAMFILES(X86)").ok();
@@ -1019,13 +1526,9 @@ pub fn windows_workbuddy_exe_path_for(region: Region) -> Option<PathBuf> {
         user.as_deref(),
         &drives,
     );
-    for p in candidates {
-        if is_existing_workbuddy_exe_for(region, &p) {
-            persist_workbuddy_exe_for(region, &p);
-            return Some(p);
-        }
-    }
-    None
+    candidates
+        .into_iter()
+        .find(|p| is_existing_workbuddy_exe_for(region, p))
 }
 
 /// CN：动态查找 WorkBuddy 可执行文件路径（旧签名，行为不变）。
@@ -1708,7 +2211,7 @@ pub(crate) fn is_image_running_display(image: &str) -> bool {
 /// ## ★ 语义：**查询失败视为「在运行」**
 ///
 /// 与 [`alive_pids_from`] 同一条纪律：本函数唯一的调用方是**写入前的守卫**，
-/// 把一次 `tasklist` 抖动当成「已退出」会让我们去改客户端可能正在写的文件；
+/// 把一次进程枚举抖动当成「已退出」会让我们去改客户端可能正在写的文件；
 /// 误判成「在运行」的代价只是用户重试一次。
 ///
 /// `image` 是**完整映像名**（如 `claude.exe`）；Windows 上映像名大小写不敏感。
@@ -1720,17 +2223,11 @@ pub fn is_image_running(image: &str) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        match run_cmd_timeout(
-            "tasklist",
-            &["/FI", &format!("IMAGENAME eq {image}"), "/FO", "CSV", "/NH"],
-            5,
-        ) {
-            Some(out) => windows_rows_match_image(
-                &parse_tasklist_csv(&String::from_utf8_lossy(&out.stdout)),
-                image,
-            ),
-            // 查询失败 ⇒ 保守视为在运行（见文档）。
-            None => true,
+        // 写前守卫：实时全量枚举（不走 1 秒展示快照，避免把旧快照当放行依据）。
+        // 查询失败 ⇒ 保守视为在运行（见文档）。
+        match fresh_process_rows() {
+            Ok(rows) => windows_rows_match_image(&rows, image),
+            Err(_) => true,
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -1744,7 +2241,7 @@ pub fn is_image_running(image: &str) -> bool {
     }
 }
 
-/// tasklist 行里有没有映像名匹配的（**纯函数**，单测据此钉住大小写不敏感 + 精确匹配）。
+/// 进程行里有没有映像名匹配的（**纯函数**，单测据此钉住大小写不敏感 + 精确匹配）。
 #[cfg(target_os = "windows")]
 fn windows_rows_match_image(rows: &[WindowsProcessRow], image: &str) -> bool {
     rows.iter().any(|row| row.name.eq_ignore_ascii_case(image))
@@ -2022,6 +2519,10 @@ fn launch_workbuddy_inner(region: Region, progress: Option<&dyn Fn(&str)>) -> Re
                 app.join(format!("{stem}.exe"))
             };
             if !exe.exists() {
+                // 算出来的路径不存在 ⇒ 进程内结论已经过期（典型：装在非默认目录、
+                // 还在负缓存窗口里）。丢掉它，用户下一次点「启动 / 重新检测」才会
+                // 真正重探一遍，而不是在同一个死路径上再报 5 分钟同样的错。
+                invalidate_windows_exe_cache(region);
                 return Err(format!(
                     "未找到 WorkBuddy 程序（尝试路径: {}）。请在 Windows 上打开 WorkBuddy 后重试。",
                     exe.display()
@@ -2152,6 +2653,31 @@ fn focus_workbuddy_linux_for(region: Region) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ★ 回归门禁：解析路径时必须**先查磁盘缓存，再探运行进程**。
+    ///
+    /// 可证伪：把两段顺序换回「进程探测在前」⇒ 本用例立即变红。
+    /// 为什么钉住它：运行进程探测每次 spawn 一个 PowerShell（实测 ~1s），而这条
+    /// 解析路径是 `get_status`（首开 / 焦点 / 60 秒轮询）的热路径；缓存里的路径
+    /// 已经过文件存在性校验，没有理由为了它再起一个子进程。
+    #[test]
+    fn exe_cache_is_checked_before_running_process_probe() {
+        let source = include_str!("process.rs");
+        let body = source
+            .split("fn resolve_windows_workbuddy_exe_path_for")
+            .nth(1)
+            .expect("resolve_windows_workbuddy_exe_path_for 应存在");
+        let cache = body
+            .find("load_workbuddy_exe_cache_for")
+            .expect("解析函数里应有磁盘缓存检查");
+        let probe = body
+            .find("windows_running_workbuddy_exe_for")
+            .expect("解析函数里应有运行进程探测");
+        assert!(
+            cache < probe,
+            "磁盘缓存检查必须早于运行进程探测（否则每次状态查询都起 PowerShell）"
+        );
+    }
 
     #[test]
     fn region_app_stems_differ_by_region() {
@@ -2391,7 +2917,7 @@ INFO: No tasks are running which match the specified criteria.
     /// ★ 空映像名 ⇒ 判不出来 ⇒ 保守视为「在运行」（守卫据此**拒绝写入**）。
     ///
     /// 可证伪性：把 `is_image_running` 开头的空串分支删掉 ⇒ 变红
-    /// （空映像名会走到 `tasklist` 分支并返回「没在跑」，于是一个配置写错的槽位
+    /// （空映像名会走到进程枚举分支并返回「没在跑」，于是一个配置写错的槽位
     /// 会**绕过进程守卫**）。
     #[test]
     fn blank_image_name_is_treated_as_running() {
@@ -2965,7 +3491,7 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
-            "并发展示探测必须合并为一次子进程"
+            "并发展示探测必须合并为一次枚举"
         );
     }
 

@@ -435,8 +435,8 @@ fn windows_cn_process_rows() -> Vec<process::WindowsProcessRow> {
         }
     }
     let mut rows = Vec::new();
-    rows.extend(process::windows_tasklist_image_rows("CodeBuddy CN.exe"));
-    rows.extend(process::windows_tasklist_image_rows("CodeBuddy.exe"));
+    rows.extend(process::windows_process_rows_for_image("CodeBuddy CN.exe"));
+    rows.extend(process::windows_process_rows_for_image("CodeBuddy.exe"));
     rows.into_iter()
         .filter(|row| row.pid != self_pid && keep_windows_cn_row(row))
         .collect()

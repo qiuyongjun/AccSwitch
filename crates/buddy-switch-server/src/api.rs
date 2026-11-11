@@ -710,15 +710,6 @@ fn parse_region_filter(value: Option<&str>) -> RegionFilter {
     buddy_switch_core::modules::region::parse_region_filter(value)
 }
 
-/// 该 region 客户端是否已安装。
-///
-/// 跨平台判定：解析出的应用路径（macOS bundle / Windows exe：进程→缓存→注册表→
-/// 盘符扫描，最后回落默认安装路径）**真实存在**即为已安装。比 `identity::
-/// installed_app_version` 更适合 Windows（后者只在 macOS 读 bundle 元数据）。
-fn region_installed(region: Region) -> bool {
-    auth_file::workbuddy_app_path_for(region).exists()
-}
-
 /// 把 core 的 [`auth_file::RegionMismatch`] 序列化为前端 `RegionMismatch` 契约（camelCase）。
 fn mismatch_json(mismatch: &auth_file::RegionMismatch) -> Value {
     json!({
@@ -756,15 +747,19 @@ async fn api_status(RawQuery(query): RawQuery) -> Response {
             "email": account::display_str(&acct, "email"),
         }))
     });
+    // ★ 与 Tauri 侧 `commands.rs::build_app_status` 同款：路径只解析一次。
+    //   `workbuddy_app_path_for` 在 Windows 上可能包含 PowerShell 探测（每次 ~1s），
+    //   此前 `appPath` 与 `installed` 各调一次，一次状态查询要付两遍。
+    let app_path = auth_file::workbuddy_app_path_for(region);
     json_ok(json!({
         // 展示口径：core 的 1 秒进程快照与 Tauri 侧共用，不再单独缓存。
         "running": process::is_workbuddy_running_display_for(region),
         "region": region,
         "authFile": auth_file::auth_file_path_for(region).to_string_lossy(),
         "current": current,
-        "appPath": auth_file::workbuddy_app_path_for(region).to_string_lossy(),
+        "appPath": app_path.to_string_lossy(),
         "version": update::APP_VERSION,
-        "installed": region_installed(region),
+        "installed": app_path.exists(),
         "regionMismatch": region_mismatch,
     }))
 }

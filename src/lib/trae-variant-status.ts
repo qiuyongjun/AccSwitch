@@ -143,6 +143,9 @@ export type TraeVariantLogins = Partial<Record<TraeVariantId, TraeVariantLogin |
  */
 export const TRAE_VARIANTS_KEY = "trae:variants";
 
+/** 探测进行中的单航班；见 {@link loadTraeVariantStatuses}。 */
+let variantsInflight: Promise<TraeVariantStatus[]> | null = null;
+
 /**
  * 读取**全部区域**的环境状态（并排视角）。
  *
@@ -152,11 +155,25 @@ export const TRAE_VARIANTS_KEY = "trae:variants";
  * 否则用户连切回另一条线的入口都没有。
  */
 export async function loadTraeVariantStatuses(): Promise<TraeVariantStatus[]> {
+  // ★ 在途单航班：切到 Trae 分区时，App 的 `useTraeVariantRunning` 与页面
+  // `loadSnapshot` 会在同一拍各调一次 —— 不合并就是一轮切换打两次
+  // `get_trae_variants`（含安装探测 + 进程快照）。
+  // 只合并**在途**请求，不做 TTL 缓存：`useCachedResource.refresh()` 仍必须
+  // 拿到一次真实探测，不能被「刚返回 1 秒的旧结果」冒充。
+  if (variantsInflight) return variantsInflight;
+  const run = (async () => {
+    try {
+      const result = await api.getTraeVariants();
+      return result.variants?.length ? result.variants : TRAE_VARIANT_FALLBACK;
+    } catch {
+      return TRAE_VARIANT_FALLBACK;
+    }
+  })();
+  variantsInflight = run;
   try {
-    const result = await api.getTraeVariants();
-    return result.variants?.length ? result.variants : TRAE_VARIANT_FALLBACK;
-  } catch {
-    return TRAE_VARIANT_FALLBACK;
+    return await run;
+  } finally {
+    if (variantsInflight === run) variantsInflight = null;
   }
 }
 
@@ -186,7 +203,9 @@ export async function loadTraeVariantLogins(
   statuses: TraeVariantStatus[],
 ): Promise<TraeVariantLogins> {
   // 每个程序位都带标识（`TraeProgramStatus.variant` 非空）⇒ 这里没有过滤，
-  // 遍历到的每个程序位各取一次登录态（收敛后 = 两个区域各一个）。
+  // 遍历到的每个程序位各取一次登录态：传全量 `statuses` 时是两个区域各一个，
+  // 传子集（账号页只传当前区域）时就是那个子集 —— 取几个由调用方决定，
+  // 本函数不假设范围。
   const targets: TraeVariantId[] = statuses.flatMap((item) =>
     item.programs.map((program) => program.variant),
   );

@@ -2327,7 +2327,11 @@ pub fn overview_for(variant: TraeVariant) -> Value {
         "currentAccount": current,
         "currentAccountName": current_name,
         "dataDir": snapshot_data_dir_for(variant).map(|dir| dir.to_string_lossy().to_string()),
-        "clientRunning": platform::is_running_for(variant),
+        // 展示字段：读共享进程快照（1 秒 TTL），不要用实时 `is_running_for` ——
+        // 后者每次 spawn 一个 tasklist（实测 ~0.5s），而 `overview_for` 会被账号页
+        // 按「每个程序位一次」调用，切换页面时光这一项就要等两轮子进程。
+        // 「能不能写 / 能不能切」的判据仍在各自的守卫里走实时探测。
+        "clientRunning": platform::is_running_for_display(variant),
         "coreEntryCount": CORE_ENTRIES.len(),
     })
 }

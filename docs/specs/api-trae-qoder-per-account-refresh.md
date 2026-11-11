@@ -1,10 +1,10 @@
 # 接口约定：Trae / Qoder 的「按账号 · 今日」只读重取
 
-**日期**：2026-10-18（最后更新 2026-11-10：补 §12 账号页加载 / 一键刷新提速，含 §12.7 / §12.8）
+**日期**：2026-10-18（最后更新 2026-11-11：补 §12.9 冷启动 / 切换账号页耗时整改）
 **提出方**：账号页（`AccountsPage` / `TraeAccountsPage` / `QoderAccountsPage`）
 **状态**：**已实现**（2026-10-18；`get_trae_account_token_today` / `get_trae_checkin_status_map` /
 `qoder_checkin_status_map` 三条命令 + 两端接线 + 抽屉指标块）。§12 为 2026-11-10 追加的
-WorkBuddy 前端策略补充，已落地。
+WorkBuddy 前端策略补充，已落地；§12.9 为 2026-11-11 的冷启动 / 切换账号页耗时整改，已落地。
 **影响面**：卡片「更多」菜单与详情抽屉指标块的刷新项（此前两平台各只有「积分 / 凭据状态」）
 
 > **实现期对本文的两处修订**（实现与初稿不一致的地方，以本文为准）：
@@ -400,3 +400,99 @@ Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `
 - **不阻塞**主路径：统计与图表先渲染，积分回来后由 store 触发一次重算；
 - 合并 CN 与 Global 两个区域的 `creditMap`（`creditByAccount`）——只读 CN 表会让
   `region === "all"` 时的国际版账号恒显示「—」。
+
+### 12.9 2026-11-11：冷启动与切换账号页的耗时整改
+
+> 整改前实测（Windows，已发布构建）：WorkBuddy 首开「当前登录」~5s；Trae 页面 0.64s
+> 出结构、1.8s 补齐程序位 / 当前登录；Qoder 页面 0.38s 出结构、4.4s 补齐积分 / 签到 /
+> 程序位。整改后同机冷启动：WorkBuddy「当前登录」~3.0s；Trae ~1.5s；Qoder 积分
+> ~0.4s 先落地、程序位 / 当前登录 ~1.7s。
+>
+> ⚠️ WorkBuddy 剩余的 ~3s 经复测**不是**插件探测造成的：把插件探测延后后
+> （PowerShell 从挂载 25ms 挪到 ~2.6s），状态时间仍是 ~3.0s。剩余开销主要在
+> WebView2 冷启动（进程启动 ~1.1s）与首次进程快照（`tasklist`，负载下 1.5s 级）。
+> 下一个真正的杠杆是把展示用进程快照换成 Win32 原生枚举，而不是继续挪探测。
+> 三页的病根不同，分别处理如下。
+
+**(1) WorkBuddy：`get_status` 的应用路径探测本来是热路径**
+
+- `build_app_status` / server `api_status` 对 `workbuddy_app_path_for` 的调用从**两次**
+  降为**一次**（`appPath` 与 `installed` 复用同一个 `PathBuf`）。
+- `windows_workbuddy_exe_path_for` 的顺序改为「磁盘缓存（校验文件存在）→ 运行进程 →
+  注册表 → 盘符候选」。此前「运行进程探测」在最前，每次状态查询都会 spawn 一个
+  PowerShell（实测 ~1s）。
+- 增加**进程内 TTL**：命中路径 60 秒（命中时校验文件存在，且**在锁外** stat，避免两个
+  区域串在同一把全局锁上）；「没找到」5 分钟。未安装的区域（常见：国内用户没装国际版）
+  此前每 60 秒轮询都要跑进程 + 注册表两次 PowerShell。
+- **负缓存期仍跑「便宜层」**（`WINDOWS_EXE_CHEAP_PROBE_INTERVAL` = 10 秒节流）：只查
+  环境变量默认目录与各盘符常见目录（纯 `is_file`，不 spawn 进程、不读注册表）。
+  没有这一层时，运行期间新装的客户端会一直显示「未安装」——而卡片上的「重新检测」
+  按钮与轮询走的是**同一条命令**，用户没有任何自救手段。跑空时只推进节流时间戳、
+  **不刷新结论时刻**，否则轮询会把负缓存无限续期。装在非默认目录（便携副本）的客户端
+  仍受 5 分钟窗口约束，这是本层的已知边界。
+- 启动前发现算出的路径不存在时**作废进程内结论**（`invalidate_windows_exe_cache`），
+  让用户下一次点「启动 / 重新检测」真正重探，而不是在同一个死路径上报满整个 TTL。
+- 前端 `useWorkbuddyStatusRefresh` 对**焦点 / 可见性事件**触发的刷新加 **10 秒最小
+  间隔**；60 秒定时轮询与首次激活走**无闸门**的 `refreshStatus`，闸门只装在事件包装
+  `refreshStatusOnEvent` 里（挂在 `refreshStatus` 内会把定时轮询一起吞掉）。时间戳用
+  `performance.now()`（单调）而非 `Date.now()`，初值 `-Infinity`（`performance.now()`
+  从页面加载起算，初值为 0 会吞掉首屏那次真实刷新）。
+- 账号页挂载时的 CLI / IDE / 插件探测**延后 1.2 秒**（`LOCAL_PROBE_DEFER_MS`），
+  把 4–6 个 PowerShell 从首屏前移到页面就绪后；它们只服务卡片上的辅助芯片。
+  ⚠️ 复测表明这**不改变**「当前登录」的 ~3.0s（它们不在关键路径上），保留它是为了
+  消除首屏前的进程风暴，而不是当作状态提速手段。
+
+**(2) Trae：展示路径不再用实时 tasklist**
+
+- `profile::overview_for` 的 `clientRunning` 改读共享进程快照
+  （`is_running_for_display`，1 秒 TTL）。实时 `is_running_for` 只留给
+  「写前守卫 / 结束进程」等需要真实时刻的路径。
+- 账号页 `loadSnapshot` 只取**当前区域**程序位的登录态（本页 `programsFor` 本来就按
+  区域过滤）；顶栏作用域菜单需要的两区登录名仍由 `useScopeStatus` 负责。
+- `loadTraeVariantStatuses` 加**在途单航班**（只合并并发，不做 TTL 缓存），
+  避免 App 的 `useTraeVariantRunning` 与页面同拍各探一次。
+
+**(3) Qoder：分层落地 + 签到状态有界并发**
+
+- 账号页 `loadEnrichment` 改为**每层落地**：程序位（本机探测，毫秒级）、积分、签到
+  各自返回就 setState；模块级 `enrichmentCache` 仍在三路都结束后**整批**写
+  （§12.7 的「同一时刻三份数据」不变）。
+- `checkinLoaded` 在**签到层**成功 / 失败时即置位（契约仍是「本轮区域快照已尝试过」），
+  不再等积分。
+- `qoder::checkin::status_for` 的逐账号上游查询改为**有界并发**（4，与
+  `status_map_for` 同上限）；输出仍按账号库原序。**写操作** `run_cycle_for` 仍保持
+  逐账号串行（风控）。
+
+**(4) Win32 原生进程枚举（2026-11-11 追加）**
+
+- 展示快照 / 实时枚举 / 写前守卫 / 运行路径探测全部改走 ToolHelp
+  （`CreateToolhelp32Snapshot` + `Process32FirstW/NextW`），不再 spawn `tasklist`
+  或 PowerShell 取进程表。按映像名取完整路径用
+  `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `QueryFullProcessImageNameW`。
+- 实测（本机 437 进程，独占 spike）：`tasklist /FO CSV /NH` **516–574ms** →
+  原生 **~9ms**（约 60 倍）；对 34 个匹配进程取完整路径 **~9ms**（旧 PowerShell
+  路径探测 ~0.9–1.1s）。
+- 预期收益：WorkBuddy 首开 ~3.0s → ~2.4s（剩余主要是 WebView2 冷启动 ~1.1s）；
+  Trae 页面 ~1.5s → ~1.0s；CodeBuddy / JetBrains / VS Code 插件探测不再每枚映像名
+  起一个 `tasklist`。
+- 边界：ToolHelp 不含 Idle（PID 0）；受保护进程取路径会拒绝访问（只对匹配的
+  WorkBuddy/CodeBuddy 映像取路径，失败回退磁盘缓存 / 注册表）；**注册表探测仍是
+  PowerShell**（非默认安装目录的兜底，不在热路径）。
+
+**护栏**（改这几处先看它们）：
+
+- `npm run check:scope` 的「冷启动提速（spec §12.9）」一条钉住：负缓存期的便宜层不得
+  调用会 spawn PowerShell 的两条探测、跑空不得续期、启动失败必须作废结论、Trae 单航班
+  必须清理、闸门不得挪进 `refreshStatus`、账号页探测必须接在延时常量上。
+  已做变异验证（把闸门移进 `refreshStatus` ⇒ 变红）。
+- `crates/buddy-switch-core/src/modules/process.rs` 的 `windows_exe_cache_tests`（4 例）
+  钉住：命中必须回验文件、负缓存 5 分钟过期、便宜探测只推进节流时间戳、作废后必须重探；
+  `win_proc_tests`（2 例）钉住原生快照必须包含当前进程、当前 PID 的路径必须可读。
+- `check:scope` 的「Win32 原生进程枚举」一条钉住：全量枚举不得回到 `tasklist`、
+  运行路径探测不得回到 `ps_output`、写前守卫必须走实时枚举。已做变异验证
+  （把 `enumerate_windows_process_rows` 改回 `tasklist` ⇒ 变红）。
+
+**明确未做**：Qoder 的最近成功快照**不**做跨重启持久化。它需要像 WorkBuddy 的
+`displayCreditMap` 那样，把「展示用缓存」与「排序 / 优先级用的实时值」分开，并在
+卡片 / 表格 / 抽屉三处标注「上次读数 · N 分钟前」；本轮先保证本地层先显示、
+上游层各自落地。
