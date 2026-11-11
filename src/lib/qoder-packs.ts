@@ -5,7 +5,7 @@
  * 后续的卡片浮层），散落两处必然漂移（本仓已有太多这类教训）。
  */
 
-import type { QoderCreditPack } from "@/lib/api";
+import type { QoderCreditPack, QoderPacksUnavailableReason } from "@/lib/api";
 import type { Translate } from "@/lib/i18n";
 
 /**
@@ -63,5 +63,57 @@ export function packSourceLabel(
     default:
       // 上游可能新增取值：给通用名，别把 `SOME_NEW_ENUM` 直接怼到用户脸上。
       return t("qoder.page.accounts.web.sourceOther");
+  }
+}
+
+/**
+ * 「拿不到逐包」的原因 → 统一的说明与下一步动作。
+ *
+ * ★ 浮层与详情抽屉**共用这一份**：两边各写一套时，已经出现过「未登录却显示
+ * 『已登录，读取逐包明细』」的文案漂移。`action` 只表达**该引导用户做什么**：
+ * - `login`：没有会话 / 会话过期 / 登错账号 ⇒ 先登录网页端；
+ * - `read`：上游抖动 / 未知 ⇒ 用已有会话再读一次。
+ */
+export interface PackUnavailableCopy {
+  title: string;
+  hint: string;
+  action: "login" | "read";
+}
+
+export function packUnavailableCopy(
+  t: Translate,
+  reason: QoderPacksUnavailableReason | undefined,
+): PackUnavailableCopy {
+  switch (reason) {
+    case "no_session":
+      return {
+        title: t("qoder.page.accounts.web.state.noSession"),
+        hint: t("qoder.page.accounts.web.state.noSessionHint"),
+        action: "login",
+      };
+    case "session_expired":
+      return {
+        title: t("qoder.page.accounts.web.state.expired"),
+        hint: t("qoder.page.accounts.web.state.expiredHint"),
+        action: "login",
+      };
+    case "session_mismatch":
+      return {
+        title: t("qoder.page.accounts.web.state.mismatch"),
+        hint: t("qoder.page.accounts.web.state.mismatchHint"),
+        action: "login",
+      };
+    case "upstream":
+      return {
+        title: t("qoder.page.accounts.web.state.upstream"),
+        hint: t("qoder.page.accounts.web.state.upstreamHint"),
+        action: "read",
+      };
+    default:
+      return {
+        title: t("qoder.page.accounts.web.state.unknown"),
+        hint: t("qoder.page.accounts.web.state.unknownHint"),
+        action: "read",
+      };
   }
 }

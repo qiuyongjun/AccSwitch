@@ -116,7 +116,7 @@ import {
 } from "@/lib/account-list-view";
 import { formatAbsoluteTime } from "@/lib/catalog-source";
 import { formatDate } from "@/lib/format";
-import { PACKS_TTL_MS, packSourceLabel, packState } from "@/lib/qoder-packs";
+import { PACKS_TTL_MS, packSourceLabel, packState, packUnavailableCopy } from "@/lib/qoder-packs";
 import {
   QuickActionButton,
   QuickRefreshAction,
@@ -1882,7 +1882,9 @@ function QoderAccountsPanel({
   const detailPacksNotice = useMemo(() => {
     if (!detail) return null;
     const web = webPacks[detail.uid];
-    if (web?.available) {
+    /* 还没取到结果（首次打开 / 取数失败）：不摆动作，避免把「未知」说成未登录或已登录。 */
+    if (!web) return null;
+    if (web.available) {
       return {
         text: t("qoder.page.accounts.web.packsNoticeReady", { n: String(web.packs.length) }),
         actionLabel: t("qoder.page.accounts.web.logout"),
@@ -1890,14 +1892,30 @@ function QoderAccountsPanel({
         busy: false,
       };
     }
-    if (api.isWebui()) return null;
+    /* 演示站按「桌面端」渲染（与浮层的 `demoModeEnabled || !api.isWebui()` 同口径），
+       否则这条引导在演示里永远看不到。 */
+    if (api.isWebui() && !demoModeEnabled) return null;
+
+    /* ★ 与浮层共用 `packUnavailableCopy`：未登录 / 会话过期 / 登错账号给「登录」，
+       上游抖动 / 未知给「读取」。此前这里无条件写「已登录，读取逐包明细」，
+       未登录时会谎报状态（用户报障，2026-11-11）。 */
+    const copy = packUnavailableCopy(t, web.reason);
+    const needLogin = copy.action === "login";
     return {
-      text: t("qoder.page.accounts.web.packsNotice"),
-      actionLabel: t("qoder.page.accounts.web.read"),
-      onAction: () => detail && void readPacks(detail),
-      busy: !!packsLoading[detail.uid],
+      text:
+        web.reason === "no_session"
+          ? t("qoder.page.accounts.web.packsNotice")
+          : `${copy.title}。${copy.hint}`,
+      actionLabel: needLogin
+        ? t("qoder.page.accounts.web.loginMenu")
+        : t("qoder.page.accounts.web.read"),
+      onAction: needLogin
+        ? () => detail && void openWebLogin(detail)
+        : () => detail && void readPacks(detail),
+      busy: needLogin ? false : !!packsLoading[detail.uid],
     };
-    // `logoutWebSession` / `readPacks` 每次渲染都是新函数，进依赖会让 memo 恒失效。
+    // `logoutWebSession` / `openWebLogin` / `readPacks` 每次渲染都是新函数，
+    // 进依赖会让 memo 恒失效；它们只读当前闭包里的 scope / detail。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail, webPacks, packsLoading, t]);
 

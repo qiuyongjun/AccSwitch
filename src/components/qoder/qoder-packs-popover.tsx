@@ -27,7 +27,7 @@ import * as api from "@/lib/api";
 import type { QoderWebCreditPacks } from "@/lib/api";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { useT } from "@/lib/i18n";
-import { packSourceLabel, packState } from "@/lib/qoder-packs";
+import { packSourceLabel, packState, packUnavailableCopy } from "@/lib/qoder-packs";
 
 export interface QoderPacksPopoverProps {
   /** `undefined` = 还没请求过；`null` = 请求过但没有结果（按未授权处理）。 */
@@ -53,38 +53,8 @@ function reasonView(
   t: ReturnType<typeof useT>,
   reason: api.QoderPacksUnavailableReason | undefined,
 ): { title: string; hint: string; needLogin: boolean } {
-  switch (reason) {
-    case "no_session":
-      return {
-        title: t("qoder.page.accounts.web.state.noSession"),
-        hint: t("qoder.page.accounts.web.state.noSessionHint"),
-        needLogin: true,
-      };
-    case "session_expired":
-      return {
-        title: t("qoder.page.accounts.web.state.expired"),
-        hint: t("qoder.page.accounts.web.state.expiredHint"),
-        needLogin: true,
-      };
-    case "session_mismatch":
-      return {
-        title: t("qoder.page.accounts.web.state.mismatch"),
-        hint: t("qoder.page.accounts.web.state.mismatchHint"),
-        needLogin: true,
-      };
-    case "upstream":
-      return {
-        title: t("qoder.page.accounts.web.state.upstream"),
-        hint: t("qoder.page.accounts.web.state.upstreamHint"),
-        needLogin: false,
-      };
-    default:
-      return {
-        title: t("qoder.page.accounts.web.state.unknown"),
-        hint: t("qoder.page.accounts.web.state.unknownHint"),
-        needLogin: true,
-      };
-  }
+  const copy = packUnavailableCopy(t, reason);
+  return { title: copy.title, hint: copy.hint, needLogin: copy.action === "login" };
 }
 
 export function QoderPacksPopover({
