@@ -54,10 +54,22 @@ jobs:
 
       # Tauri 需要 webkit2gtk；`cargo test --workspace` 会编 src-tauri，
       # 少了这些系统包会在链接期报一堆看不懂的 undefined symbol。
+      # ★ 与 build.yml 同一处加固：runner DNS 抖动会让 apt 卡两小时后 exit 100，
+      #   而重试几乎总能过。超时 30s 快速放弃坏镜像，整步最多 3 次。
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+          APT_OPTS="-o Acquire::Retries=10 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for attempt in 1 2 3; do
+            if sudo apt-get $APT_OPTS update \
+              && sudo apt-get $APT_OPTS install -y --fix-missing \
+                   libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev; then
+              exit 0
+            fi
+            echo "::warning::apt 安装失败（第 $attempt/3 次），30s 后重试"
+            sleep 30
+          done
+          echo "::error::apt 安装连续 3 次失败：runner 网络不可用，不是代码问题"
+          exit 1
 
       # ⚠️ **必须先生成 `dist/`，否则 rust job 在编译期就挂，与 fmt/clippy/test 无关。**
       #
