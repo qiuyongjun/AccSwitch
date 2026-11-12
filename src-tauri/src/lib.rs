@@ -490,6 +490,11 @@ pub fn run() {
             commands::restore_auto_backup,
             commands::get_auto_backup_config,
             commands::save_auto_backup_config,
+            // 云同步（WebDAV，手动上传 / 下载；只含账号与凭据，云端加密）。
+            commands::get_sync_config,
+            commands::save_sync_config,
+            commands::sync_upload,
+            commands::sync_download,
             // Q1 · 诊断包导出（只读；凭据闸门在 core 内，命中即拒绝发出）。
             commands::export_diagnostic,
             commands::switch_account,

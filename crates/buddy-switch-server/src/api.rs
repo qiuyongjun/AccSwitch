@@ -15,10 +15,11 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use buddy_switch_core::modules::{
-    account, auth_file, backup, checkin, client_limits, client_settings, config, credit_usage,
-    credits, diagnostics, export_import, growth_tasks, migrate, oauth, process, programs, qoder,
-    refresh, region::Region, region::RegionFilter, rotate, runtime_log, schedule, scheduler,
-    session, skill, switch, token_daily, token_stats, trae, travel, update, vscode_session,
+    account, auth_file, backup, checkin, client_limits, client_settings, cloud_sync, config,
+    credit_usage, credits, diagnostics, export_import, growth_tasks, migrate, oauth, process,
+    programs, qoder, refresh, region::Region, region::RegionFilter, rotate, runtime_log, schedule,
+    scheduler, session, skill, switch, token_daily, token_stats, trae, travel, update,
+    vscode_session,
 };
 use buddy_switch_gateway::unified::UnifiedGatewayConfig;
 use buddy_switch_gateway::GatewayProduct;
@@ -198,6 +199,13 @@ fn api_routes() -> Router {
             "/api/backup/auto/config",
             get(api_get_auto_backup_config).post(api_save_auto_backup_config),
         )
+        // 云同步（WebDAV，手动上传 / 下载；只含账号与凭据，云端加密）。
+        .route(
+            "/api/sync/config",
+            get(api_get_sync_config).post(api_save_sync_config),
+        )
+        .route("/api/sync/upload", post(api_sync_upload))
+        .route("/api/sync/download", post(api_sync_download))
         .route("/api/switch", post(api_switch))
         // Q1 · 诊断包导出（只读；凭据闸门在 core 内，命中即拒绝发出）。
         .route("/api/diagnostics/export", post(api_export_diagnostic))
@@ -2146,6 +2154,37 @@ async fn api_save_auto_backup_config(Json(body): Json<Value>) -> Response {
             format!("保存自动备份配置失败：{error}"),
             StatusCode::BAD_REQUEST,
         ),
+    }
+}
+
+/// GET /api/sync/config —— 读取 WebDAV 配置（**不回传密码**）。
+async fn api_get_sync_config() -> Response {
+    json_ok(cloud_sync::config_view())
+}
+
+/// POST /api/sync/config —— 保存 WebDAV 配置；密码留空沿用已保存值。
+async fn api_save_sync_config(Json(body): Json<Value>) -> Response {
+    // 兼容 `{ config: {...} }` 与平铺两种载荷。
+    let cfg = body.get("config").cloned().unwrap_or(body);
+    match cloud_sync::save_config(&cfg) {
+        Ok(view) => json_ok(view),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
+/// POST /api/sync/upload —— 把六个作用域的账号加密后上传到 WebDAV。
+async fn api_sync_upload() -> Response {
+    match cloud_sync::upload().await {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
+    }
+}
+
+/// POST /api/sync/download —— 从 WebDAV 下载并合并账号（写盘前自动快照）。
+async fn api_sync_download() -> Response {
+    match cloud_sync::download().await {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(error, StatusCode::BAD_REQUEST),
     }
 }
 

@@ -2044,6 +2044,26 @@ export interface AutoBackupConfig {
   enabled: boolean;
 }
 
+/** 云同步配置视图（**不含密码**，只说明是否已保存）。 */
+export interface SyncConfigView {
+  url: string;
+  username: string;
+  hasPassword: boolean;
+  hasSyncPassword: boolean;
+  /** 最近一次成功上传 / 下载的时间戳（毫秒）；`null` = 从未。 */
+  lastUploadAt: number | null;
+  lastDownloadAt: number | null;
+}
+
+/** 云同步上传结果。 */
+export interface SyncUploadResult {
+  uploadedAt: number;
+  bytes: number;
+  accounts: number;
+  /** 缺少可解析用户 ID、未参与同步的账号记录数（上传侧已剔除）。 */
+  skipped: number;
+}
+
 /**
  * P12 · C 路（base URL 重定向）的状态视图。
  *

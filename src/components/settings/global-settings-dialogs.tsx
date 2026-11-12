@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { AppSettingsGroups } from "@/components/app-settings";
 import { BackupSection } from "@/components/settings/backup-section";
 import { CacheSection } from "@/components/settings/cache-section";
+import { CloudSyncSection } from "@/components/settings/cloud-sync-section";
 import {
   Dialog,
   DialogContent,
@@ -89,6 +90,7 @@ export function BackupRestoreDialog({
       description={t("appSettings.global.backupDesc")}
     >
       <BackupSection />
+      <CloudSyncSection />
       <CacheSection />
     </GlobalSettingsDialog>
   );

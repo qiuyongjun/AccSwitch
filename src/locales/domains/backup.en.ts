@@ -98,4 +98,49 @@ export const en = {
   "backup.auto.restored": "Restored from backup",
   "backup.auto.restoreFailed": "Restore failed",
   "backup.auto.refresh": "Refresh",
+
+  // ---- Cloud sync (WebDAV, manual upload / download) ----
+  "sync.title": "Cloud sync (WebDAV)",
+  "sync.intro":
+    "Syncs accounts and sign-in credentials across all six scopes only — no config or gateway data. The cloud file is encrypted with the sync password.",
+  "sync.urlLabel": "WebDAV URL",
+  "sync.urlDesc":
+    "Full URL including the file name. Create the target folder in Nutstore first.",
+  "sync.urlPlaceholder": "https://dav.jianguoyun.com/dav/AccSwitch/accswitch-sync.enc",
+  "sync.usernameLabel": "WebDAV account",
+  "sync.usernamePlaceholder": "Nutstore sign-in email",
+  "sync.passwordLabel": "WebDAV app password",
+  "sync.passwordDesc":
+    "Generated in Nutstore under Security → Add app. This is not your sign-in password.",
+  "sync.passwordSaved": "Saved; leave blank to keep",
+  "sync.syncPasswordLabel": "Sync password",
+  "sync.syncPasswordDesc":
+    "Used to encrypt the cloud file. Both machines must use the same password; changing it requires uploading again.",
+  "sync.syncPasswordSaved": "Saved; leave blank to keep",
+  "sync.securityNote":
+    "The WebDAV password and sync password are stored in the local config file; only encrypted account data is uploaded.",
+  "sync.save": "Save config",
+  "sync.saving": "Saving…",
+  "sync.saved": "Sync config saved",
+  "sync.saveFailed": "Save failed",
+  "sync.loadFailed": "Failed to load sync config",
+  "sync.upload": "Upload to cloud",
+  "sync.uploading": "Uploading…",
+  "sync.uploadSuccess": "Uploaded {count} accounts ({size} KB)",
+  "sync.uploadSkipped": "{count} account records had no resolvable user ID and were skipped.",
+  "sync.uploadFailed": "Upload failed",
+  "sync.download": "Download from cloud",
+  "sync.downloading": "Downloading…",
+  "sync.downloadConfirmTitle": "Download and merge accounts?",
+  "sync.downloadConfirmBody":
+    "Cloud records with the same uid overwrite local ones; missing accounts are added. A snapshot is taken before writing and can be restored from “Restore from auto backup”.",
+  "sync.downloadConfirmOk": "Download and merge",
+  "sync.downloadConfirmCancel": "Cancel",
+  "sync.downloadSuccess": "Accounts merged: added {added} · overwritten {overwritten} · skipped {skipped}",
+  "sync.downloadPartial": "{count} scopes still failed",
+  "sync.downloadFailed": "Download failed",
+  "sync.lastUpload": "Last upload: {time}",
+  "sync.lastDownload": "Last download: {time}",
+  "sync.never": "Never",
+  "sync.notConfigured": "Fill in and save the config before uploading or downloading",
 };

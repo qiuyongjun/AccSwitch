@@ -1,5 +1,6 @@
 import type {
   AccountMeta, AccountStrategyMap, AccountTokenTodayResponse, ApiKeyRecord, AppStatus, AutoBackupConfig, AutoBackupEntry, AutoRotateConfig, CacheScanReport, CatalogSnapshot,
+  SyncConfigView,
   CheckinConfig, CheckinLog, CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CodeBuddyCnIdeStatus, ClientLimitsResponse, CreditExpiry,
   JetbrainsCodebuddyPluginStatus,
   VscodeCodebuddyPluginStatus,
@@ -3329,6 +3330,11 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "export_backup": return demoBackupEnvelope();
     case "list_auto_backups": return demoAutoBackups();
     case "get_auto_backup_config": return { enabled: true } satisfies AutoBackupConfig;
+    /* 云同步只读配置：演示站不预填地址（上传 / 下载由 DemoAction 遮罩）。 */
+    case "get_sync_config": return {
+      url: "", username: "", hasPassword: false, hasSyncPassword: false,
+      lastUploadAt: null, lastDownloadAt: null,
+    } satisfies SyncConfigView;
     default: throw new Error(t("shared.demo.error.missingReadOnly", { command }));
   }
 }

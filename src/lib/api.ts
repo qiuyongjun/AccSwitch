@@ -79,6 +79,8 @@ import type {
   ExtSyncResponse,
   SwitchConfig,
   SwitchResult,
+  SyncConfigView,
+  SyncUploadResult,
   TrashList,
   TravelConfig,
   TravelStatus,
@@ -221,6 +223,8 @@ const DEMO_READ_COMMANDS = new Set([
   // P7 全局备份**只读**命令（导出 / 自动备份列表 / 自动备份配置）。
   // 预览 / 导入 / 恢复 / 保存配置是**动作**，一律不进这里（由页面侧处理不可用）。
   "export_backup", "list_auto_backups", "get_auto_backup_config",
+  // 云同步的**只读**配置命令；上传 / 下载是动作，不进这里（演示站由页面侧遮罩）。
+  "get_sync_config",
   // 客户端限流台账（**只读**观测）：演示站需返回虚构数据，否则 build:demo 报错。
   "client_limits",
   // Skill 管理（**只读**清单）：演示站需返回虚构数据，否则 build:demo 报错。
@@ -356,6 +360,11 @@ const ROUTES: Record<string, Route> = {
   import_backup: { method: "POST", path: "/api/backup/import" },
   list_auto_backups: { method: "GET", path: "/api/backup/auto/list" },
   restore_auto_backup: { method: "POST", path: "/api/backup/auto/restore" },
+  // 云同步（WebDAV，手动上传 / 下载；只含账号与凭据，云端加密）。
+  get_sync_config: { method: "GET", path: "/api/sync/config" },
+  save_sync_config: { method: "POST", path: "/api/sync/config" },
+  sync_upload: { method: "POST", path: "/api/sync/upload" },
+  sync_download: { method: "POST", path: "/api/sync/download" },
   // Q1 · 诊断包导出（只读；凭据闸门在 core，命中即拒绝发出）。
   export_diagnostic: { method: "POST", path: "/api/diagnostics/export" },
   // 运行日志（本工具自身，排查问题用）：读 / 清 / 开目录。
@@ -1183,6 +1192,39 @@ export function getAutoBackupConfig(): Promise<AutoBackupConfig> {
 /** P7 T02：保存自动备份配置（关掉后不再产生新备份，已产生的保留）。 */
 export function saveAutoBackupConfig(config: AutoBackupConfig): Promise<AutoBackupConfig> {
   return call<AutoBackupConfig>("save_auto_backup_config", { config });
+}
+
+/** 云同步：读取 WebDAV 配置（**不含密码**）。 */
+export function getSyncConfig(): Promise<SyncConfigView> {
+  return call<SyncConfigView>("get_sync_config");
+}
+
+/**
+ * 云同步：保存 WebDAV 配置。
+ *
+ * `password` / `syncPassword` 留空 = 沿用已保存的值（后端不回传密码，前端也不回显）。
+ */
+export function saveSyncConfig(config: {
+  url: string;
+  username: string;
+  password: string;
+  syncPassword: string;
+}): Promise<SyncConfigView> {
+  return call<SyncConfigView>("save_sync_config", { config });
+}
+
+/** 云同步：把六个作用域的账号加密后上传到 WebDAV。 */
+export function syncUpload(): Promise<SyncUploadResult> {
+  return call<SyncUploadResult>("sync_upload");
+}
+
+/**
+ * 云同步：从 WebDAV 下载并合并账号。
+ *
+ * 合并语义：同 uid **覆盖**、缺失新增；写盘前自动快照（后端 D18）。
+ */
+export function syncDownload(): Promise<ImportSummary> {
+  return call<ImportSummary>("sync_download");
 }
 
 export function switchAccount(args: {

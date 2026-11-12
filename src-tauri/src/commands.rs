@@ -9,10 +9,10 @@ use std::sync::Mutex;
 
 use buddy_switch_core::modules::{
     account, app_prefs, auth_file, backup, cache, capability, checkin, client_limits,
-    client_settings, config, credit_usage, credits, diagnostics, export_import, growth_tasks,
-    migrate, oauth, process, programs, qoder, refresh, region::Region, region::RegionFilter,
-    rotate, runtime_log, session, skill, switch, token_daily, token_stats, trae, travel, update,
-    vscode_session,
+    client_settings, cloud_sync, config, credit_usage, credits, diagnostics, export_import,
+    growth_tasks, migrate, oauth, process, programs, qoder, refresh, region::Region,
+    region::RegionFilter, rotate, runtime_log, session, skill, switch, token_daily, token_stats,
+    trae, travel, update, vscode_session,
 };
 use tauri::{Emitter, Manager};
 // P5 §2.5 第 (2) 条：capability **默认拒绝**。表数据只在 core（`product_spec`），本文件只查表。
@@ -1290,6 +1290,30 @@ pub fn save_auto_backup_config(config: Value) -> Result<Value, String> {
     config::save_auto_backup_config(&config)
         .map_err(|error| format!("保存自动备份配置失败：{error}"))?;
     Ok(config::load_auto_backup_config())
+}
+
+/// 云同步：读取 WebDAV 配置（**不回传密码**，只说明是否已保存）。
+#[tauri::command]
+pub fn get_sync_config() -> Result<Value, String> {
+    Ok(cloud_sync::config_view())
+}
+
+/// 云同步：保存 WebDAV 配置；密码留空表示沿用已保存的值。
+#[tauri::command(rename_all = "camelCase")]
+pub fn save_sync_config(config: Value) -> Result<Value, String> {
+    cloud_sync::save_config(&config)
+}
+
+/// 云同步：把六个作用域的账号加密后上传到 WebDAV。
+#[tauri::command]
+pub async fn sync_upload() -> Result<Value, String> {
+    cloud_sync::upload().await
+}
+
+/// 云同步：从 WebDAV 下载并合并账号（同 uid 覆盖，写盘前自动快照）。
+#[tauri::command]
+pub async fn sync_download() -> Result<Value, String> {
+    cloud_sync::download().await
 }
 
 /// 打开系统设置授权面板。默认「完全磁盘访问」（该 anchor 各版本均有效）；

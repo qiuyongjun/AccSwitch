@@ -33,6 +33,8 @@ pub mod client_limits;
 // 上游客户端 settings.json 统一托管（读 · 编辑 · 备份 · 恢复 · 差异比对）——
 // 覆盖 WorkBuddy/Trae 的 CN/Global 全部程序位，**外科式文本编辑**保留原排版。
 pub mod client_settings;
+// 账号云同步（WebDAV，手动上传 / 下载）：只同步六个作用域的账号，云端加密存储。
+pub mod cloud_sync;
 pub mod codebuddy_cli;
 pub mod codebuddy_cn_ide;
 // P9 · 桌面悬浮窗的**只读**数据模型 + provider（跨来源的会话 / 任务状态）。
