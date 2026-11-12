@@ -55,7 +55,10 @@ function refreshIfStale(region: Region) {
   if (ids.length === 0) return;
   const last = state.creditFullRefreshedAt[region] ?? 0;
   if (last === 0 || Date.now() - last >= CREDIT_REFRESH_TTL_MS) {
-    void state.refreshCredits(ids, { silent: true, region });
+    /* 不静默：进入页面就是可见上下文，静默刷新让用户看不出在刷新，
+       只好再点一次「一键刷新」（白打一轮上游）。卡片对 loading 的处理是
+       「有读数不顶掉内容、下方补一行小字」，不会闪烁。 */
+    void state.refreshCredits(ids, { region });
   } else {
     void state.ensureCredits(ids, region);
   }
