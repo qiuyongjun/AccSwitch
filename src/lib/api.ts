@@ -533,6 +533,10 @@ const ROUTES: Record<string, Route> = {
   trae_export_accounts_to_path: { method: "POST", path: "/api/trae/accounts/export-to-path" },
   trae_preview_import_accounts: { method: "POST", path: "/api/trae/accounts/import/preview" },
   trae_import_accounts: { method: "POST", path: "/api/trae/accounts/import" },
+  // 跨电脑搬账号：判定 + 迁移包（含设备身份，落到快照槽位后走既有切换）。
+  trae_login_readiness: { method: "POST", path: "/api/trae/login/readiness" },
+  trae_carrier_export: { method: "POST", path: "/api/trae/login/carrier/export" },
+  trae_carrier_import: { method: "POST", path: "/api/trae/login/carrier/import" },
   trae_group_op: { method: "POST", path: "/api/trae/groups" },
   trae_checkin: { method: "POST", path: "/api/trae/checkin" },
   trae_checkin_cancel: { method: "POST", path: "/api/trae/checkin/cancel" },
@@ -3031,6 +3035,69 @@ export function traeImportAccounts(
     fileText,
     indexes,
   });
+}
+
+/**
+ * 判定某账号「现在能不能不登录就切过去」（只读）。
+ *
+ * 三种可行来源：`snapshot`（本机已有快照）/ `live_client`（客户端正登录着它，
+ * 切换会自动补存）/ `needs_carrier`（要导迁移包，否则只能重新登录一次）。
+ */
+export interface TraeLoginReadiness {
+  userId: string;
+  verdict: "snapshot" | "live_client" | "needs_carrier" | "unknown_account";
+  reason: string;
+  hasSnapshot: boolean;
+  clientLoggedIn: boolean;
+  canCaptureHere: boolean;
+}
+
+export function traeLoginReadiness(
+  userId: string,
+  variant?: TraeVariantId | null,
+): Promise<TraeLoginReadiness> {
+  return call("trae_login_readiness", { userId, variant: variant ?? null });
+}
+
+/** 迁移包导出结果（**不含凭据**，只有计数与脱敏设备号）。 */
+export interface TraeCarrierSummary {
+  userId: string;
+  deviceIdMasked: string;
+  sourceApp: string;
+  keyCount: number;
+  fileCount: number;
+  bytes: number;
+  hasSessionDb: boolean;
+  path: string;
+}
+
+/**
+ * 导出登录态迁移包 —— 与「导出账号」不是一回事。
+ *
+ * 账号导出只带 JWT + refresh_token，目标机导入后仍要重新登录一次；
+ * 迁移包带的是客户端登录态本体（含设备身份与会话库），落地即可用。
+ * 需要客户端已关闭、且当前登录的就是该账号。
+ */
+export function traeCarrierExport(
+  userId: string,
+  path: string,
+  variant?: TraeVariantId | null,
+): Promise<TraeCarrierSummary> {
+  return call("trae_carrier_export", { userId, path, variant: variant ?? null });
+}
+
+/** 迁移包导入结果：落地槽位 + 落地后的就绪判定。 */
+export function traeCarrierImport(
+  text: string,
+  variant?: TraeVariantId | null,
+): Promise<{
+  ok: boolean;
+  /** 账号库里原本没有这条记录、本次补建了一条（切换只认 uid，但卡片来自账号库）。 */
+  createdAccount: boolean;
+  materialized: { userId: string; slot: string; skipped: boolean; fileCount: number; bytes: number };
+  readiness: TraeLoginReadiness;
+}> {
+  return call("trae_carrier_import", { text, variant: variant ?? null });
 }
 
 /** 分组操作：`create` / `update` / `delete` / `move`。 */

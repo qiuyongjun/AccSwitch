@@ -425,6 +425,15 @@ fn api_routes() -> Router {
             post(api_trae_preview_import),
         )
         .route("/api/trae/accounts/import", post(api_trae_import_accounts))
+        .route("/api/trae/login/readiness", post(api_trae_login_readiness))
+        .route(
+            "/api/trae/login/carrier/export",
+            post(api_trae_carrier_export),
+        )
+        .route(
+            "/api/trae/login/carrier/import",
+            post(api_trae_carrier_import),
+        )
         .route("/api/trae/groups", post(api_trae_group_op))
         .route("/api/trae/checkin/status", get(api_trae_checkin_status))
         // issue #47：逐账号「今日」只读重取（与 WB 的同名命令同构）。
@@ -3921,6 +3930,77 @@ async fn api_trae_export_accounts(Json(body): Json<Value>) -> Response {
         Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
         Err(error) => json_err(
             format!("导出账号失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/readiness —— 判定某账号能否不登录就切过去（只读）。
+async fn api_trae_login_readiness(Json(body): Json<Value>) -> Response {
+    let user_id = body
+        .get("userId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::login_readiness_for(variant, &user_id)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("判定登录态就绪情况失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/carrier/export —— 导出登录态迁移包。
+async fn api_trae_carrier_export(Json(body): Json<Value>) -> Response {
+    let user_id = body
+        .get("userId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::carrier_export_for(variant, &user_id, &path)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("导出迁移包失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/carrier/import —— 导入登录态迁移包（文件内容）。
+async fn api_trae_carrier_import(Json(body): Json<Value>) -> Response {
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::carrier_import_text_for(variant, &text)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("导入迁移包失败: {error}"),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }

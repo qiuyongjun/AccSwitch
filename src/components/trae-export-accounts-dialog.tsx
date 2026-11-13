@@ -86,6 +86,20 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
   const [error, setError] = useState("");
   /** 桌面端导出成功后的文件路径（webui 用浏览器下载，无此状态）。 */
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  /**
+   * 是否**同时打包登录态**（生成迁移包）。
+   *
+   * 与「导出账号」是两种文件：那个只有 JWT + refresh_token，目标机仍要重登一次；
+   * 迁移包带客户端登录态本体（含设备身份），目标机导入后可直接切。
+   * 只有桌面端能给路径，webui 无系统保存对话框 ⇒ 该选项不渲染。
+   */
+  const [packLogin, setPackLogin] = useState(false);
+  /** 迁移包摘要（`null` = 本次不是迁移包导出）。 */
+  const [carrierInfo, setCarrierInfo] = useState<{
+    deviceIdMasked: string;
+    fileCount: number;
+    hasSessionDb: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -93,16 +107,20 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
       setBusy(false);
       setError("");
       setSavedPath(null);
+      setPackLogin(false);
+      setCarrierInfo(null);
     }
   }, [open]);
 
   const allSelected = accounts.length > 0 && selected.size === accounts.length;
 
   function toggleAll() {
+    setPackLogin(false);
     setSelected(allSelected ? new Set() : new Set(accounts.map((a) => a.userId)));
   }
 
   function toggle(userId: string) {
+    setPackLogin(false);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(userId)) next.delete(userId);
@@ -117,6 +135,7 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
     setError("");
     try {
       const ids = [...selected];
+      if (packLogin && ids.length !== 1) return;
       if (api.isWebui()) {
         // webui：浏览器 Blob 下载
         const res = await api.traeExportAccounts(ids, variant);
@@ -126,6 +145,22 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
       } else {
         // 桌面端：系统保存对话框选位置 → 后端写入该路径（WKWebView 不支持 `<a download>`）
         const { save } = await import("@tauri-apps/plugin-dialog");
+        if (packLogin) {
+          const path = await save({
+            title: t("trae.comp.export.saveTitle"),
+            defaultPath: `trae-login-${ids[0]}.json`,
+            filters: [{ name: "JSON", extensions: ["json"] }],
+          });
+          if (!path) return;
+          const res = await api.traeCarrierExport(ids[0], path, variant);
+          setCarrierInfo({
+            deviceIdMasked: res.deviceIdMasked,
+            fileCount: res.fileCount,
+            hasSessionDb: res.hasSessionDb,
+          });
+          setSavedPath(res.path);
+          return;
+        }
         const path = await save({
           title: t("trae.comp.export.saveTitle"),
           defaultPath: exportFileName(),
@@ -184,6 +219,25 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
                 </label>
               ))}
             </div>
+            {!api.isWebui() && (
+              <div className="space-y-1 rounded-md border px-3 py-2">
+                <label className="flex cursor-pointer items-center gap-3">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-primary"
+                    checked={packLogin}
+                    // 迁移包只能装「当前登录着的那个账号」：多选没有意义，
+                    // 先在这里挡住，比让后端逐条报错友好。
+                    disabled={selected.size !== 1}
+                    onChange={(e) => setPackLogin(e.target.checked)}
+                  />
+                  <span className="text-sm">{t("trae.comp.export.packLogin")}</span>
+                </label>
+                <p className="pl-7 text-xs text-muted-foreground">
+                  {t("trae.comp.export.packLoginHint")}
+                </p>
+              </div>
+            )}
           </>
         )}
 
@@ -198,6 +252,14 @@ export function TraeExportAccountsDialog({ open, onOpenChange, accounts, variant
             <AlertTitle>{t("trae.comp.export.successTitle")}</AlertTitle>
             <AlertDescription className="space-y-2">
               <span className="block break-all font-mono text-xs">{savedPath}</span>
+              {carrierInfo && (
+                <span className="block text-xs text-muted-foreground">
+                  {t("trae.comp.export.carrierPacked", {
+                    device: carrierInfo.deviceIdMasked,
+                    files: String(carrierInfo.fileCount),
+                  })}
+                </span>
+              )}
               <Button variant="outline" size="sm" onClick={() => void revealInDir(savedPath)}>
                 <FolderOpen />
                 {revealLabel(t)}
