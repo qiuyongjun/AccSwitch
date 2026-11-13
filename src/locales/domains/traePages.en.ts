@@ -21,6 +21,7 @@ export const en = {
   "trae.page.accounts.switchLoadingManual": "{line} will not be restarted",
   "trae.page.accounts.actionSaveLogin": "Save sign-in state",
   "trae.page.accounts.saveLoginNoProgram": "This account is not signed in on any Trae client, so its sign-in state cannot be saved",
+  "trae.page.accounts.autosaveSaved": "Sign-in state saved automatically for {names}",
   "trae.page.accounts.actionRefreshJwt": "Refresh JWT",
   "trae.page.accounts.actionThaw": "Clear cooldown",
   "trae.page.accounts.actionDelete": "Delete account",

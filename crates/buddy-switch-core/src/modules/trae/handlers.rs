@@ -712,6 +712,31 @@ pub fn save_login_for(variant: TraeVariant, user_id: &str) -> Result<Value, Stri
     Ok(json!({ "userId": user_id, "fileCount": files }))
 }
 
+/// 自动补存登录态快照（**无需用户操作**）：遍历当前可用的两条程序位，
+/// 把「客户端此刻登录着、但还没有快照」的账号补存一份。
+///
+/// 设计约束见 [`profile::autosave_login_if_missing_for`]：只补缺、不覆盖，
+/// 客户端运行时一律跳过（不为自动保存去关用户的 IDE）。
+/// 失败只进 `errors`，**不阻断页面** —— 自动保存失败时用户仍可手动点「保存登录态」。
+pub fn autosave_logins() -> Value {
+    let mut saved: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for variant in TraeVariant::all() {
+        match profile::autosave_login_if_missing_for(variant) {
+            Ok(Some((user_id, file_count))) => saved.push(json!({
+                "variant": variant.as_str(),
+                "variantLabel": variant.display_name(),
+                "userId": user_id,
+                "name": account::display_name_for(variant, &user_id),
+                "fileCount": file_count,
+            })),
+            Ok(None) => {}
+            Err(error) => errors.push(format!("{}: {error}", variant.display_name())),
+        }
+    }
+    json!({ "saved": saved, "errors": errors })
+}
+
 /// 备份当前登录态到指定账号槽位（等价于 [`save_login`]，语义更贴近前端的「备份」按钮）。
 pub fn backup_profile(user_id: &str) -> Result<Value, String> {
     backup_profile_for(TraeVariant::default(), user_id)
@@ -723,6 +748,7 @@ pub fn backup_profile(user_id: &str) -> Result<Value, String> {
 /// 这个入口虽然不写 `currentAccount`，但它同样把「客户端此刻的登录态」贴到
 /// `profiles/<user_id>/` 下 —— 少了守卫，快照污染与 `save_login` 完全一样。
 pub fn backup_profile_for(variant: TraeVariant, user_id: &str) -> Result<Value, String> {
+    let _guard = profile::profile_op_lock();
     profile::ensure_save_target_matches_client(variant, user_id)?;
     let files = profile::backup_to_slot_for(variant, user_id)?;
     Ok(json!({ "slot": user_id, "fileCount": files }))
@@ -738,6 +764,7 @@ pub fn restore_profile(user_id: &str) -> Result<Value, String> {
 
 /// 用指定槽位的快照覆盖客户端登录态（按变体分家）。
 pub fn restore_profile_for(variant: TraeVariant, user_id: &str) -> Result<Value, String> {
+    let _guard = profile::profile_op_lock();
     let files = profile::restore_from_slot_for(variant, user_id)?;
     Ok(json!({ "slot": user_id, "fileCount": files }))
 }

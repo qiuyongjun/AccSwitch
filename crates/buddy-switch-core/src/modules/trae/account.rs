@@ -12,7 +12,7 @@
 //! 两套形态之间的转换集中在 [`account_view`]，**不要在别处临时拼装**：
 //! 任一通道漏一个字段，前端就会在某些入口拿到 `undefined`，而这在编译期看不出来。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -250,6 +250,26 @@ pub fn entries_for(variant: TraeVariant) -> Vec<(String, RawAccount)> {
         .map(|account| (resolve_user_id(&account), account))
         .filter(|(uid, _)| !uid.is_empty())
         .collect()
+}
+
+/// 清掉同一 uid 的重复账号，**保留最先出现的一条**，返回移除条数。
+///
+/// ## 为什么保留第一条
+///
+/// 全局备份导入的「覆盖」是就地改写**第一个**同 uid 记录（见
+/// `trae::export_import::merge_import_record`），因此合并完成后，同 uid 的多份里
+/// 只有第一条是本次导入的结果；其余都是历史缺陷（旧版导入按 `uid` 取键，而 Trae
+/// 记录只有 `UserID`，永远匹配不到 ⇒ 每导一次就多一份）留下的残影。
+///
+/// 无 uid 的脏记录不参与去重：它们本来就会被读侧过滤，贸然删除只会丢数据。
+pub fn drop_duplicate_accounts(accounts: &mut Vec<RawAccount>) -> usize {
+    let mut seen: HashSet<String> = HashSet::new();
+    let before = accounts.len();
+    accounts.retain(|record| {
+        let uid = resolve_user_id(record);
+        uid.is_empty() || seen.insert(uid)
+    });
+    before - accounts.len()
 }
 
 // ---------------------------------------------------------------------------

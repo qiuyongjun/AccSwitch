@@ -29,6 +29,8 @@ export const zh = {
   "trae.page.accounts.actionSaveLogin": "保存登录态",
   // 保存的目标只能是「该账号此刻登录着的程序位」；一个都没有时如实报错，不静默跳过。
   "trae.page.accounts.saveLoginNoProgram": "该账号当前没有登录在任何 Trae 客户端上，无法保存登录态",
+  // 自动补存：用户不需要知道「登录态快照」是什么，只在真的补存成功时轻提示一次。
+  "trae.page.accounts.autosaveSaved": "已自动保存 {names} 的登录态",
   "trae.page.accounts.actionRefreshJwt": "刷新 JWT",
   "trae.page.accounts.actionThaw": "解除冷却",
   "trae.page.accounts.actionDelete": "删除账号",

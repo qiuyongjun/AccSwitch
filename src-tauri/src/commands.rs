@@ -3559,6 +3559,17 @@ pub async fn trae_save_login(user_id: String, variant: Option<String>) -> Result
         .map_err(|error| format!("保存登录态失败: {error}"))?
 }
 
+/// POST /api/trae/login/autosave —— 自动补存当前登录账号的快照（幂等、无需用户操作）。
+///
+/// 前端在账号页挂载 / 窗口重新聚焦时调一次即可：没有可补的账号时后端立刻返回
+/// 空列表（成本是一次目录存在性判断 + 一次进程探测）。
+#[tauri::command]
+pub async fn trae_autosave_login() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(trae::handlers::autosave_logins)
+        .await
+        .map_err(|error| format!("自动保存登录态失败: {error}"))
+}
+
 /// POST /api/trae/profiles/backup —— 备份当前登录态到槽位。
 #[tauri::command(rename_all = "camelCase")]
 pub async fn trae_backup_profile(

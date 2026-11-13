@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::modules::export_import::{ConflictPolicy, MergeOutcome, TokenPolicy};
 use crate::modules::trae::account::{self, RawAccount};
 use crate::modules::trae::variant::TraeVariant;
 
@@ -97,23 +98,20 @@ pub fn preview_accounts(text: &str) -> Result<Value, String> {
     Ok(json!({ "accounts": items, "total": array.len() }))
 }
 
-/// 单条导入记录的合并动作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MergeOutcome {
-    /// 追加为新账号。
-    Appended,
-    /// 覆盖同 uid 的本地账号。
-    Overwritten,
-    /// 缺少 jwt，跳过。
-    Skipped,
-}
-
 /// 纯函数：把一条导入记录合并进账号列表。
 ///
-/// 按 uid 去重：同 uid 覆盖（以导入记录为准）；无法确定 uid 时按追加处理——
+/// 按 uid 去重：命中同 uid 时依 [`ConflictPolicy`] 处理；无法确定 uid 时按追加处理——
 /// Trae 的 uid 可从 JWT 现算，追加后 `entries()` 仍能解析出归属，不会变成孤儿记录。
-fn merge_import_record(accounts: &mut Vec<RawAccount>, item: &Value) -> MergeOutcome {
-    if record_jwt(item).is_none() {
+///
+/// ⚠️ 全局备份导入**必须**走这里（而不是通用的 `modules::export_import::merge_import_record`）：
+/// 后者的身份键是 `uid`，而 Trae 记录只有 `UserID` ⇒ 永远匹配不到 ⇒ 选「覆盖」也照样增行。
+pub fn merge_import_record(
+    accounts: &mut Vec<RawAccount>,
+    item: &Value,
+    conflict: ConflictPolicy,
+    tokens: TokenPolicy,
+) -> MergeOutcome {
+    if matches!(tokens, TokenPolicy::Require) && record_jwt(item).is_none() {
         return MergeOutcome::Skipped;
     }
     // 反序列化成持久化形态：未知字段被忽略、缺失字段走 `#[serde(default)]`，
@@ -123,11 +121,27 @@ fn merge_import_record(accounts: &mut Vec<RawAccount>, item: &Value) -> MergeOut
         Err(_) => return MergeOutcome::Skipped,
     };
     let incoming_uid = account::resolve_user_id(&incoming);
-    if !incoming_uid.is_empty() {
-        if let Some(existing) = accounts
-            .iter_mut()
-            .find(|record| account::resolve_user_id(record) == incoming_uid)
-        {
+    let matched = (!incoming_uid.is_empty())
+        .then(|| {
+            accounts
+                .iter()
+                .position(|record| account::resolve_user_id(record) == incoming_uid)
+        })
+        .flatten();
+    let Some(index) = matched else {
+        accounts.push(incoming);
+        return MergeOutcome::Appended;
+    };
+
+    match conflict {
+        // `Ask` 后端不可达（UI 逐条裁决）；真收到即按「保留本地」这一安全默认处理。
+        ConflictPolicy::KeepLocal | ConflictPolicy::Ask => MergeOutcome::KeptLocal,
+        ConflictPolicy::KeepBoth => {
+            accounts.push(incoming);
+            MergeOutcome::KeptBoth
+        }
+        ConflictPolicy::Overwrite => {
+            let existing = &accounts[index];
             let mut replaced = incoming;
             // 导入记录缺 UserID 时保留本地值：分组、设备映射、积分历史都按 uid 索引，
             // 抹掉这个键会让它们全部断链。
@@ -139,7 +153,20 @@ fn merge_import_record(accounts: &mut Vec<RawAccount>, item: &Value) -> MergeOut
             {
                 replaced.user_id = existing.user_id.clone();
             }
-            // 同为「缺乏」语义的字段也做一次保留，避免导入低配版本文件时丢信息。
+            // 「缺乏 ≠ 应当清空」：导入文件可能来自旧版本（没有这些键），也可能
+            // 是**不含凭据**的备份（jwt / refresh_token 为空）。此时保留本地已知值，
+            // 否则「覆盖」会把能用的账号变成需要重新登录的账号。
+            if replaced.jwt.trim().is_empty() {
+                replaced.jwt = existing.jwt.clone();
+            }
+            if replaced
+                .refresh_token
+                .as_deref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                replaced.refresh_token = existing.refresh_token.clone();
+            }
             if replaced.added_at.is_none() {
                 replaced.added_at = existing.added_at.clone();
             }
@@ -155,12 +182,10 @@ fn merge_import_record(accounts: &mut Vec<RawAccount>, item: &Value) -> MergeOut
             if replaced.remark.is_none() {
                 replaced.remark = existing.remark.clone();
             }
-            *existing = replaced;
-            return MergeOutcome::Overwritten;
+            accounts[index] = replaced;
+            MergeOutcome::Overwritten
         }
     }
-    accounts.push(incoming);
-    MergeOutcome::Appended
 }
 
 /// 纯函数：解析文件文本并按选中索引把记录合并进账号列表，返回计数。
@@ -176,13 +201,22 @@ pub fn merge_import_records(
     for &index in indexes {
         match array.get(index) {
             None => result.skipped += 1,
-            Some(item) => match merge_import_record(accounts, item) {
+            // ★ 账号级导入：`(Overwrite, Require)` —— 与改造前逐字节一致。
+            Some(item) => match merge_import_record(
+                accounts,
+                item,
+                ConflictPolicy::Overwrite,
+                TokenPolicy::Require,
+            ) {
                 MergeOutcome::Appended => result.imported += 1,
                 MergeOutcome::Overwritten => {
                     result.imported += 1;
                     result.overwritten += 1;
                 }
-                MergeOutcome::Skipped => result.skipped += 1,
+                // 账号级走 `Overwrite`，其余不可达；防御性计入跳过。
+                MergeOutcome::KeptLocal | MergeOutcome::KeptBoth | MergeOutcome::Skipped => {
+                    result.skipped += 1
+                }
             },
         }
     }

@@ -679,6 +679,7 @@ pub fn run() {
             commands::qoder_usage,
             commands::trae_merge_legacy_regions,
             commands::trae_save_login,
+            commands::trae_autosave_login,
             commands::trae_backup_profile,
             commands::trae_restore_profile,
             commands::trae_delete_profile,

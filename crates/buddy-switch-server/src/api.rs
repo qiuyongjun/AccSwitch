@@ -447,6 +447,7 @@ fn api_routes() -> Router {
         .route("/api/trae/legacy-merge", post(api_trae_legacy_merge))
         .route("/api/trae/profiles", get(api_trae_profiles))
         .route("/api/trae/login/save", post(api_trae_save_login))
+        .route("/api/trae/login/autosave", post(api_trae_autosave_login))
         .route("/api/trae/profiles/backup", post(api_trae_backup_profile))
         .route("/api/trae/profiles/restore", post(api_trae_restore_profile))
         .route("/api/trae/profiles/delete", post(api_trae_delete_profile))
@@ -4129,6 +4130,20 @@ async fn api_trae_save_login(Json(body): Json<Value>) -> Response {
         Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
         Err(error) => json_err(
             format!("保存登录态失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/autosave —— 自动补存登录态快照（幂等，无 body）。
+///
+/// 账号页挂载 / 窗口重新聚焦时调用；失败已经在 core 层收敛进 `errors`，
+/// 这里**不返回 4xx/5xx**：自动保存是尽力而为，不该让页面报错。
+async fn api_trae_autosave_login() -> Response {
+    match tokio::task::spawn_blocking(trae::handlers::autosave_logins).await {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(
+            format!("自动保存登录态失败: {error}"),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }

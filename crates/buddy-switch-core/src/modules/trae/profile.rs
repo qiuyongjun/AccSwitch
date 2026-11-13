@@ -31,6 +31,7 @@
 //! 全量镜像会让每个快照膨胀到数百 MB 且显著拖慢切换。核心文件清单见 [`CORE_ENTRIES`]。
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -942,6 +943,22 @@ impl ProfileInfo {
 /// 「最近一次切换前保存」的兜底槽位名。
 pub const LAST_SLOT: &str = "last";
 
+/// 串行化所有「读写客户端登录态」的操作（切换 / 保存 / 自动补存 / 备份 / 恢复）。
+///
+/// 自动补存是在后台触发的（页面挂载、窗口重新聚焦），完全可能与用户点击的切换重叠：
+/// 两边都在复制或覆盖同一批客户端文件（`Network/`、`state.vscdb` 及其 WAL），
+/// 交叠时会产出一份半新半旧的快照 —— 那正是本模块反复记录过的「切完变未登录」事故形态。
+/// 一把进程内互斥把这几个写路径排成队；读路径（`overview` 等）不参与，避免被阻塞。
+///
+/// ⚠️ 已在锁内的函数**不得**再调用另一个会加锁的公开入口（非可重入）：
+/// [`switch_account`] 内的自动补存走 `autosave_login_if_missing_locked`。
+pub(crate) fn profile_op_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// 记录「当前活跃账号 uid」的文件（位于该变体的 `profiles` 目录下）。
 fn current_account_file_for(variant: TraeVariant) -> PathBuf {
     paths::profiles_dir_for(variant).join("current_account.txt")
@@ -1533,10 +1550,18 @@ pub fn delete_slot_for(variant: TraeVariant, slot: &str) -> Result<(), String> {
 /// 「一处说没装、另一处说没启动」的自相矛盾。
 fn missing_snapshot_reason(variant: TraeVariant, target: &str, can_save: bool) -> String {
     if can_save {
-        format!("账号 {target} 的登录态快照不存在，请先保存该账号的登录态")
+        // 用户不知道「登录态快照」是什么，也不该被要求手动保存（2026-11-13 报障：
+        // 提示「请先保存」而保存按钮是禁用的）。文案只给**用户真正要做的一件事**：
+        // 去客户端登录这个账号；快照由本工具自动补存。
+        format!(
+            "账号 {target} 还没有登录态快照（备份只带账号凭据，不带客户端登录态）。\
+             请先在 {} 客户端里登录该账号 —— 登录后关闭客户端或切换到其他账号时，\
+             本工具会自动保存它的登录态；保存后即可切换。",
+            variant.display_name()
+        )
     } else {
         format!(
-            "账号 {target} 的登录态快照不存在，且现在也无法保存 —— {}",
+            "账号 {target} 的登录态快照不存在，且现在也无法自动保存 —— {}",
             platform::data_dir_missing_reason(variant)
         )
     }
@@ -1633,6 +1658,8 @@ pub fn switch_account<F>(options: &SwitchOptions, mut on_step: F) -> SwitchOutco
 where
     F: FnMut(&SwitchStep),
 {
+    // 与后台自动补存 / 保存 / 恢复排成队：它们都在读写同一份客户端登录态。
+    let _profile_guard = profile_op_lock();
     let variant = options.variant;
     let mut outcome = SwitchOutcome::default();
     let mut emit = |outcome: &mut SwitchOutcome, step: SwitchStep| {
@@ -1664,16 +1691,37 @@ where
     let target_slot = match paths::profile_dir_for(variant, &target) {
         Some(dir) if dir.is_dir() => dir,
         _ => {
-            let can_save = snapshot_data_dir_for(variant)
-                .filter(|dir| dir.is_dir())
-                .is_some();
-            let message = missing_snapshot_reason(variant, &target, can_save);
-            emit(
-                &mut outcome,
-                SwitchStep::new("fatal", "fail", message.clone()),
-            );
-            outcome.error = Some(message);
-            return outcome;
+            // ★ 缺快照时先做一次自动补存：用户可能刚在客户端登录了目标账号、随后关掉了
+            //   客户端（这正是「按提示登录后回来重试」的路径）。补存**不会关闭客户端**
+            //   （运行中直接跳过），所以这里可以安全调用；补完再判一次，成功就继续切换。
+            let autosaved = autosave_login_if_missing_locked(variant).ok().flatten();
+            match paths::profile_dir_for(variant, &target) {
+                Some(dir) if dir.is_dir() => {
+                    if let Some((user_id, count)) = autosaved {
+                        emit(
+                            &mut outcome,
+                            SwitchStep::new(
+                                "precheck",
+                                "ok",
+                                format!("已自动保存账号 {user_id} 的登录态（{count} 个文件）"),
+                            ),
+                        );
+                    }
+                    dir
+                }
+                _ => {
+                    let can_save = snapshot_data_dir_for(variant)
+                        .filter(|dir| dir.is_dir())
+                        .is_some();
+                    let message = missing_snapshot_reason(variant, &target, can_save);
+                    emit(
+                        &mut outcome,
+                        SwitchStep::new("fatal", "fail", message.clone()),
+                    );
+                    outcome.error = Some(message);
+                    return outcome;
+                }
+            }
         }
     };
     let _ = target_slot;
@@ -2214,6 +2262,7 @@ pub fn save_current_login(user_id: &str) -> Result<u64, String> {
 ///
 /// 只在该客户端**本来就在运行**时才重新拉起 —— 不给用户凭空开一个窗口。
 pub fn save_current_login_for(variant: TraeVariant, user_id: &str) -> Result<u64, String> {
+    let _profile_guard = profile_op_lock();
     ensure_save_target_matches_client(variant, user_id)?;
 
     // ★★ 先确认「确实有东西可备份」，**再**决定要不要关客户端（2026-09-29 修正）。
@@ -2269,6 +2318,65 @@ pub fn save_current_login_for(variant: TraeVariant, user_id: &str) -> Result<u64
         &format!("保存登录态: user={user_id} 文件数={count}（已先关闭客户端再备份）"),
     );
     Ok(count)
+}
+
+/// 自动补存「客户端当前登录账号」的登录态快照（幂等、**不关客户端**）。
+///
+/// ## 为什么需要它
+///
+/// 快照是切换 Trae 账号的前提，但用户不知道「登录态快照」是什么，也不该被要求
+/// 手动点「保存登录态」。所以只要**条件允许**，就把客户端此刻的登录态顺手存下来。
+///
+/// ## 触发条件（全部满足才写）
+///
+/// 1. 客户端数据目录在，且能解出**客户端自己记录的**登录 uid（不拿 `current_account.txt` 猜）；
+/// 2. 该账号在账号库里 —— 否则会留下界面不可见、也永远不会被切到的孤儿槽位；
+/// 3. 该账号**还没有**快照（只补缺；已有的好快照不在这里覆盖）；
+/// 4. 客户端**未在运行** —— 运行时 `Network/`、`state.vscdb` 等被独占锁定，
+///    拷贝会拿到陈旧内容却「看起来成功」，产出坏快照；为自动保存去关用户的 IDE 更不可接受；
+/// 5. 当前状态**完整**（缺服务端数据的半登录态不许进账号槽位，判据与切换第 4b 步同源）。
+///
+/// 返回 `Some((uid, 文件数))` = 本次真的补存了；`None` = 条件不满足（静默跳过）。
+/// 客户端还在跑时不要调用 [`save_current_login_for`] 兜底：那会关掉并重启客户端。
+pub fn autosave_login_if_missing_for(
+    variant: TraeVariant,
+) -> Result<Option<(String, u64)>, String> {
+    let _profile_guard = profile_op_lock();
+    autosave_login_if_missing_locked(variant)
+}
+
+/// [`autosave_login_if_missing_for`] 的**无锁实现**：调用方必须已持有 [`profile_op_lock`]。
+fn autosave_login_if_missing_locked(variant: TraeVariant) -> Result<Option<(String, u64)>, String> {
+    let Some(dir) = snapshot_data_dir_for(variant).filter(|dir| dir.is_dir()) else {
+        return Ok(None);
+    };
+    let Some(user_id) = client_login_uid_in(&dir, variant) else {
+        return Ok(None);
+    };
+    if paths::profile_dir_for(variant, &user_id)
+        .map(|path| path.is_dir())
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let known = account::load_accounts_for(variant)
+        .accounts
+        .iter()
+        .any(|record| account::resolve_user_id(record) == user_id);
+    if !known || platform::is_running_for(variant) || !client_state_looks_complete(&dir) {
+        return Ok(None);
+    }
+    // 守卫的取证目录与 `backup_to_slot_for` 的源目录同源；不合就静默跳过，交给用户手动保存。
+    if ensure_save_target_matches_client(variant, &user_id).is_err() {
+        return Ok(None);
+    }
+    let count = backup_to_slot_for(variant, &user_id)?;
+    let _ = set_current_account_for(variant, &user_id);
+    store::append_log(
+        &paths::switcher_log_file_for(variant),
+        &format!("自动保存登录态: user={user_id} 文件数={count}（客户端未运行）"),
+    );
+    Ok(Some((user_id, count)))
 }
 
 /// 快照总览（线上形态）：槽位列表 + 当前账号 + 客户端数据目录（默认变体，兼容壳）。
@@ -3295,7 +3403,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// ★ 预检查失败的两支文案：**有数据目录** ⇒ 让用户去保存；**没有** ⇒ 必须解释为什么存不了。
+    /// ★ 预检查失败的两支文案：**有数据目录** ⇒ 让用户去客户端登录；**没有** ⇒ 必须解释为什么存不了。
     ///
     /// 反例（改坏会红）：两支合并回一句「请先保存该账号的登录态」—— 那在「客户端装了
     /// 但从没启动过」的机器上是**死循环**（保存同样做不到），正是 2026-09-29 的报障现场：
@@ -3314,8 +3422,12 @@ mod tests {
         let saved_able = missing_snapshot_reason(variant, target, true);
         assert!(saved_able.contains(target), "{saved_able}");
         assert!(
-            saved_able.contains("请先保存该账号的登录态"),
-            "有数据目录 ⇒ 结论就是「去保存」: {saved_able}"
+            saved_able.contains("客户端里登录该账号"),
+            "有数据目录 ⇒ 结论就是「去客户端登录该账号」: {saved_able}"
+        );
+        assert!(
+            saved_able.contains("自动保存"),
+            "必须说明保存是自动的（用户不该再去找「保存登录态」按钮）: {saved_able}"
         );
         assert!(
             !saved_able.contains("无法保存"),
@@ -3325,8 +3437,8 @@ mod tests {
         let cannot_save = missing_snapshot_reason(variant, target, false);
         assert!(cannot_save.contains(target), "{cannot_save}");
         assert!(
-            !cannot_save.contains("请先保存该账号的登录态"),
-            "没有数据目录时不得再让用户去保存（那是死循环）: {cannot_save}"
+            !cannot_save.contains("客户端里登录该账号"),
+            "没有数据目录时不得再让用户去登录（那是死循环）: {cannot_save}"
         );
         // 复用 `data_dir_missing_reason` 的结论：两处不得各说一套（改坏任一侧即红）。
         assert!(

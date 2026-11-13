@@ -677,6 +677,39 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     };
   }, [loadAll]);
 
+  /* ★ 自动补存登录态快照（用户不需要知道「快照」是什么，也不该被要求手动保存）。
+     触发点：挂载 + 窗口重新聚焦 —— 后者覆盖「在客户端登录 → 关闭客户端 → 回到本页」
+     这条最常见的路径。后端只补「客户端登录着、但还没有快照」的账号，且客户端运行中
+     一律跳过（拷贝会被文件锁污染，也不该为自动保存去关用户的 IDE），因此这里可放心重复调用。
+     失败静默：后端已写日志，用户仍可手动「保存登录态」。 */
+  const autoSaveBusyRef = useRef(false);
+  useEffect(() => {
+    if (api.isDemoMode()) return;
+    const run = () => {
+      if (autoSaveBusyRef.current) return;
+      autoSaveBusyRef.current = true;
+      void (async () => {
+        try {
+          const result = await api.traeAutosaveLogin();
+          const names = result.saved
+            .map((item) => item.name || item.userId)
+            .filter(Boolean)
+            .join("、");
+          if (names) {
+            toast.success(t("trae.page.accounts.autosaveSaved", { names }));
+          }
+        } catch {
+          /* 自动保存是尽力而为：不打扰用户 */
+        } finally {
+          autoSaveBusyRef.current = false;
+        }
+      })();
+    };
+    run();
+    window.addEventListener("focus", run);
+    return () => window.removeEventListener("focus", run);
+  }, [t]);
+
   // 签到进度：仅桌面端有事件通道；webui 只在结束时拿到完整报告。
   useEffect(() => {
     if (!api.isDesktop()) return;

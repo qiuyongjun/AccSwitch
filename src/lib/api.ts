@@ -542,6 +542,7 @@ const ROUTES: Record<string, Route> = {
   trae_merge_legacy_regions: { method: "POST", path: "/api/trae/legacy-merge" },
   trae_switch_account: { method: "POST", path: "/api/trae/switch" },
   trae_save_login: { method: "POST", path: "/api/trae/login/save" },
+  trae_autosave_login: { method: "POST", path: "/api/trae/login/autosave" },
   trae_backup_profile: { method: "POST", path: "/api/trae/profiles/backup" },
   trae_restore_profile: { method: "POST", path: "/api/trae/profiles/restore" },
   trae_delete_profile: { method: "POST", path: "/api/trae/profiles/delete" },
@@ -3174,6 +3175,25 @@ export function traeSaveLogin(
   variant?: TraeVariantId | null,
 ): Promise<{ userId: string; fileCount: number }> {
   return call("trae_save_login", { userId, variant: variant ?? null });
+}
+
+/**
+ * 自动补存登录态快照：把「客户端此刻登录着、但还没有快照」的账号补存一份。
+ *
+ * 幂等，无需参数；没有可补的账号时返回空列表。自动保存失败只落在 `errors`，
+ * 调用方应静默忽略（用户仍可手动保存）。
+ */
+export function traeAutosaveLogin(): Promise<{
+  saved: Array<{
+    variant: string;
+    variantLabel: string;
+    userId: string;
+    name: string | null;
+    fileCount: number;
+  }>;
+  errors: string[];
+}> {
+  return call("trae_autosave_login");
 }
 
 /** 备份当前登录态到槽位。 */
