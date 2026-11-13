@@ -393,7 +393,7 @@ pub fn preview_import_backup(text: &str, policy: ConflictPolicy) -> Result<Value
             if spec.id == "accounts" {
                 need_relogin += count_needs_relogin(incoming);
             }
-            let section = (spec.merge)(&mut local, incoming, policy);
+            let section = (spec.merge)(scope, &mut local, incoming, policy);
             counts.added += section.added;
             counts.overwritten += section.overwritten;
             counts.skipped += section.skipped;
@@ -498,7 +498,7 @@ pub fn import_backup(
                     continue;
                 }
                 let mut local = (spec.read)(scope)?;
-                let section = (spec.merge)(&mut local, incoming, policy);
+                let section = (spec.merge)(scope, &mut local, incoming, policy);
                 (spec.write)(scope, &local)?;
                 counts.added += section.added;
                 counts.overwritten += section.overwritten;

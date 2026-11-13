@@ -66,7 +66,15 @@ pub struct BackupSectionSpec {
     /// 读出该作用域下本分区的数据。
     pub read: fn(scope: Scope) -> Result<Value, String>,
     /// 把导入数据合并进本地数据（**纯内存**），返回计数。
-    pub merge: fn(local: &mut Value, incoming: &Value, policy: ConflictPolicy) -> SectionCounts,
+    ///
+    /// ⚠️ 必须带 `scope`：账号记录的身份键**随产品不同**（WorkBuddy/Qoder 是 `uid`，
+    /// Trae 是 `UserID`），合并实现没有 scope 就只能用错键、把同源账号当成新账号追加。
+    pub merge: fn(
+        scope: Scope,
+        local: &mut Value,
+        incoming: &Value,
+        policy: ConflictPolicy,
+    ) -> SectionCounts,
     /// 把合并后的分区数据**回写**本地存储。
     pub write: fn(scope: Scope, merged: &Value) -> Result<(), String>,
 }
@@ -200,15 +208,81 @@ fn read_json_file(path: &std::path::Path) -> Value {
 // 合并：账号 / 通用对象分区
 // ---------------------------------------------------------------------------
 
-/// 合并账号分区：逐条走**唯一合并出口** [`merge_import_record`]（`TokenPolicy::Allow`）。
+/// 合并账号分区：逐条走**该产品自己的**合并实现。
 ///
 /// ⚠️ **不重写内层**：账号级导入与全局备份共用同一套合并语义，差异只在策略参数。
-/// 全局备份用 `Allow`（不含凭据的备份全是无 token 记录，`Require` 会一条都导不进）。
-fn merge_accounts(local: &mut Value, incoming: &Value, policy: ConflictPolicy) -> SectionCounts {
-    let mut counts = SectionCounts::default();
+/// 全局备份用 `TokenPolicy::Allow`（不含凭据的备份全是无 token 记录，`Require` 会一条都导不进）。
+fn merge_accounts(
+    scope: Scope,
+    local: &mut Value,
+    incoming: &Value,
+    policy: ConflictPolicy,
+) -> SectionCounts {
     let incoming_items = incoming.as_array().cloned().unwrap_or_default();
+    match scope.product() {
+        Product::Trae => merge_trae_accounts(local, &incoming_items, policy),
+        Product::Workbuddy | Product::Qoder => {
+            merge_generic_accounts(local, &incoming_items, policy)
+        }
+    }
+}
+
+/// Trae 账号合并：身份键取 `UserID`（缺失时从 JWT 现算），并保留 Trae 专有的
+/// 「缺乏 ≠ 清空」字段规则。
+///
+/// ## 为什么不能走通用合并（2026-11-13 用户报障）
+///
+/// 通用合并按 `uid` 取身份键，而 Trae 记录里**没有** `uid` —— 于是每条导入记录都
+/// 匹配不到本地账号，无论选「覆盖」还是「保留本地」都当成新账号追加 ⇒ 同账号多份、
+/// 且多出来的那份没有登录态快照（切换必然失败）。
+fn merge_trae_accounts(
+    local: &mut Value,
+    incoming: &[Value],
+    policy: ConflictPolicy,
+) -> SectionCounts {
+    let items = local.as_array().cloned();
+    let Some(items) = items else {
+        return merge_generic_accounts(local, incoming, policy);
+    };
+    let Ok(mut accounts) =
+        serde_json::from_value::<Vec<trae::account::RawAccount>>(Value::Array(items))
+    else {
+        // 本地库形状异常：退回通用合并（宁可多一行，也不能把本地账号换成空表）。
+        return merge_generic_accounts(local, incoming, policy);
+    };
+    let mut counts = SectionCounts::default();
+    for item in incoming {
+        match trae::export_import::merge_import_record(
+            &mut accounts,
+            item,
+            policy,
+            TokenPolicy::Allow,
+        ) {
+            MergeOutcome::Appended => counts.added += 1,
+            MergeOutcome::Overwritten => counts.overwritten += 1,
+            // KeepBoth 会「增行」：计入新增。
+            MergeOutcome::KeptBoth => counts.added += 1,
+            MergeOutcome::KeptLocal | MergeOutcome::Skipped => counts.skipped += 1,
+        }
+    }
+    // 「覆盖」语义下顺手清掉历史遗留的同 uid 多份：第一条是刚被覆盖的记录，
+    // 其余是旧版导入（按 `uid` 取键，永远匹配不到 Trae 记录）留下的残影。
+    if matches!(policy, ConflictPolicy::Overwrite) {
+        trae::account::drop_duplicate_accounts(&mut accounts);
+    }
+    *local = serde_json::to_value(&accounts).unwrap_or_else(|_| Value::Array(vec![]));
+    counts
+}
+
+/// 通用账号合并（WorkBuddy / Qoder）：逐条走**唯一合并出口** [`merge_import_record`]。
+fn merge_generic_accounts(
+    local: &mut Value,
+    incoming: &[Value],
+    policy: ConflictPolicy,
+) -> SectionCounts {
+    let mut counts = SectionCounts::default();
     let mut accounts = local.as_array().cloned().unwrap_or_default();
-    for item in &incoming_items {
+    for item in incoming {
         match merge_import_record(&mut accounts, item, policy, TokenPolicy::Allow) {
             MergeOutcome::Appended => counts.added += 1,
             MergeOutcome::Overwritten => counts.overwritten += 1,
@@ -230,6 +304,7 @@ fn merge_accounts(local: &mut Value, incoming: &Value, policy: ConflictPolicy) -
 /// 只做**顶层键**合并：配置与网关都是「一组子对象」，逐子对象整体替换即可，不必递归到
 /// 叶子（递归会制造「半新半旧」的中间态，反而更难解释）。
 fn merge_object_section(
+    _scope: Scope,
     local: &mut Value,
     incoming: &Value,
     policy: ConflictPolicy,
@@ -396,7 +471,12 @@ mod tests {
     fn merge_accounts_accepts_records_without_tokens() {
         let mut local = json!([]);
         let incoming = json!([{ "uid": "u1", "nickname": "甲" }]);
-        let counts = merge_accounts(&mut local, &incoming, ConflictPolicy::KeepLocal);
+        let counts = merge_accounts(
+            Scope::WbCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::KeepLocal,
+        );
         assert_eq!(counts.added, 1);
         assert_eq!(local.as_array().unwrap().len(), 1);
     }
@@ -406,7 +486,12 @@ mod tests {
     fn merge_accounts_keep_local_skips_same_uid() {
         let mut local = json!([{ "uid": "u1", "nickname": "本地", "access_token": "t" }]);
         let incoming = json!([{ "uid": "u1", "nickname": "导入" }]);
-        let counts = merge_accounts(&mut local, &incoming, ConflictPolicy::KeepLocal);
+        let counts = merge_accounts(
+            Scope::WbCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::KeepLocal,
+        );
         assert_eq!(counts.skipped, 1);
         assert_eq!(local.as_array().unwrap().len(), 1);
         assert_eq!(local[0]["nickname"], "本地");
@@ -417,9 +502,37 @@ mod tests {
     fn merge_accounts_keep_both_appends_new_row() {
         let mut local = json!([{ "uid": "u1", "id": "a1", "nickname": "本地" }]);
         let incoming = json!([{ "uid": "u1", "nickname": "导入" }]);
-        let counts = merge_accounts(&mut local, &incoming, ConflictPolicy::KeepBoth);
+        let counts = merge_accounts(Scope::WbCn, &mut local, &incoming, ConflictPolicy::KeepBoth);
         assert_eq!(counts.added, 1);
         assert_eq!(local.as_array().unwrap().len(), 2, "KeepBoth 必须增行");
+    }
+
+    /// ★ Trae 记录的身份键是 `UserID`（不是 `uid`）：全局备份「覆盖」必须命中同源账号，
+    /// 并顺手清掉历史遗留的同 uid 多份。
+    ///
+    /// 可证伪：让 Trae 走通用合并 ⇒ 两条 QYJ 都留 ⇒ 本用例红（真实报障现场）。
+    #[test]
+    fn merge_trae_accounts_overwrite_matches_user_id_and_drops_duplicates() {
+        let mut local = json!([
+            { "UserID": "u1", "name": "本地新", "jwt": "jwt-new", "updated_at": "2026-11-11T00:00:00" },
+            { "UserID": "u1", "name": "本地旧", "jwt": "jwt-old", "updated_at": "2026-11-01T00:00:00" }
+        ]);
+        let incoming = json!([{ "UserID": "u1", "name": "导入", "jwt": "jwt-imported" }]);
+        let counts = merge_accounts(
+            Scope::TraeCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::Overwrite,
+        );
+        assert_eq!(counts.overwritten, 1, "同 UserID 必须按覆盖处理");
+        let accounts = local.as_array().unwrap();
+        assert_eq!(accounts.len(), 1, "覆盖后不得残留同 uid 的第二份");
+        assert_eq!(accounts[0]["name"], "导入");
+        assert_eq!(accounts[0]["jwt"], "jwt-imported");
+        assert_eq!(
+            accounts[0]["updated_at"], "2026-11-11T00:00:00",
+            "导入记录缺 updated_at 时保留本地值"
+        );
     }
 
     #[test]
@@ -427,14 +540,24 @@ mod tests {
         let mut local = json!({ "checkin": { "enabled": true } });
         let incoming = json!({ "checkin": { "enabled": false }, "travel": { "enabled": true } });
 
-        let counts = merge_object_section(&mut local, &incoming, ConflictPolicy::Overwrite);
+        let counts = merge_object_section(
+            Scope::WbCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::Overwrite,
+        );
         assert_eq!(counts.added, 1, "travel 是新增");
         assert_eq!(counts.overwritten, 1, "checkin 被覆盖");
         assert_eq!(local["checkin"]["enabled"], json!(false));
         assert_eq!(local["travel"]["enabled"], json!(true));
 
         let mut local = json!({ "checkin": { "enabled": true } });
-        let counts = merge_object_section(&mut local, &incoming, ConflictPolicy::KeepLocal);
+        let counts = merge_object_section(
+            Scope::WbCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::KeepLocal,
+        );
         assert_eq!(counts.skipped, 1);
         assert_eq!(counts.added, 1);
         assert_eq!(local["checkin"]["enabled"], json!(true), "保留本地");

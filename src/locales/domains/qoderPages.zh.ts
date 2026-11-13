@@ -226,6 +226,10 @@ export const zh = {
   // ── 签到 / 额度（后端早已就绪，此前无 UI 入口）──
   "qoder.page.accounts.chip.checkedIn": "今日已签",
   "qoder.page.accounts.chip.notCheckedIn": "今日未签",
+  "qoder.page.accounts.chip.notStarted": "10:00 开始",
+  "qoder.page.accounts.chip.notStartedTip": "Qoder 每日签到 10:00 开放；当前显示的是上一轮状态，到点再来",
+  "qoder.page.accounts.chip.refreshing": "签到刷新中",
+  "qoder.page.accounts.chip.refreshingTip": "今日窗口已开放，官方活动尚未刷新出来 —— 稍后点刷新重试",
   "qoder.page.accounts.chip.checkinUnavailable": "签到不可用",
   "qoder.page.accounts.metric.credits": "积分",
   // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
@@ -292,6 +296,8 @@ export const zh = {
   "qoder.page.accounts.web.state.unsupportedHint": "逐包需要内嵌浏览器采集网页会话，仅桌面版支持；聚合额度在任意形态都可用。",
   "qoder.page.accounts.credits.loading": "额度查询中…",
   "qoder.page.accounts.checkin.action": "签到",
+  // Qoder 的「今天」= UTC+8 10:00 起的窗口；窗口未开 / 活动未刷新各成一档。
+  "qoder.page.accounts.checkin.notStartedToast": "今日签到 10:00 后开放，到点再来",
   "qoder.page.accounts.checkin.already": "{name} 今日已签到",
   "qoder.page.accounts.checkin.done": "{name} 签到成功",
   "qoder.page.accounts.checkin.batchDone": "已签到 {n} 个账号",
@@ -308,6 +314,7 @@ export const zh = {
   "qoder.page.accounts.toolbar.checkinBucket.checkedIn": "今日已签",
   "qoder.page.accounts.toolbar.checkinBucket.notCheckedIn": "今日未签",
   "qoder.page.accounts.toolbar.checkinBucket.unknown": "签到状态未知",
+  "qoder.page.accounts.toolbar.checkinNotStarted": "今日签到暂未开始（10:00 开放 / 活动未刷新）",
 
   "qoder.page.pending.title": "这个页面尚未接入 Qoder",
   "qoder.page.pending.description":

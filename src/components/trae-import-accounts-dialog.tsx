@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FileUp, Loader2 } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +30,45 @@ function previewLabel(a: TraeImportPreviewAccount, t: Translate): string {
   return a.name || (a.userId ? t("trae.comp.import.uid", { uid: a.userId }) : t("trae.comp.import.item", { index: a.index + 1 }));
 }
 
+/** 迁移包的格式标识（与 Rust 侧 `carrier::CARRIER_FORMAT` 必须一致）。 */
+const CARRIER_FORMAT = "accswitch.trae.carrier/1";
+
+/** 从文件内容里认出的迁移包信息（**只读结构**，真校验在 Rust 侧）。 */
+interface CarrierHint {
+  userId: string;
+  capturedAt: string;
+  sourceApp: string;
+  hasSessionDb: boolean;
+}
+
+/**
+ * 识别「登录态迁移包」。
+ *
+ * 前端只做**识别**、不做校验：格式/字段/变体是否匹配一律由
+ * `carrier::read_carrier_text` 判定，两边各写一份校验规则必然分叉。
+ * 这里唯一的职责是「把导入界面切到迁移包形态」，让用户看到自己在导什么。
+ */
+function detectCarrier(text: string): CarrierHint | null {
+  try {
+    const raw = JSON.parse(text) as {
+      format?: string;
+      userId?: string;
+      capturedAt?: string;
+      sourceApp?: string;
+      files?: { path?: string }[];
+    };
+    if (raw.format !== CARRIER_FORMAT) return null;
+    return {
+      userId: raw.userId ?? "",
+      capturedAt: raw.capturedAt ?? "",
+      sourceApp: raw.sourceApp ?? "",
+      hasSessionDb: (raw.files ?? []).some((file) => (file.path ?? "").endsWith("state.vscdb")),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 导入 Trae 账号弹框：选 JSON 文件 → 后端解析预览 → 勾选账号 → 导入合并。
  *
@@ -47,6 +86,14 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 认出的迁移包（非空时界面切到「导入登录态」形态，不再走账号预览）。 */
+  const [carrier, setCarrier] = useState<CarrierHint | null>(null);
+  /** 迁移包导入结果（`null` = 尚未导入）。 */
+  const [carrierDone, setCarrierDone] = useState<{
+    skipped: boolean;
+    slot: string;
+    createdAccount: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -57,6 +104,8 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
       setParsing(false);
       setBusy(false);
       setError("");
+      setCarrier(null);
+      setCarrierDone(null);
     }
   }, [open]);
 
@@ -74,8 +123,18 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
       const text = String(reader.result ?? "");
       setFileName(file.name);
       setFileText(text);
-      setParsing(true);
       setError("");
+      setCarrierDone(null);
+      // 迁移包与账号库是两种文件：先认一下，认出来就不走账号预览那条路。
+      const hint = detectCarrier(text);
+      setCarrier(hint);
+      if (hint) {
+        setPreview([]);
+        setSelected(new Set());
+        setParsing(false);
+        return;
+      }
+      setParsing(true);
       api
         .traePreviewImportAccounts(text)
         .then((res) => {
@@ -108,7 +167,31 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
   }
 
   async function doImport() {
-    if (busy || parsing || !fileText || selected.size === 0) return;
+    if (busy || parsing || !fileText) return;
+    // 迁移包：落成快照槽位；账号库缺记录时后端会补建（成功时触发父级刷新列表）。
+    if (carrier) {
+      setBusy(true);
+      setError("");
+      try {
+        const res = await api.traeCarrierImport(fileText, variant);
+        setCarrierDone({
+          skipped: res.materialized.skipped,
+          slot: res.materialized.slot,
+          createdAccount: res.createdAccount,
+        });
+        // 新建了账号记录就必须让父组件重拉列表：切换卡片来自账号库，
+        // 不刷新的话用户看不到这个账号，等于白导。
+        if (res.createdAccount) {
+          onImported?.({ imported: 1, skipped: 0, overwritten: 0 });
+        }
+      } catch (e) {
+        setError(api.asError(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (selected.size === 0) return;
     setBusy(true);
     setError("");
     try {
@@ -145,6 +228,47 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
           </Button>
           {fileName && <span className="truncate text-xs text-muted-foreground">{fileName}</span>}
         </div>
+
+        {carrier && (
+          <div className="space-y-2">
+            <Alert>
+              <AlertDescription className="space-y-1">
+                <span className="block font-medium">
+                  {t("trae.comp.carrier.detected", { uid: carrier.userId })}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {t("trae.comp.carrier.meta", {
+                    app: carrier.sourceApp || "—",
+                    time: carrier.capturedAt,
+                  })}
+                </span>
+                <span className="block text-xs">{t("trae.comp.carrier.explain")}</span>
+              </AlertDescription>
+            </Alert>
+            {!carrier.hasSessionDb && (
+              <Alert variant="warning">
+                <AlertDescription>{t("trae.comp.carrier.noSessionDb")}</AlertDescription>
+              </Alert>
+            )}
+            {carrierDone && (
+              <Alert>
+                <AlertTitle>
+                  {carrierDone.skipped
+                    ? t("trae.comp.carrier.skipped")
+                    : t("trae.comp.carrier.done")}
+                </AlertTitle>
+                <AlertDescription className="break-all font-mono text-xs">
+                  {carrierDone.slot}
+                  {carrierDone.createdAccount && (
+                    <span className="mt-1 block font-sans text-muted-foreground">
+                      {t("trae.comp.carrier.createdAccount")}
+                    </span>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
 
         {parsing && (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
@@ -192,9 +316,20 @@ export function TraeImportAccountsDialog({ open, onOpenChange, variant, onImport
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {t("trae.comp.import.cancel")}
           </Button>
-          <Button onClick={doImport} disabled={busy || parsing || selected.size === 0}>
-            {busy ? t("trae.comp.import.busy") : t("trae.comp.import.submit")}
-          </Button>
+          {carrier ? (
+            carrierDone ? (
+              <Button onClick={() => onOpenChange(false)}>{t("trae.comp.carrier.doneBtn")}</Button>
+            ) : (
+              <Button onClick={doImport} disabled={busy || parsing}>
+                {busy ? <Loader2 className="animate-spin" /> : <FileUp />}
+                {busy ? t("trae.comp.carrier.importing") : t("trae.comp.carrier.import")}
+              </Button>
+            )
+          ) : (
+            <Button onClick={doImport} disabled={busy || parsing || selected.size === 0}>
+              {busy ? t("trae.comp.import.busy") : t("trae.comp.import.submit")}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

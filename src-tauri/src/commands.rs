@@ -3467,6 +3467,35 @@ pub fn trae_preview_import_accounts(file_text: String) -> Result<Value, String> 
     trae::handlers::preview_import_file(&file_text)
 }
 
+/// POST /api/trae/login/readiness —— 判定某账号「能否不登录就切过去」（只读）。
+///
+/// 存在的理由：既有切换在缺快照时只会回一句「快照不存在」，用户无法判断
+/// 「是没存过」还是「这台机器上根本没有它的登录态」。本命令把原因与出路一次说清。
+#[tauri::command(rename_all = "camelCase")]
+pub fn trae_login_readiness(user_id: String, variant: Option<String>) -> Result<Value, String> {
+    trae::handlers::login_readiness_for(parse_trae_variant(variant.as_deref()), &user_id)
+}
+
+/// POST /api/trae/login/carrier/export —— 导出登录态迁移包（跨电脑搬账号）。
+///
+/// 与账号导出（`trae_export_accounts`）不是一件事：那个只带 JWT + refresh_token，
+/// 目标机拿到后**仍然要重新登录一次**；迁移包带的是客户端登录态本体
+/// （含设备身份 + 会话库），落地即可用。
+#[tauri::command(rename_all = "camelCase")]
+pub fn trae_carrier_export(
+    user_id: String,
+    path: String,
+    variant: Option<String>,
+) -> Result<Value, String> {
+    trae::handlers::carrier_export_for(parse_trae_variant(variant.as_deref()), &user_id, &path)
+}
+
+/// POST /api/trae/login/carrier/import —— 导入登录态迁移包，落成快照槽位。
+#[tauri::command(rename_all = "camelCase")]
+pub fn trae_carrier_import(text: String, variant: Option<String>) -> Result<Value, String> {
+    trae::handlers::carrier_import_text_for(parse_trae_variant(variant.as_deref()), &text)
+}
+
 /// POST /api/trae/accounts/import —— 按选中索引导入，返回计数与最新账号视图。
 ///
 /// ⚠️ **别名**：P5 T03 起前端改调参数化命令 [`accounts_import`]（带 `scope`）。本命令保留，
@@ -3581,6 +3610,17 @@ pub async fn trae_save_login(user_id: String, variant: Option<String>) -> Result
     tauri::async_runtime::spawn_blocking(move || trae::handlers::save_login_for(variant, &user_id))
         .await
         .map_err(|error| format!("保存登录态失败: {error}"))?
+}
+
+/// POST /api/trae/login/autosave —— 自动补存当前登录账号的快照（幂等、无需用户操作）。
+///
+/// 前端在账号页挂载 / 窗口重新聚焦时调一次即可：没有可补的账号时后端立刻返回
+/// 空列表（成本是一次目录存在性判断 + 一次进程探测）。
+#[tauri::command]
+pub async fn trae_autosave_login() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(trae::handlers::autosave_logins)
+        .await
+        .map_err(|error| format!("自动保存登录态失败: {error}"))
 }
 
 /// POST /api/trae/profiles/backup —— 备份当前登录态到槽位。

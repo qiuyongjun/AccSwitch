@@ -258,6 +258,26 @@ export const zh = {
   "trae.comp.import.submit": "导入勾选账号",
 
   // =====================================================================
+  // 登录态迁移包（trae-import-accounts-dialog / trae-export-accounts-dialog）
+  //
+  // 与「导出账号」是两件事：账号导出只有 JWT + refresh_token，目标机仍要重新登录一次；
+  // 迁移包带的是客户端登录态本体（含设备身份），导入后直接可切。
+  // =====================================================================
+  "trae.comp.carrier.detected": "检测到登录态迁移包（账号 {uid}）",
+  "trae.comp.carrier.meta": "来源 {app} · 导出于 {time}",
+  "trae.comp.carrier.explain": "导入后会在本机落成该账号的登录态快照，之后可尝试直接点「切换」；跨机效果尚未完成真机验证。",
+  "trae.comp.carrier.noSessionDb": "迁移包里没有会话库（state.vscdb）。若本机曾登录过其他账号，切换后可能被客户端判为不一致而登出——建议回到源机重新导出。",
+  "trae.comp.carrier.import": "导入登录态",
+  "trae.comp.carrier.importing": "导入中…",
+  "trae.comp.carrier.done": "已导入，可尝试点「切换」验证",
+  "trae.comp.carrier.skipped": "本机已有该账号的快照，未覆盖（只增不改）",
+  "trae.comp.carrier.doneBtn": "完成",
+  "trae.comp.carrier.createdAccount": "已在账号库中新增该账号（凭据取自迁移包）",
+  "trae.comp.export.packLogin": "同时打包登录态（可在另一台电脑直接使用）",
+  "trae.comp.export.packLoginHint": "需先关闭 Trae 客户端，且只能打包「当前正登录着的那个账号」；仅可勾选一个账号。",
+  "trae.comp.export.carrierPacked": "已打包登录态（设备 {device} · {files} 个文件）",
+
+  // =====================================================================
   // trae-export-accounts-dialog.tsx —— 导出账号
   // =====================================================================
   "trae.comp.export.title": "导出账号",

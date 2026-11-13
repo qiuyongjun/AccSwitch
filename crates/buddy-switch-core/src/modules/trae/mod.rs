@@ -90,6 +90,7 @@
 //! 做不到的返回结构化 [`platform::Unsupported`]，**绝不 panic、绝不静默假装成功**。
 
 pub mod account;
+pub mod carrier;
 pub mod checkin;
 pub mod credits;
 pub mod device;

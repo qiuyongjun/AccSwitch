@@ -114,6 +114,7 @@
 | [`perf-audit-2026-09-24.md`](history/perf-audit-2026-09-24.md) | 性能审计报告（代码注释仍引它作为「为什么这么改」的证据） |
 | [`perf-audit-2026-09-24-review.md`](history/perf-audit-2026-09-24-review.md) | 上者的逐条复核（第二遍） |
 | [`trae-login-materialize-probe-2026-09-29.md`](history/trae-login-materialize-probe-2026-09-29.md) | 探针实测：账号库凭据无法忠实写入 Trae 客户端 |
+| [`trae-import-without-login-2026-11-13.md`](history/trae-import-without-login-2026-11-13.md) | 逆向调研：`account`/`iCubeServerData` 两个缺口可解，导入账号可免重新登录（待真机验证 E1–E3） |
 | [`reference-changexbc-workbuddy-switch.md`](history/reference-changexbc-workbuddy-switch.md) | 外部同产品实现的调研记录 |
 | [`reference-workbuddy-manager.md`](history/reference-workbuddy-manager.md) | 外部同栈项目的调研记录 |
 | [`CLEANUP-2026-10-13.md`](history/CLEANUP-2026-10-13.md) | 上一轮工作区清理报告（含当时的引用扫描证据） |

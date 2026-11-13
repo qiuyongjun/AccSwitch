@@ -542,6 +542,10 @@ const ROUTES: Record<string, Route> = {
   trae_export_accounts_to_path: { method: "POST", path: "/api/trae/accounts/export-to-path" },
   trae_preview_import_accounts: { method: "POST", path: "/api/trae/accounts/import/preview" },
   trae_import_accounts: { method: "POST", path: "/api/trae/accounts/import" },
+  // 跨电脑搬账号：判定 + 迁移包（含设备身份，落到快照槽位后走既有切换）。
+  trae_login_readiness: { method: "POST", path: "/api/trae/login/readiness" },
+  trae_carrier_export: { method: "POST", path: "/api/trae/login/carrier/export" },
+  trae_carrier_import: { method: "POST", path: "/api/trae/login/carrier/import" },
   trae_group_op: { method: "POST", path: "/api/trae/groups" },
   trae_checkin: { method: "POST", path: "/api/trae/checkin" },
   trae_checkin_cancel: { method: "POST", path: "/api/trae/checkin/cancel" },
@@ -551,6 +555,7 @@ const ROUTES: Record<string, Route> = {
   trae_merge_legacy_regions: { method: "POST", path: "/api/trae/legacy-merge" },
   trae_switch_account: { method: "POST", path: "/api/trae/switch" },
   trae_save_login: { method: "POST", path: "/api/trae/login/save" },
+  trae_autosave_login: { method: "POST", path: "/api/trae/login/autosave" },
   trae_backup_profile: { method: "POST", path: "/api/trae/profiles/backup" },
   trae_restore_profile: { method: "POST", path: "/api/trae/profiles/restore" },
   trae_delete_profile: { method: "POST", path: "/api/trae/profiles/delete" },
@@ -1679,6 +1684,17 @@ export type CheckinStatusEntry = {
   status?: string;
   /** ★ Qoder 专有：活动是否活跃（`false` ⇒ 本区域未开放，前端据此换文案）。 */
   active?: boolean;
+  /**
+   * ★ Qoder 专有：**今日签到窗口是否已开放**（每日 UTC+8 10:00 起算）。
+   *
+   * 缺省 = 老后端（无此字段）⇒ 按「窗口开放」处理，保持旧行为。
+   * `false` 时上游的 `todayCheckedIn` 属于**上一窗口**，界面必须显示「未开始」。
+   */
+  windowOpen?: boolean;
+  /** 下一个签到窗口的 epoch 秒（每日 10:00，UTC+8）。 */
+  nextWindowAt?: number;
+  /** 下一个签到窗口的可读文本（`MM-DD HH:mm`）。 */
+  nextWindowText?: string;
   raw?: unknown;
 };
 
@@ -3063,6 +3079,69 @@ export function traeImportAccounts(
   });
 }
 
+/**
+ * 判定某账号「现在能不能不登录就切过去」（只读）。
+ *
+ * 三种可行来源：`snapshot`（本机已有快照）/ `live_client`（客户端正登录着它，
+ * 切换会自动补存）/ `needs_carrier`（要导迁移包，否则只能重新登录一次）。
+ */
+export interface TraeLoginReadiness {
+  userId: string;
+  verdict: "snapshot" | "live_client" | "needs_carrier" | "unknown_account";
+  reason: string;
+  hasSnapshot: boolean;
+  clientLoggedIn: boolean;
+  canCaptureHere: boolean;
+}
+
+export function traeLoginReadiness(
+  userId: string,
+  variant?: TraeVariantId | null,
+): Promise<TraeLoginReadiness> {
+  return call("trae_login_readiness", { userId, variant: variant ?? null });
+}
+
+/** 迁移包导出结果（**不含凭据**，只有计数与脱敏设备号）。 */
+export interface TraeCarrierSummary {
+  userId: string;
+  deviceIdMasked: string;
+  sourceApp: string;
+  keyCount: number;
+  fileCount: number;
+  bytes: number;
+  hasSessionDb: boolean;
+  path: string;
+}
+
+/**
+ * 导出登录态迁移包 —— 与「导出账号」不是一回事。
+ *
+ * 账号导出只带 JWT + refresh_token，目标机导入后仍要重新登录一次；
+ * 迁移包带的是客户端登录态本体（含设备身份与会话库），落地即可用。
+ * 需要客户端已关闭、且当前登录的就是该账号。
+ */
+export function traeCarrierExport(
+  userId: string,
+  path: string,
+  variant?: TraeVariantId | null,
+): Promise<TraeCarrierSummary> {
+  return call("trae_carrier_export", { userId, path, variant: variant ?? null });
+}
+
+/** 迁移包导入结果：落地槽位 + 落地后的就绪判定。 */
+export function traeCarrierImport(
+  text: string,
+  variant?: TraeVariantId | null,
+): Promise<{
+  ok: boolean;
+  /** 账号库里原本没有这条记录、本次补建了一条（切换只认 uid，但卡片来自账号库）。 */
+  createdAccount: boolean;
+  materialized: { userId: string; slot: string; skipped: boolean; fileCount: number; bytes: number };
+  readiness: TraeLoginReadiness;
+}> {
+  return call("trae_carrier_import", { text, variant: variant ?? null });
+}
+
 /** 分组操作：`create` / `update` / `delete` / `move`。 */
 export function traeGroupOp(
   action: "create" | "update" | "delete" | "move",
@@ -3216,6 +3295,25 @@ export function traeSaveLogin(
   variant?: TraeVariantId | null,
 ): Promise<{ userId: string; fileCount: number }> {
   return call("trae_save_login", { userId, variant: variant ?? null });
+}
+
+/**
+ * 自动补存登录态快照：把「客户端此刻登录着、但还没有快照」的账号补存一份。
+ *
+ * 幂等，无需参数；没有可补的账号时返回空列表。自动保存失败只落在 `errors`，
+ * 调用方应静默忽略（用户仍可手动保存）。
+ */
+export function traeAutosaveLogin(): Promise<{
+  saved: Array<{
+    variant: string;
+    variantLabel: string;
+    userId: string;
+    name: string | null;
+    fileCount: number;
+  }>;
+  errors: string[];
+}> {
+  return call("trae_autosave_login");
 }
 
 /** 备份当前登录态到槽位。 */
@@ -3458,6 +3556,10 @@ export interface QoderCheckinRow {
   status?: string;
   active?: boolean;
   todayCheckedIn?: boolean;
+  /** 今日签到窗口是否已开放（UTC+8 10:00）；`false` ⇒ 未开始，不能当「未签」。 */
+  windowOpen?: boolean;
+  nextWindowAt?: number;
+  nextWindowText?: string;
   streakDays?: number;
   totalClaimDays?: number;
   rewardCredits?: number;
@@ -3500,6 +3602,16 @@ export interface QoderCheckinClaimResult {
   uid: string;
   already?: boolean;
   disabled?: boolean;
+  /**
+   * 今日窗口还没开（每日 10:00 前）或活动尚未刷新：**未发起领取**。
+   * 既不是成功也不是失败，前端不得计入失败 / 重试。
+   */
+  notStarted?: boolean;
+  /** 窗口已按上游时间开启，但活动列表仍是上一轮：稍后刷新，同样不计失败。 */
+  refreshing?: boolean;
+  /** 下一个窗口（未开始时给出，便于界面提示「10:00 后再试」）。 */
+  nextAvailableAt?: number;
+  nextAvailableNote?: string;
   rewardCredits?: number;
   status?: string;
   rechecked?: boolean;

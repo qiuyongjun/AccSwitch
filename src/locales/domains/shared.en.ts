@@ -534,6 +534,11 @@ export const en = {
   "shared.cardMenu.checkinNeedsLogin": "Sign in first",
   "shared.cardMenu.checkinUnavailable": "Channel unavailable",
   "shared.cardMenu.checkinUnavailableHint": "The upstream check-in channel is shut down; retrying will not help",
+  "shared.cardMenu.checkinNotStarted": "Opens at 10:00",
+  "shared.cardMenu.checkinNotStartedHint": "Qoder opens today’s check-in at 10:00; come back after that",
+  "shared.cardMenu.checkinRefreshing": "Refreshing campaign",
+  "shared.cardMenu.checkinRefreshingHint":
+    "Today’s window is open, but the official campaign has not shown up yet — refresh again shortly",
   "shared.cardMenu.checkinUnreadable": "Check-in status unreadable",
   "shared.cardMenu.checkinUnreadableHint": "The last query failed; use “Refresh check-in status” to retry",
   "shared.cardMenu.completeTasks": "Complete tasks",
@@ -647,6 +652,11 @@ export const en = {
   "shared.drawer.checkin.today": "Checked in today",
   "shared.drawer.checkin.todayGain": "Checked in today, +{n} credits",
   "shared.drawer.checkin.notCheckedIn": "Not checked in",
+  "shared.drawer.checkin.notStarted": "Not started",
+  "shared.drawer.checkin.notStartedAction": "Opens at 10:00",
+  "shared.drawer.checkin.notStartedTip": "Today’s check-in opens at {time}",
+  "shared.drawer.checkin.refreshing": "Refreshing campaign",
+  "shared.drawer.checkin.refreshingAction": "Try again later",
   // Upstream `streak_days` can disagree with gaps in `checkin_dates`, so avoid claiming continuity.
   "shared.drawer.checkin.statStreak": "Check-in days",
   "shared.drawer.checkin.statTotal": "Credits earned",
@@ -705,6 +715,9 @@ export const en = {
   "shared.checkinResult.retryPending": "Retry remaining",
   "shared.checkinResult.summary4": "{ok} ok · {skip} unavailable · {fail} failed",
   "shared.checkinResult.skippedNames": "Check-in channel unavailable for: {names}",
+  "shared.checkinResult.notStartedBadge": "{n} not started",
+  "shared.checkinResult.notStartedNames":
+    "Check-in has not started for: {names} (opens daily at 10:00, or the campaign has not refreshed yet)",
   "shared.checkinResult.earned": "+{n} Credits this run",
   "shared.checkinResult.dismiss": "Got it",
   "shared.checkinResult.unprocessed": "{n} not processed",

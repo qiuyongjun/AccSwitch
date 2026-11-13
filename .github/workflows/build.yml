@@ -199,11 +199,29 @@ jobs:
 
       # `gcc-aarch64-linux-gnu` 是 linux-arm64 交叉编译的链接器/交叉 C 编译器
       # （配合上面的 job env）；其余几个是 Tauri 桌面端要的，linux-arm64 用不到但装了无害。
+      # ★ 2026-11-12：v2026.11.112247 的 linux job 红在这里，**与代码无关**。
+      #   runner DNS 抖动 ⇒ `Temporary failure resolving 'azure.archive.ubuntu.com'`，
+      #   而 apt 单请求默认 120s 超时、内建重试不足 ⇒ 整步耗 **1h58min** 才 exit 100
+      #   （日志 `Fetched 9277 kB in 1h 58min 58s`）。这类失败重试几乎总能过。
+      #   加固三件事：请求超时压到 30s（坏镜像快速放弃）、单文件重试抬到 10、
+      #   整步最多重试 3 次。正常网络下不改变任何耗时。
+      # ⚠️ 重试必须写成 `if …; then exit 0; fi`：GitHub 的 bash 是 `-e`，
+      #    `cmd && retry` 这种裸列表里中间失败会直接中止脚本，重试分支的 sleep 根本进不去。
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf gcc-aarch64-linux-gnu
+          APT_OPTS="-o Acquire::Retries=10 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for attempt in 1 2 3; do
+            if sudo apt-get $APT_OPTS update \
+              && sudo apt-get $APT_OPTS install -y --fix-missing \
+                   libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf gcc-aarch64-linux-gnu; then
+              exit 0
+            fi
+            echo "::warning::apt 安装失败（第 $attempt/3 次），30s 后重试"
+            sleep 30
+          done
+          echo "::error::apt 安装连续 3 次失败：runner 网络不可用，不是代码问题"
+          exit 1
 
       # dmgbuild writes Finder metadata without opening Finder, so DMGs keep
       # their large icons and drag arrow in headless macOS runners.

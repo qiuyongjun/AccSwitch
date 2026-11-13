@@ -351,6 +351,106 @@ fn placements_text(placements: Option<&Value>) -> (String, String, String, Strin
 // 下一次签到窗口（每日 10:00，UTC+8）
 // ---------------------------------------------------------------------------
 
+/// 今日签到窗口是否已开放（每日 **UTC+8 10:00** 起算）。
+///
+/// ⚠️ 现在它只是**兜底**：正常窗口由 [`window_from_items`] 从上游积分类活动的
+/// `startAt` 推导；只有活动列表没有可用时间时（老响应 / 异常载荷）才用这条 10:00 规则。
+///
+/// ## 为什么保留它（2026-11-13 用户报障）
+///
+/// 上游的「每日领取」在 10:00 才切到新一天：00:00–09:59 列表里的 `CLAIMED` 属于
+/// **上一窗口**，直接当作「今日已签」是假阳性；10:00 后新活动还没刷出来时列表为空，
+/// 直接当作「今日未签」又是假阴性。签到状态因此必须带上「窗口是否开放」这个事实。
+///
+/// 10:00 整点算开放（`>=`），与 [`next_checkin_window`] 的边界口径一致。
+pub fn checkin_window_open(now: i64) -> bool {
+    const DAY: i64 = 86_400;
+    const OFFSET: i64 = 8 * 3600; // UTC+8
+    (now + OFFSET).rem_euclid(DAY) >= 10 * 3600
+}
+
+/// 从活动列表推导出的**每日签到窗口**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckinWindow {
+    /// 今天这一轮是否已开放。
+    pub open: bool,
+    /// 下一次窗口开始的 epoch 秒。
+    pub next_at: i64,
+    /// 下一次窗口的 UTC+8 可读文本（`MM-DD HH:mm`）。
+    pub next_text: String,
+    /// 上游列表落后于时钟：窗口按上游节奏该开了，但列表还是上一轮。
+    pub stale: bool,
+}
+
+/// 从**积分类**活动的 `startAt` 推导签到窗口（2026-11-13 真机实测）。
+///
+/// ## 实测事实
+///
+/// 「每天领 100 Credits」每轮 `startAt` = 当天 10:00（UTC+8）、`endAt` = 次日 09:59，
+/// 即下一轮开始 = `startAt + 24h`。非积分类活动（如订阅福利）用的是活动整体周期，
+/// **不能**拿来判断，必须先按 [`CampaignItem::is_credit_kind`] 过滤。
+///
+/// ## 判定
+///
+/// - `open` = 当前积分类活动的 `startAt` 与现在**处于同一 UTC+8 日期**；
+///   00:00–09:59 时 `startAt` 还是昨天 ⇒ 未开放。
+/// - `stale` = 现在已越过 `startAt + 24h`：上游该切到下一轮，但列表还没刷新。
+///   此时上一轮的 `CLAIMED` **不能**当作「今天已签」。
+/// - 列表里没有带 `startAt` 的积分类活动 ⇒ 退回 [`checkin_window_open`] /
+///   [`next_checkin_window`] 的 10:00 规则（老响应 / 异常载荷的兜底）。
+pub fn window_from_items(items: &[CampaignItem], now: i64) -> CheckinWindow {
+    const DAY: i64 = 86_400;
+    let cycle_start = items
+        .iter()
+        // 只认「签到类」积分活动：`kind` 为空但 `action=VIEW_DETAILS` 的福利活动
+        // （实测「首次订阅福利」）不算签到，不能拿它的整体周期来推每日窗口。
+        .filter(|item| item.is_credit_kind() && classify(item) != CampaignClass::View)
+        .map(|item| item.start_at)
+        .filter(|start| *start > 0)
+        .max();
+    let Some(start) = cycle_start else {
+        let (next_at, next_text) = next_checkin_window(now);
+        return CheckinWindow {
+            open: checkin_window_open(now),
+            next_at,
+            next_text,
+            stale: false,
+        };
+    };
+    let next_start = start + DAY;
+    let stale = now >= next_start;
+    let open = stale || utc8_day(start) == utc8_day(now);
+    let (next_at, next_text) = if stale {
+        // 列表没刷新：下一轮其实已经到了。界面此时显示「刷新中」，时间只作兜底。
+        next_checkin_window(now)
+    } else {
+        (next_start, utc8_text(next_start))
+    };
+    CheckinWindow {
+        open,
+        next_at,
+        next_text,
+        stale,
+    }
+}
+
+/// 取 UTC+8 的**日序号**（用于判断 `startAt` 是不是今天）。
+fn utc8_day(ts: i64) -> i64 {
+    (ts + 8 * 3600).div_euclid(86_400)
+}
+
+/// epoch 秒 → `MM-DD HH:mm`（UTC+8）。
+fn utc8_text(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|instant| {
+            instant
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8"))
+                .format("%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 /// 下一个「每日 10:00（UTC+8）」的 epoch 秒 + 可读文本。
 ///
 /// ⚠️ 无论本次是否真的领到都给（真领取 / 已领 / 被挡 / 名额发完 / 任务未完成 /
@@ -368,15 +468,7 @@ pub fn next_checkin_window(now: i64) -> (i64, String) {
         target += DAY;
     }
     let at = target - OFFSET;
-    let text = chrono::DateTime::from_timestamp(at, 0)
-        .map(|instant| {
-            instant
-                .with_timezone(&chrono::FixedOffset::east_opt(OFFSET as i32).unwrap())
-                .format("%m-%d %H:%M")
-                .to_string()
-        })
-        .unwrap_or_default();
-    (at, text)
+    (at, utc8_text(at))
 }
 
 // ---------------------------------------------------------------------------
@@ -896,9 +988,10 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
         .ok_or_else(|| "这条账号没有可调用的 access token（PAT 不能用于活动平台）".to_string())?
         .to_string();
 
+    let now = now_secs();
     let snapshot = fetch_campaigns(region, uid, &access).await;
     if !snapshot.ok {
-        let (next_at, next_note) = next_checkin_window(now_secs());
+        let (next_at, next_note) = next_checkin_window(now);
         return Ok(json!({
             "ok": false,
             "uid": uid,
@@ -915,7 +1008,43 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
         }));
     }
 
-    let now = now_secs();
+    // ★ 窗口以**上游积分类活动的 `startAt`** 为准（2026-11-13 真机实测：每轮 `startAt`
+    //   就是当天 10:00）：
+    //   ① 窗口未开（`startAt` 还是昨天）⇒ `notStarted`，不发领取请求；
+    //   ② 列表落后于时钟（已越过 `startAt + 24h` 仍未刷新）⇒ `refreshing`，也不领，
+    //      避免把上一轮的 CLAIMED / CLAIMABLE 当成今天的结果。
+    let window = window_from_items(&snapshot.items, now);
+    if window.stale {
+        return Ok(json!({
+            "ok": false,
+            "refreshing": true,
+            "uid": uid,
+            "source": "campaign",
+            "error": "官方活动尚未刷新，稍后重试",
+            "available": true,
+            "disabled": false,
+            "claimed": [], "already": [], "blocked": [], "pending": [], "locked": [],
+            "codes": [], "earned": 0,
+            "nextAvailableAt": window.next_at,
+            "nextAvailableNote": window.next_text,
+        }));
+    }
+    if !window.open {
+        return Ok(json!({
+            "ok": false,
+            "notStarted": true,
+            "uid": uid,
+            "source": "campaign",
+            "error": format!("今日签到尚未开始（下一轮 {}）", window.next_text),
+            "available": true,
+            "disabled": false,
+            "claimed": [], "already": [], "blocked": [], "pending": [], "locked": [],
+            "codes": [], "earned": 0,
+            "nextAvailableAt": window.next_at,
+            "nextAvailableNote": window.next_text,
+        }));
+    }
+
     // 「有没有积分类活动」决定第三档语义（issue #58 §5 / #46-D）：
     // 一条都没有 ⇒ 未开放（`ok:false` + `disabled:true`），**不得**报成功。
     let has_benefit = snapshot.items.iter().any(|item| item.is_credit_kind());
@@ -1080,7 +1209,7 @@ fn checkin_message(
     "当前账号暂无可领取的官方活动".to_string()
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
@@ -1344,6 +1473,83 @@ mod tests {
         assert_eq!(next_late - late, 10 * 3600 + 60);
     }
 
+    /// ★ 窗口判据的边界：10:00 整点算开放，9:59:59 仍属上一窗口。
+    ///
+    /// 可证伪：把 `>=` 改成 `>` ⇒ 10:00 整点会判成「未开放」，用户准点签到被拒。
+    #[test]
+    fn checkin_window_opens_at_1000_utc8() {
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .expect("固定时间")
+                .timestamp()
+        };
+        assert!(!checkin_window_open(at("2026-11-13T00:00:00+08:00")));
+        assert!(!checkin_window_open(at("2026-11-13T09:59:59+08:00")));
+        assert!(checkin_window_open(at("2026-11-13T10:00:00+08:00")));
+        assert!(checkin_window_open(at("2026-11-13T23:59:59+08:00")));
+        // 时区基准固定 UTC+8：UTC 02:00 = 北京 10:00（已开放）。
+        assert!(checkin_window_open(at("2026-11-13T02:00:00Z")));
+        assert!(!checkin_window_open(at("2026-11-13T01:59:59Z")));
+    }
+
+    /// ★ 窗口以**上游积分类活动的 `startAt`** 为准（2026-11-13 真机实测：
+    /// 每轮 `startAt` = 当天 10:00，`endAt` = 次日 09:59）。
+    ///
+    /// 可证伪：把 `window_from_items` 改成只看 `endAt` / 全量活动 ⇒ 下面「非积分类活动
+    /// 不得影响窗口」与「10:00 前未开放」两条会变红。
+    #[test]
+    fn window_follows_upstream_start_at() {
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .expect("固定时间")
+                .timestamp()
+        };
+        let cycle = |start: i64| {
+            let mut credit = item("daily", "CLAIM_BENEFIT", "CLAIMABLE", 100);
+            credit.start_at = start;
+            credit.end_at = start + 86_340;
+            credit
+        };
+        let yesterday = at("2026-11-12T10:00:00+08:00");
+        let today = at("2026-11-13T10:00:00+08:00");
+
+        // 10:00 前：列表还是上一轮 ⇒ 未开放，下一轮 = 今天 10:00。
+        let before = window_from_items(&[cycle(yesterday)], at("2026-11-13T09:30:00+08:00"));
+        assert!(!before.open, "10:00 前必须判未开始");
+        assert!(!before.stale);
+        assert_eq!(before.next_at, today);
+
+        // 10:00 后且列表已刷新 ⇒ 开放，下一轮 = 明天 10:00。
+        let open = window_from_items(&[cycle(today)], at("2026-11-13T11:30:00+08:00"));
+        assert!(open.open);
+        assert!(!open.stale);
+        assert_eq!(open.next_at, today + 86_400);
+
+        // 同类但不可领的福利活动（VIEW_DETAILS / 金额 0）即使 startAt 更晚也不得干扰窗口。
+        let mut view = item("sub", "VIEW_DETAILS", "CLAIMED", 0);
+        view.start_at = at("2026-11-13T15:00:00+08:00");
+        assert_eq!(
+            window_from_items(&[cycle(today), view], at("2026-11-13T11:30:00+08:00")),
+            open,
+            "不可领的福利活动不得参与每日窗口推导"
+        );
+
+        // 10:00 后列表仍未刷新 ⇒ open + stale（界面显示「刷新中」，上一轮 CLAIMED 不算今天）。
+        let stale = window_from_items(&[cycle(yesterday)], at("2026-11-13T10:05:00+08:00"));
+        assert!(stale.open, "时钟已过窗口，不能显示「未开始」");
+        assert!(stale.stale, "列表落后于时钟必须标记 stale");
+
+        // 非积分类活动不参与窗口推导（订阅福利是活动整体周期，不是每日窗口）。
+        let mut view = cycle(today);
+        view.benefit_kind = "REDEMPTION_CODE".into();
+        let fallback = window_from_items(&[], at("2026-11-13T11:30:00+08:00"));
+        assert_eq!(
+            window_from_items(&[view], at("2026-11-13T11:30:00+08:00")),
+            fallback,
+            "非积分类活动不得影响签到窗口"
+        );
+    }
+
     /// `is_credit_kind`：只领积分类（空 kind 视为积分类 —— 老活动不写 kind）。
     #[test]
     fn credit_kind_filter() {
@@ -1394,6 +1600,26 @@ mod tests {
         )
     }
 
+    /// 上游时间戳 → 北京时间可读文本（兼容秒 / 毫秒；0 原样返回）。
+    fn fmt_ts(value: i64) -> String {
+        if value <= 0 {
+            return "0".to_string();
+        }
+        let seconds = if value > 10_000_000_000 {
+            value / 1000
+        } else {
+            value
+        };
+        chrono::DateTime::from_timestamp(seconds, 0)
+            .map(|instant| {
+                instant
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).expect("UTC+8"))
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "?".to_string())
+    }
+
     #[tokio::test]
     #[ignore = "真机探针：需 QODER_LIVE_UID / QODER_LIVE_ACCESS_TOKEN（本机无账号）"]
     async fn live_campaigns_probe() {
@@ -1416,13 +1642,17 @@ mod tests {
         );
         for item in &snapshot.items {
             println!(
-                "- {} | class={:?} | action={} | claim={} | kind={} | amount={}",
+                "- {} | class={:?} | action={} | claim={} | kind={} | amount={} | startAt={} ({}) | endAt={} ({})",
                 item.label(),
                 classify(item),
                 item.action_type,
                 item.claim_status,
                 item.benefit_kind,
-                item.benefit_amount
+                item.benefit_amount,
+                item.start_at,
+                fmt_ts(item.start_at),
+                item.end_at,
+                fmt_ts(item.end_at)
             );
         }
         assert!(

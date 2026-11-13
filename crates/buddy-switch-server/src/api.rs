@@ -433,6 +433,15 @@ fn api_routes() -> Router {
             post(api_trae_preview_import),
         )
         .route("/api/trae/accounts/import", post(api_trae_import_accounts))
+        .route("/api/trae/login/readiness", post(api_trae_login_readiness))
+        .route(
+            "/api/trae/login/carrier/export",
+            post(api_trae_carrier_export),
+        )
+        .route(
+            "/api/trae/login/carrier/import",
+            post(api_trae_carrier_import),
+        )
         .route("/api/trae/groups", post(api_trae_group_op))
         .route("/api/trae/checkin/status", get(api_trae_checkin_status))
         // issue #47：逐账号「今日」只读重取（与 WB 的同名命令同构）。
@@ -455,6 +464,7 @@ fn api_routes() -> Router {
         .route("/api/trae/legacy-merge", post(api_trae_legacy_merge))
         .route("/api/trae/profiles", get(api_trae_profiles))
         .route("/api/trae/login/save", post(api_trae_save_login))
+        .route("/api/trae/login/autosave", post(api_trae_autosave_login))
         .route("/api/trae/profiles/backup", post(api_trae_backup_profile))
         .route("/api/trae/profiles/restore", post(api_trae_restore_profile))
         .route("/api/trae/profiles/delete", post(api_trae_delete_profile))
@@ -3964,6 +3974,77 @@ async fn api_trae_export_accounts(Json(body): Json<Value>) -> Response {
     }
 }
 
+/// POST /api/trae/login/readiness —— 判定某账号能否不登录就切过去（只读）。
+async fn api_trae_login_readiness(Json(body): Json<Value>) -> Response {
+    let user_id = body
+        .get("userId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::login_readiness_for(variant, &user_id)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("判定登录态就绪情况失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/carrier/export —— 导出登录态迁移包。
+async fn api_trae_carrier_export(Json(body): Json<Value>) -> Response {
+    let user_id = body
+        .get("userId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::carrier_export_for(variant, &user_id, &path)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("导出迁移包失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/carrier/import —— 导入登录态迁移包（文件内容）。
+async fn api_trae_carrier_import(Json(body): Json<Value>) -> Response {
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let variant = parse_trae_variant(body.get("variant").and_then(Value::as_str));
+    match tokio::task::spawn_blocking(move || {
+        trae::handlers::carrier_import_text_for(variant, &text)
+    })
+    .await
+    {
+        Ok(Ok(value)) => json_ok(value),
+        Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
+        Err(error) => json_err(
+            format!("导入迁移包失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
 /// POST /api/trae/accounts/export-to-path —— 写入用户选择的路径，返回落地路径。
 async fn api_trae_export_accounts_to_path(Json(body): Json<Value>) -> Response {
     let ids = body
@@ -4168,6 +4249,20 @@ async fn api_trae_save_login(Json(body): Json<Value>) -> Response {
         Ok(Err(error)) => json_err(error, StatusCode::BAD_REQUEST),
         Err(error) => json_err(
             format!("保存登录态失败: {error}"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    }
+}
+
+/// POST /api/trae/login/autosave —— 自动补存登录态快照（幂等，无 body）。
+///
+/// 账号页挂载 / 窗口重新聚焦时调用；失败已经在 core 层收敛进 `errors`，
+/// 这里**不返回 4xx/5xx**：自动保存是尽力而为，不该让页面报错。
+async fn api_trae_autosave_login() -> Response {
+    match tokio::task::spawn_blocking(trae::handlers::autosave_logins).await {
+        Ok(value) => json_ok(value),
+        Err(error) => json_err(
+            format!("自动保存登录态失败: {error}"),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }

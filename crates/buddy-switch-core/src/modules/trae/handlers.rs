@@ -319,6 +319,78 @@ pub fn preview_import_file(text: &str) -> Result<Value, String> {
     crate::modules::trae::export_import::preview_accounts(text)
 }
 
+/// 判定某账号「能否不登录就切过去」（只读）。
+///
+/// 与 [`export_accounts_for`] 的分工：那个导出的是**账号库记录**（JWT + refresh），
+/// 本函数回答的是「这台机器上有没有它的登录态」—— 后者才是「切换会不会失败」的原因。
+pub fn login_readiness_for(variant: TraeVariant, user_id: &str) -> Result<Value, String> {
+    let readiness = crate::modules::trae::carrier::readiness_for(variant, user_id)?;
+    serde_json::to_value(readiness).map_err(|e| e.to_string())
+}
+
+/// 采集登录态迁移包并写入指定路径（**不含任何机器指纹**，见 `carrier` 模块文档）。
+///
+/// 路径必须是绝对路径：迁移包是「拿去另一台机器」的东西，相对路径没有意义
+/// （用户也不知道它落在哪）。
+pub fn carrier_export_for(
+    variant: TraeVariant,
+    user_id: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("请先选择保存位置".to_string());
+    }
+    if !std::path::Path::new(path).is_absolute() {
+        return Err("保存路径必须是绝对路径".to_string());
+    }
+    let (carrier, summary) = crate::modules::trae::carrier::capture_for(variant, user_id)?;
+    crate::modules::trae::carrier::write_carrier(std::path::Path::new(path), &carrier)?;
+    let mut value = serde_json::to_value(summary).map_err(|e| e.to_string())?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("path".to_string(), json!(path));
+    }
+    Ok(value)
+}
+
+/// 导入登录态迁移包（**文本形态**）：落成一个快照槽位，之后走既有切换流程。
+///
+/// 参数是文件内容而不是路径：导入界面本来就只拿到内容（浏览器 `FileReader` 没有路径），
+/// 让后端只接受路径等于强迫前端先落一次盘。
+pub fn carrier_import_text_for(variant: TraeVariant, text: &str) -> Result<Value, String> {
+    let carrier = crate::modules::trae::carrier::read_carrier_text(text)?;
+    // ① 先做纯解析：密文形态不对 / uid 对不上时在这里失败，
+    //    此刻磁盘上还什么都没有，不需要任何回滚。
+    let credentials = crate::modules::trae::carrier::parse_credentials(&carrier)?;
+    // ② 落成快照槽位（自带失败清理）。
+    let outcome = crate::modules::trae::carrier::materialize_for(variant, &carrier)?;
+    // ③ 账号库里没有这条记录时补一条：切换本身只认 uid，但**用户点不到它** ——
+    //    账号页的卡片来自账号库。缺了它，「导入后直接可用」就还差一步。
+    //    若这一步失败，必须撤销 ② 本次新建的槽位：否则会留下一个
+    //    「界面看不见、磁盘上却存在」的半份登录态，与模块承诺的失败回滚相悖。
+    let created_account = match crate::modules::trae::carrier::register_account_if_missing(
+        variant,
+        &carrier,
+        &credentials,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            if !outcome.skipped {
+                crate::modules::trae::carrier::discard_slot_if_created(variant, &outcome.user_id);
+            }
+            return Err(error);
+        }
+    };
+    // 落地后立刻回一次判定：让调用方知道「现在能不能直接切」，而不是再猜一次。
+    let readiness = crate::modules::trae::carrier::readiness_for(variant, &outcome.user_id)?;
+    Ok(json!({
+        "ok": true,
+        "createdAccount": created_account,
+        "materialized": outcome,
+        "readiness": readiness,
+    }))
+}
+
 /// 按选中索引导入账号，返回计数与最新账号视图（默认变体，兼容壳）。
 pub fn import_accounts(text: &str, indexes: &[usize]) -> Result<Value, String> {
     import_accounts_for(TraeVariant::default(), text, indexes)
@@ -712,6 +784,31 @@ pub fn save_login_for(variant: TraeVariant, user_id: &str) -> Result<Value, Stri
     Ok(json!({ "userId": user_id, "fileCount": files }))
 }
 
+/// 自动补存登录态快照（**无需用户操作**）：遍历当前可用的两条程序位，
+/// 把「客户端此刻登录着、但还没有快照」的账号补存一份。
+///
+/// 设计约束见 [`profile::autosave_login_if_missing_for`]：只补缺、不覆盖，
+/// 客户端运行时一律跳过（不为自动保存去关用户的 IDE）。
+/// 失败只进 `errors`，**不阻断页面** —— 自动保存失败时用户仍可手动点「保存登录态」。
+pub fn autosave_logins() -> Value {
+    let mut saved: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for variant in TraeVariant::all() {
+        match profile::autosave_login_if_missing_for(variant) {
+            Ok(Some((user_id, file_count))) => saved.push(json!({
+                "variant": variant.as_str(),
+                "variantLabel": variant.display_name(),
+                "userId": user_id,
+                "name": account::display_name_for(variant, &user_id),
+                "fileCount": file_count,
+            })),
+            Ok(None) => {}
+            Err(error) => errors.push(format!("{}: {error}", variant.display_name())),
+        }
+    }
+    json!({ "saved": saved, "errors": errors })
+}
+
 /// 备份当前登录态到指定账号槽位（等价于 [`save_login`]，语义更贴近前端的「备份」按钮）。
 pub fn backup_profile(user_id: &str) -> Result<Value, String> {
     backup_profile_for(TraeVariant::default(), user_id)
@@ -723,6 +820,7 @@ pub fn backup_profile(user_id: &str) -> Result<Value, String> {
 /// 这个入口虽然不写 `currentAccount`，但它同样把「客户端此刻的登录态」贴到
 /// `profiles/<user_id>/` 下 —— 少了守卫，快照污染与 `save_login` 完全一样。
 pub fn backup_profile_for(variant: TraeVariant, user_id: &str) -> Result<Value, String> {
+    let _guard = profile::profile_op_lock();
     profile::ensure_save_target_matches_client(variant, user_id)?;
     let files = profile::backup_to_slot_for(variant, user_id)?;
     Ok(json!({ "slot": user_id, "fileCount": files }))
@@ -738,6 +836,7 @@ pub fn restore_profile(user_id: &str) -> Result<Value, String> {
 
 /// 用指定槽位的快照覆盖客户端登录态（按变体分家）。
 pub fn restore_profile_for(variant: TraeVariant, user_id: &str) -> Result<Value, String> {
+    let _guard = profile::profile_op_lock();
     let files = profile::restore_from_slot_for(variant, user_id)?;
     Ok(json!({ "slot": user_id, "fileCount": files }))
 }

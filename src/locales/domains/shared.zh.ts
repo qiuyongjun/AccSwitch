@@ -597,6 +597,10 @@ export const zh = {
   "shared.cardMenu.checkinNeedsLogin": "需先登录",
   "shared.cardMenu.checkinUnavailable": "通道未开放",
   "shared.cardMenu.checkinUnavailableHint": "上游签到通道已关停，重试无效 —— 去客户端活动页领取",
+  "shared.cardMenu.checkinNotStarted": "10:00 后开放",
+  "shared.cardMenu.checkinNotStartedHint": "Qoder 每日签到 10:00 开放，到点再来即可",
+  "shared.cardMenu.checkinRefreshing": "活动刷新中",
+  "shared.cardMenu.checkinRefreshingHint": "今日窗口已开放，官方活动尚未刷新出来 —— 稍后刷新重试",
   "shared.cardMenu.checkinUnreadable": "签到状态读取失败",
   "shared.cardMenu.checkinUnreadableHint": "上次查询失败；可用「刷新签到状态」重试",
   // 「完成任务」（仅 WB·CN）：没有可做的就禁用，两种禁用原因分开说（未知 ≠ 没有）。
@@ -731,6 +735,12 @@ export const zh = {
   "shared.drawer.checkin.today": "今日签到",
   "shared.drawer.checkin.todayGain": "今日签到 +{n} 积分",
   "shared.drawer.checkin.notCheckedIn": "未签到",
+  // Qoder 的「今天」是 UTC+8 10:00 起的窗口：窗口未开时上游的「已签」属于上一轮。
+  "shared.drawer.checkin.notStarted": "未开始",
+  "shared.drawer.checkin.notStartedAction": "10:00 后开放",
+  "shared.drawer.checkin.notStartedTip": "今日签到 {time} 开放",
+  "shared.drawer.checkin.refreshing": "活动刷新中",
+  "shared.drawer.checkin.refreshingAction": "稍后再试",
   // 三列横排的另外两格。上游 `streak_days` 实际可能与签到日期列表的断档不一致
   // （21 天却有多处未签），因此只称「签到天数」，不使用「连签」这种连续性表述。
   "shared.drawer.checkin.statStreak": "签到天数",
@@ -818,6 +828,8 @@ export const zh = {
   "shared.checkinResult.retryPending": "重试未完成项",
   "shared.checkinResult.summary4": "成功 {ok} · 未开放 {skip} · 失败 {fail}",
   "shared.checkinResult.skippedNames": "以下账号的签到通道未开放（桌面端网页活动页才可领）：{names}",
+  "shared.checkinResult.notStartedBadge": "未到时间 {n}",
+  "shared.checkinResult.notStartedNames": "以下账号未到签到时间（每日 10:00 开放或活动尚未刷新）：{names}",
   // 本次真领到的额度合计（活动通道）。**可选**：不传时结果条不显示这一枚徽标，
   // WB / Trae 的渲染逐字不变（它们没有活动通道，也不该凭空多一行）。
   "shared.checkinResult.earned": "本次共 +{n} Credits",

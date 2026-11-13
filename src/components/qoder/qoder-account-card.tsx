@@ -117,25 +117,38 @@ export function qoderAccountName(account: QoderAccountView): string {
 }
 
 /**
+ * Qoder 签到徽章的**展示态**。
+ *
+ * Qoder 的「今天」是 UTC+8 10:00 起的窗口，不是自然日：
+ * - 窗口未开（00:00–09:59）时上游的 `CLAIMED` 属于**上一轮**，不能画成「今日已签」；
+ * - 窗口刚开但官方活动还没刷新出来（列表为空）时，也不能直接画成「未签」。
+ * ⇒ 卡片 / 表格 / 菜单都从这一个枚举取值，避免各处各自把布尔解释成不同的话。
+ */
+export type QoderCheckinDisplay =
+  | "checked"
+  | "unchecked"
+  | "notStarted"
+  | "refreshing"
+  | "unknown";
+
+/**
  * 账号的**状态徽章**（卡片 chips 行与表格「状态」列**同一份实现**，避免两处口径漂移）。
  *
  * 优先级（顺序即优先级，与 WB 侧同一纪律）：**凭据问题 > 签到态 > 正常**。
  * 凭据坏了的账号，「今天签没签到」是次要信息 —— 它根本调不动上游；反过来，
  * 把「今日未签」盖在「无可用凭据」上会让用户去点一个必然失败的签到按钮。
  *
- * ⚠️ `checkinToday` 的**三态**必须区分：
- * - `true` / `false` = 上游明确答复了；
- * - `null` / `undefined` = **还没查到**（额度查询在途、或该区域没有签到接口）。
- *   ⇒ 落回「凭据可用」而不是硬报「今日未签」—— 后者是**把未知说成已知**。
+ * ⚠️ `checkin` 的五态必须区分（见 {@link QoderCheckinDisplay}）：`unknown` 落回
+ * 「凭据可用」而不是硬报「今日未签」—— 后者是**把未知说成已知**。
  */
 export function QoderStatusChips({
   account,
-  checkinToday,
+  checkin = "unknown",
   onOpenTab,
 }: {
   account: QoderAccountView;
-  /** 三态：`true` 已签 / `false` 未签 / `null|undefined` 未知。 */
-  checkinToday?: boolean | null;
+  /** 五态：已签 / 未签 / 未开始 / 刷新中 / 未知。 */
+  checkin?: QoderCheckinDisplay;
   /** 标签直达详情页签（R10）：凭据类 → 凭据；签到类 → 签到。 */
   onOpenTab?: (tab: DrawerTab) => void;
 }) {
@@ -161,7 +174,7 @@ export function QoderStatusChips({
     tip,
     tab,
   }: {
-    variant: "destructive" | "warning" | "success";
+    variant: "destructive" | "warning" | "success" | "outline";
     content: ReactNode;
     tip?: string;
     tab?: "credential" | "checkin";
@@ -210,11 +223,22 @@ export function QoderStatusChips({
       tab: "credential",
     });
   }
-  /* ★ 2026-10-26（与 WB / Trae 同批）：签到两态**共用 `CheckinIcon`**，状态由文字与底色
-     （success / warning）区分。此前 Qoder 的这两枚是纯文字 —— 同一件事在三张卡上
-     两种画法，正是「语义图标一个概念一枚」要防的漂移。
-     tip 也共用 `checkinBadgeTip` —— 同一句话在三张卡上不会长成两种说法。 */
-  if (checkinToday === true) {
+  /* ★ Qoder 的签到是**五态**（见 {@link QoderCheckinDisplay}）：窗口未开放 / 活动刷新中
+     都不是「未签」，用中性底色而不是 warning —— 那是「现在没事可做」，不是「你忘了签」。
+     两态（已签 / 未签）仍共用 `CheckinIcon`：状态由文字与底色区分，与 WB / Trae 一致。 */
+  if (checkin === "notStarted") {
+    return chip({
+      variant: "outline",
+      content: (
+        <>
+          <CheckinIcon /> {t("qoder.page.accounts.chip.notStarted")}
+        </>
+      ),
+      tip: t("qoder.page.accounts.chip.notStartedTip"),
+      tab: "checkin",
+    });
+  }
+  if (checkin === "checked") {
     return chip({
       variant: "success",
       content: (
@@ -226,7 +250,19 @@ export function QoderStatusChips({
       tab: "checkin",
     });
   }
-  if (checkinToday === false) {
+  if (checkin === "refreshing") {
+    return chip({
+      variant: "outline",
+      content: (
+        <>
+          <CheckinIcon /> {t("qoder.page.accounts.chip.refreshing")}
+        </>
+      ),
+      tip: t("qoder.page.accounts.chip.refreshingTip"),
+      tab: "checkin",
+    });
+  }
+  if (checkin === "unchecked") {
     return chip({
       variant: "warning",
       content: (
@@ -328,8 +364,8 @@ export interface QoderAccountCardProps {
   credits?: QoderCardCredits | null;
   /** 是否为积分优先级最高的账号（指标行「优先」，与 WorkBuddy 同一口径）。 */
   creditPriority?: boolean;
-  /** 今日签到三态（`null` / 不传 = 未知）。 */
-  checkinToday?: boolean | null;
+  /** 今日签到五态（`unknown` = 未知，落回凭据徽章）。 */
+  checkin?: QoderCheckinDisplay;
   /**
    * 程序位状态（只读）。
    *
@@ -379,7 +415,7 @@ export function QoderAccountCard({
   onDelete,
   credits = null,
   creditPriority = false,
-  checkinToday,
+  checkin = "unknown",
   programs = null,
   onSwitch,
   onSetGroup,
@@ -677,7 +713,7 @@ export function QoderAccountCard({
       <div className="flex min-w-0 flex-wrap items-center gap-[5px]">
         <QoderStatusChips
           account={account}
-          checkinToday={checkinToday}
+          checkin={checkin}
           onOpenTab={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
         />
         <QoderForeignBadge account={account} />

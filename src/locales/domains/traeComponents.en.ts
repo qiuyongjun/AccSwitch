@@ -205,6 +205,27 @@ export const en = {
   "trae.comp.import.submit": "Import selected",
 
   // =====================================================================
+  // Login-state carrier (trae-import-accounts-dialog / trae-export-accounts-dialog)
+  //
+  // Not the same as "export accounts": that only carries JWT + refresh_token and
+  // still needs one sign-in on the target machine. The carrier carries the client
+  // login state itself (including device identity), so it is switchable right away.
+  // =====================================================================
+  "trae.comp.carrier.detected": "Login-state carrier detected (account {uid})",
+  "trae.comp.carrier.meta": "From {app} · exported {time}",
+  "trae.comp.carrier.explain": "Importing stores this account's login state as a snapshot on this machine; you can then try clicking Switch. Cross-machine behaviour has not been verified on a real client yet.",
+  "trae.comp.carrier.noSessionDb": "This carrier has no session database (state.vscdb). If another account was ever signed in here, the client may treat the state as inconsistent and sign out — consider re-exporting on the source machine.",
+  "trae.comp.carrier.import": "Import login state",
+  "trae.comp.carrier.importing": "Importing…",
+  "trae.comp.carrier.done": "Imported — try clicking Switch to verify",
+  "trae.comp.carrier.skipped": "A snapshot for this account already exists; left untouched (add-only)",
+  "trae.comp.carrier.doneBtn": "Done",
+  "trae.comp.carrier.createdAccount": "Added this account to the account library (credentials taken from the carrier)",
+  "trae.comp.export.packLogin": "Also pack the login state (usable directly on another computer)",
+  "trae.comp.export.packLoginHint": "Close the Trae client first; only the account that is currently signed in can be packed. Select exactly one account.",
+  "trae.comp.export.carrierPacked": "Login state packed (device {device} · {files} files)",
+
+  // =====================================================================
   // trae-export-accounts-dialog.tsx —— Export accounts
   // =====================================================================
   "trae.comp.export.title": "Export accounts",
