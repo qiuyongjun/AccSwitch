@@ -11,9 +11,9 @@
 //!
 //! ## 身份键
 //!
-//! 合并走 `backup_sections::merge_accounts`（唯一实现），它按 `uid` 匹配。Trae 的持久化记录
-//! 用非常规大写 `UserID` 且没有 `uid`，因此上传前要为它补一个仅用于合并的 `uid` 字段 ——
-//! 回写时 `RawAccount` 反序列化会忽略未知键，不会污染账号库。
+//! 合并走 `backup_sections::merge_accounts`（唯一实现，按 `scope` 选身份键：Trae 用
+//! `UserID`，WorkBuddy / Qoder 用 `uid`）。云端负载统一按 `uid` 过滤：Trae 记录上传前补一个
+//! 仅用于过滤的 `uid` 字段 —— 回写时 `RawAccount` 反序列化会忽略未知键，不会污染账号库。
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -217,7 +217,7 @@ fn open(sealed: &[u8], password: &str) -> Result<Vec<u8>, String> {
 // 负载：六个作用域的 accounts 分区
 // ---------------------------------------------------------------------------
 
-/// 为 Trae 记录补上 `uid`（仅用于合并；`RawAccount` 回写时会忽略该键）。
+/// 为 Trae 记录补上 `uid`（仅用于同步负载的身份筛选；`RawAccount` 回写时会忽略该键）。
 fn annotate_identity(scope: Scope, item: &mut Value) {
     if scope.product() != Product::Trae || item.get("uid").is_some() {
         return;
@@ -307,6 +307,9 @@ fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(45))
+            // 不跟随重定向：301/302/303 会把 PUT 改写成 GET，服务端返回 200 时
+            // 会伪装成「上传成功」；这里让 3xx 显式失败，由调用方提示用户改地址。
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent("AccSwitch-CloudSync/1")
             .build()
             .expect("failed to build reqwest client")
@@ -317,6 +320,9 @@ fn status_hint(status: reqwest::StatusCode) -> &'static str {
     match status.as_u16() {
         401 | 403 => {
             "认证失败：请检查 WebDAV 账号与应用密码（坚果云需使用网页端生成的「应用密码」）"
+        }
+        301 | 302 | 303 | 307 | 308 => {
+            "地址发生了重定向：请直接填写最终地址（含文件名），或改用 https"
         }
         404 => "云端地址不存在",
         409 => "目标目录不存在：请先在坚果云中创建该目录，再填写完整文件地址",
@@ -364,7 +370,7 @@ pub async fn upload() -> Result<Value, String> {
 pub async fn download() -> Result<Value, String> {
     let cfg = require_ready_config()?;
 
-    let response = http_client()
+    let mut response = http_client()
         .get(&cfg.url)
         .basic_auth(&cfg.username, Some(&cfg.password))
         .send()
@@ -381,14 +387,18 @@ pub async fn download() -> Result<Value, String> {
         return Err(format!("{}（HTTP {status}）{snippet}", status_hint(status)));
     }
 
-    let sealed = response.bytes().await.map_err(|error| {
+    // 流式累计并即时限长：先整包 `bytes()` 再判上限，等于让超大响应先占满内存。
+    let mut sealed: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
         format!(
             "读取云端文件失败：{}",
             net::describe_transport_error(&error)
         )
-    })?;
-    if sealed.len() > MAX_PAYLOAD_BYTES {
-        return Err("云端同步文件过大，已拒绝处理".to_string());
+    })? {
+        if sealed.len() + chunk.len() > MAX_PAYLOAD_BYTES {
+            return Err("云端同步文件过大，已拒绝处理".to_string());
+        }
+        sealed.extend_from_slice(&chunk);
     }
 
     let plain = open(&sealed, &cfg.sync_password)?;
@@ -432,16 +442,10 @@ fn apply_payload(payload: &Value) -> Result<Value, String> {
 
         let merged = (|| -> Result<_, String> {
             let mut local = (spec.read)(scope)?;
-            // 本地记录也要标注身份：Trae 本地库只有 `UserID`，不补 `uid` 就永远匹配不上。
-            // 缺 uid 的本地记录**不删除**，只是参与不了覆盖匹配。
-            if let Some(items) = local.as_array_mut() {
-                for item in items {
-                    annotate_identity(scope, item);
-                }
-            }
             let mut incoming = incoming.clone();
             let dropped = normalize_incoming(scope, &mut incoming);
-            let mut counts = (spec.merge)(&mut local, &incoming, ConflictPolicy::Overwrite);
+            let mut counts =
+                (spec.merge)(scope, &mut local, &incoming, ConflictPolicy::Overwrite);
             counts.skipped += dropped;
             (spec.write)(scope, &local)?;
             Ok(counts)
@@ -516,27 +520,21 @@ mod tests {
         assert!(serde_json::from_value::<trae::account::RawAccount>(item).is_ok());
     }
 
-    /// 本地 Trae 记录同样只有 `UserID`：两侧都标注后才能按 uid 覆盖而不是重复追加。
+    /// 生产合并路径（按 `scope` 选身份键）：Trae 两侧都只有 `UserID` 时也必须命中覆盖，
+    /// 而不是当成新账号重复追加。
     #[test]
     fn trae_local_and_incoming_merge_without_duplicates() {
         let mut local = json!([{ "UserID": "u1", "jwt": "old" }]);
         let mut incoming = json!([{ "UserID": "u1", "jwt": "new" }]);
-        annotate_identity(Scope::TraeCn, &mut local[0]);
         normalize_incoming(Scope::TraeCn, &mut incoming);
 
-        let mut records = local.as_array().cloned().unwrap_or_default();
-        let outcome = crate::modules::export_import::merge_import_record(
-            &mut records,
-            &incoming[0],
-            ConflictPolicy::Overwrite,
-            crate::modules::export_import::TokenPolicy::Allow,
-        );
-        assert_eq!(
-            outcome,
-            crate::modules::export_import::MergeOutcome::Overwritten
-        );
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["jwt"], json!("new"));
+        let spec = section_by_id("accounts").expect("账号分区已注册");
+        let counts =
+            (spec.merge)(Scope::TraeCn, &mut local, &incoming, ConflictPolicy::Overwrite);
+
+        assert_eq!(counts.overwritten, 1);
+        assert_eq!(local.as_array().map(|items| items.len()), Some(1));
+        assert_eq!(local[0]["jwt"], json!("new"));
     }
 
     #[test]

@@ -80,6 +80,12 @@ export function CloudSyncSection() {
   const configured = Boolean(
     view?.url && view.username && view.hasPassword && view.hasSyncPassword,
   );
+  // 上传 / 下载走**已保存**的配置；表单有未保存改动时必须先保存，否则会静默用旧地址执行。
+  const dirty =
+    url !== (view?.url ?? "") ||
+    username !== (view?.username ?? "") ||
+    password !== "" ||
+    syncPassword !== "";
 
   async function save() {
     if (busy) return;
@@ -277,7 +283,7 @@ export function CloudSyncSection() {
                     size="sm"
                     variant="outline"
                     onClick={() => void upload()}
-                    disabled={busy || !configured}
+                    disabled={busy || !configured || dirty}
                   >
                     {uploading ? <Loader2 className="animate-spin" /> : <CloudUpload />}
                     {uploading ? t("sync.uploading") : t("sync.upload")}
@@ -289,16 +295,18 @@ export function CloudSyncSection() {
                     size="sm"
                     variant="outline"
                     onClick={() => setConfirmOpen(true)}
-                    disabled={busy || !configured}
+                    disabled={busy || !configured || dirty}
                   >
                     {downloading ? <Loader2 className="animate-spin" /> : <CloudDownload />}
                     {downloading ? t("sync.downloading") : t("sync.download")}
                   </Button>
                 </DemoAction>
 
-                {!configured && (
+                {!configured ? (
                   <span className="text-xs text-muted-foreground">{t("sync.notConfigured")}</span>
-                )}
+                ) : dirty ? (
+                  <span className="text-xs text-muted-foreground">{t("sync.unsaved")}</span>
+                ) : null}
               </div>
             </>
           )}

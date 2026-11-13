@@ -143,4 +143,5 @@ export const en = {
   "sync.lastDownload": "Last download: {time}",
   "sync.never": "Never",
   "sync.notConfigured": "Fill in and save the config before uploading or downloading",
+  "sync.unsaved": "Config has unsaved changes; save it before uploading or downloading",
 };

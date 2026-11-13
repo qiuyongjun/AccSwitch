@@ -140,4 +140,5 @@ export const zh = {
   "sync.lastDownload": "最近下载：{time}",
   "sync.never": "暂无",
   "sync.notConfigured": "填完并保存配置后才能上传或下载",
+  "sync.unsaved": "配置有改动未保存，请先点「保存配置」",
 } as const;
