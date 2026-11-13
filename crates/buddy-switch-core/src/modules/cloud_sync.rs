@@ -36,7 +36,7 @@ use crate::modules::{config, net, trae};
 pub const SYNC_KIND: &str = "accswitch-sync";
 /// 当前同步文件契约版本。
 pub const SYNC_FORMAT_VERSION: u32 = 1;
-/// 云端文件名（仅用于文案提示，实际上传路径由用户填写）。
+/// 云端默认文件名：地址只填到目录（以 `/` 结尾）时追加到后面。
 pub const SYNC_FILE_NAME: &str = "accswitch-sync.enc";
 
 const MAGIC: &[u8] = b"ACCSW-SYNC\x01";
@@ -149,6 +149,49 @@ fn validate_url(url: &str) -> Result<(), String> {
         return Err("WebDAV 地址需以 http:// 或 https:// 开头".to_string());
     }
     Ok(())
+}
+
+/// 云端数据库目录名（目录地址下自动创建）。
+pub const SYNC_DIR_NAME: &str = "AccSwitch";
+
+/// 解析用户填的地址，返回（文件地址, 需要确保存在的子目录）。
+///
+/// 目录地址（以 `/` 结尾）一律落到 `<目录>/AccSwitch/accswitch-sync.enc`：
+/// 坚果云等网盘**禁止在 WebDAV 根目录直接创建文件**（PUT 到 `/dav/xxx` 返回
+/// 404 ObjectNotFound），必须先 MKCOL 出子目录再写入；同时固定子目录名也让
+/// 上传端与下载端在只填目录时总能算出同一个文件地址。
+fn resolve_target(url: &str) -> (String, Option<String>) {
+    if !url.ends_with('/') {
+        return (url.to_string(), None);
+    }
+    // 用户已经把 AccSwitch 目录本身填进来时不再套一层。
+    if url.trim_end_matches('/').ends_with(&format!("/{SYNC_DIR_NAME}")) {
+        return (format!("{url}{SYNC_FILE_NAME}"), None);
+    }
+    let dir = format!("{url}{SYNC_DIR_NAME}/");
+    (format!("{dir}{SYNC_FILE_NAME}"), Some(dir))
+}
+
+/// 确保子目录存在；已存在时服务器一般返回 405 Method Not Allowed，视为成功。
+async fn ensure_remote_dir(
+    client: &reqwest::Client,
+    cfg: &SyncConfigFile,
+    dir: &str,
+) -> Result<(), String> {
+    let method = reqwest::Method::from_bytes(b"MKCOL").map_err(|_| "构造 MKCOL 请求失败".to_string())?;
+    let response = client
+        .request(method, dir)
+        .basic_auth(&cfg.username, Some(&cfg.password))
+        .send()
+        .await
+        .map_err(|error| format!("创建云端目录失败：{}", net::describe_transport_error(&error)))?;
+    let status = response.status();
+    if status.is_success() || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+        return Ok(());
+    }
+    let body: String = response.text().await.unwrap_or_default();
+    let snippet: String = body.chars().take(200).collect();
+    Err(format!("创建云端目录失败：{}（HTTP {status}）{snippet}", status_hint(status)))
 }
 
 /// 记录最近一次成功上传 / 下载时间；失败不影响已完成的传输。
@@ -324,8 +367,9 @@ fn status_hint(status: reqwest::StatusCode) -> &'static str {
         301 | 302 | 303 | 307 | 308 => {
             "地址发生了重定向：请直接填写最终地址（含文件名），或改用 https"
         }
-        404 => "云端地址不存在",
-        409 => "目标目录不存在：请先在坚果云中创建该目录，再填写完整文件地址",
+        404 => "云端地址不存在：只填目录（以 / 结尾）时会自动创建 AccSwitch 子目录",
+        405 => "该地址不支持写入：只填目录（以 / 结尾）会自动创建 AccSwitch 子目录；否则请填完整文件地址",
+        409 => "地址中的上级目录不存在：请只填到已有目录并以 / 结尾",
         507 => "云端存储空间不足",
         _ => "WebDAV 请求失败",
     }
@@ -340,8 +384,13 @@ pub async fn upload() -> Result<Value, String> {
     let sealed = seal(&plain, &cfg.sync_password)?;
     let bytes = sealed.len();
 
-    let response = http_client()
-        .put(&cfg.url)
+    let (url, dir) = resolve_target(&cfg.url);
+    let client = http_client();
+    if let Some(dir) = dir {
+        ensure_remote_dir(client, &cfg, &dir).await?;
+    }
+    let response = client
+        .put(&url)
         .basic_auth(&cfg.username, Some(&cfg.password))
         .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
         .body(sealed)
@@ -370,8 +419,9 @@ pub async fn upload() -> Result<Value, String> {
 pub async fn download() -> Result<Value, String> {
     let cfg = require_ready_config()?;
 
+    let (url, _) = resolve_target(&cfg.url);
     let mut response = http_client()
-        .get(&cfg.url)
+        .get(&url)
         .basic_auth(&cfg.username, Some(&cfg.password))
         .send()
         .await
@@ -535,6 +585,31 @@ mod tests {
         assert_eq!(counts.overwritten, 1);
         assert_eq!(local.as_array().map(|items| items.len()), Some(1));
         assert_eq!(local[0]["jwt"], json!("new"));
+    }
+
+    #[test]
+    fn directory_url_gets_default_file_name() {
+        // 目录地址 ⇒ 固定落到 AccSwitch 子目录（网盘根目录不能直接建文件）。
+        assert_eq!(
+            resolve_target("https://dav.jianguoyun.com/dav/"),
+            (
+                "https://dav.jianguoyun.com/dav/AccSwitch/accswitch-sync.enc".to_string(),
+                Some("https://dav.jianguoyun.com/dav/AccSwitch/".to_string())
+            )
+        );
+        // 已经填到 AccSwitch 目录时不再套一层。
+        assert_eq!(
+            resolve_target("https://dav.jianguoyun.com/dav/AccSwitch/"),
+            (
+                "https://dav.jianguoyun.com/dav/AccSwitch/accswitch-sync.enc".to_string(),
+                None
+            )
+        );
+        // 已带文件名的地址原样使用（允许自定义文件名）。
+        assert_eq!(
+            resolve_target("https://dav.jianguoyun.com/dav/custom.enc"),
+            ("https://dav.jianguoyun.com/dav/custom.enc".to_string(), None)
+        );
     }
 
     #[test]

@@ -105,7 +105,7 @@ export const en = {
     "Syncs accounts and sign-in credentials across all six scopes only — no config or gateway data. The cloud file is encrypted with the sync password.",
   "sync.urlLabel": "WebDAV URL",
   "sync.urlDesc":
-    "Full URL including the file name. Create the target folder in Nutstore first.",
+    "Full URL including the file name. A folder URL ending with / is also accepted: an AccSwitch subfolder is created automatically and accswitch-sync.enc is written into it.",
   "sync.urlPlaceholder": "https://dav.jianguoyun.com/dav/AccSwitch/accswitch-sync.enc",
   "sync.usernameLabel": "WebDAV account",
   "sync.usernamePlaceholder": "Nutstore sign-in email",

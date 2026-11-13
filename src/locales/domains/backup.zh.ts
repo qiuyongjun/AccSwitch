@@ -103,7 +103,8 @@ export const zh = {
   "sync.intro":
     "只同步六个作用域的账号与登录凭据，不含配置与网关；云端文件用同步密码加密。",
   "sync.urlLabel": "WebDAV 地址",
-  "sync.urlDesc": "填写到文件为止的完整地址，目录需先在坚果云中创建。",
+  "sync.urlDesc":
+    "可填完整文件地址；只填目录（以 / 结尾）时会自动创建 AccSwitch 子目录并写入 accswitch-sync.enc。",
   "sync.urlPlaceholder": "https://dav.jianguoyun.com/dav/AccSwitch/accswitch-sync.enc",
   "sync.usernameLabel": "WebDAV 账号",
   "sync.usernamePlaceholder": "坚果云登录邮箱",
