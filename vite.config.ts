@@ -70,7 +70,10 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // `target/` 必须一并忽略：`tauri dev` 是「先起 Vite、再 cargo 构建」，
+      // 构建过程会写 / 改名 target/debug 下的 exe，Windows 上监听会抛 EBUSY/EPERM
+      // 且是未捕获异常 ⇒ Vite 直接退出 ⇒ beforeDevCommand 失败 ⇒ 应用窗口不出现。
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));
