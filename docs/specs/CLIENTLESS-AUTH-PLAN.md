@@ -24,6 +24,25 @@
 
 1. 把装有客户端那台机器的 `storage.json` 拷到服务器同一路径 —— 之后授权 + 续期都正常（授权页仍需 `ssh -L 17388` 或手工粘贴回调链接）；
 2. 不在这台机器登录，用「导入备份」搬已有账号 —— 但备份只有 `device_bindings`（uid → deviceId），**不含私钥**，续期会失败，只能用到 `access_token` 过期。
+3. **登录态迁移包**（2026-11-13 新增，`crates/buddy-switch-core/src/modules/trae/carrier.rs`）——
+   在「已经登录着该账号」的机器上导出单文件（`storage.json` 的 icube 三键密文 + `state.vscdb` 系列），
+   目标机把它落成一个**真实快照槽位**后走既有切换流程。它解决的是第 2 条缺的那半截：**设备私钥随账号走**。
+   ⚠️ **状态：已实现，未经真机验证**。未验证项：
+   - **E1–E3**：跨机复用同一 `deviceId` 是否被上游风控（`20403`）、切换后客户端是否被登出 / 串号；
+   - **E4（恢复完整性）**：载体槽位只含 `storage.json` + `state.vscdb` 系列，而
+     `profile::restore_from_slot_in_dir` 对 `CORE_ENTRIES` 里缺失的**目录类**条目是跳过
+     （`copy_entry` 返回 `Ok(0)`），既不清也不覆盖 ⇒ 目标机上一账号的
+     `Local Storage/leveldb`、`Network/`、`Session Storage/`、`Partitions/*` 会原样保留。
+     `profile.rs` 已记录「leveldb 与 storage.json / state.vscdb 不同源会导致切换后账号不变」，
+     该冲突需真机判定后再决定清除 / 空占位 / 维持现状；**本次不改既有恢复流程**。
+   与 `switch_account` 的关系：载体落地后只是一份快照，**没有新增「写客户端状态」的路径**。
+   入口与语义：**导出**在「导出账号」对话框勾选「同时打包登录态」（桌面端、单账号、客户端须已关闭）；
+   **导入**在「导入账号」对话框自动识别（导入时会把账号记录补进账号库，凭据取自包内密文）。
+   三条纪律：只增不改（槽位已存在则跳过）、只搬运不构造（不解密重组 `cloudide`）、明确不搬
+   `Local State` / `Network` / `machineid` / `aha`（DPAPI 绑机器，搬过去只会变成解不开的乱码）。
+   **导入侧安全边界**（2026-11-13 加固）：`carrier::read_carrier_text` 收口全部不可信字段
+   （`files[].path` 会话库白名单、非登录态键拒绝、`deviceId` 与 `icube-dc` 键一致性、体积 / 数量上限），
+   `write_slot` 写入前二次校验；凭据解析前置于落盘，注册失败会撤销本次新建的槽位。
 
 > 想让 Trae 真正「零客户端」：需要自举设备身份（自建 EC 密钥对 + 走通上游 enroll）。那是独立 spike，不在本次范围，见 §6。
 
