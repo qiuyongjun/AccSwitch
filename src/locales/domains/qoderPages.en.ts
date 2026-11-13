@@ -211,6 +211,12 @@ export const en = {
   // ── Check-in / quota (backend was ready; there was no UI entry) ──
   "qoder.page.accounts.chip.checkedIn": "Checked in today",
   "qoder.page.accounts.chip.notCheckedIn": "Not checked in",
+  "qoder.page.accounts.chip.notStarted": "Opens at 10:00",
+  "qoder.page.accounts.chip.notStartedTip":
+    "Qoder opens today’s check-in at 10:00; the state shown is from the previous round",
+  "qoder.page.accounts.chip.refreshing": "Check-in refreshing",
+  "qoder.page.accounts.chip.refreshingTip":
+    "Today’s window is open, but the official campaign has not shown up yet — refresh again shortly",
   "qoder.page.accounts.chip.checkinUnavailable": "Check-in unavailable",
   "qoder.page.accounts.metric.credits": "Credits",
   // 2026-10-26: `{remaining} / {total}` removed — card and table render
@@ -276,6 +282,8 @@ export const en = {
   "qoder.page.accounts.web.state.unsupportedHint": "Per-pack needs an embedded browser to capture the web session, so it is desktop-only. Aggregate credits work everywhere.",
   "qoder.page.accounts.credits.loading": "Loading quota…",
   "qoder.page.accounts.checkin.action": "Check in",
+  "qoder.page.accounts.checkin.notStartedToast":
+    "Today’s check-in opens at 10:00; come back after that",
   "qoder.page.accounts.checkin.already": "{name} already checked in today",
   "qoder.page.accounts.checkin.done": "{name} checked in",
   "qoder.page.accounts.checkin.batchDone": "Checked in {n} accounts",
@@ -293,6 +301,8 @@ export const en = {
   "qoder.page.accounts.toolbar.checkinBucket.checkedIn": "Checked in today",
   "qoder.page.accounts.toolbar.checkinBucket.notCheckedIn": "Not checked in",
   "qoder.page.accounts.toolbar.checkinBucket.unknown": "Check-in state unknown",
+  "qoder.page.accounts.toolbar.checkinNotStarted":
+    "Today’s check-in has not started yet (opens at 10:00, or the campaign has not refreshed)",
 
   "qoder.page.pending.title": "This page is not wired for Qoder yet",
   "qoder.page.pending.description":

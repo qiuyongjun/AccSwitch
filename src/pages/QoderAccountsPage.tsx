@@ -82,6 +82,7 @@ import {
   QoderStatusChips,
   qoderAccountName,
   qoderSourceLabel,
+  type QoderCheckinDisplay,
 } from "@/components/qoder/qoder-account-card";
 import { QoderLocalSourceRow } from "@/components/qoder/qoder-local-source-row";
 import { QoderOAuthDialog } from "@/components/qoder/qoder-oauth-dialog";
@@ -343,12 +344,14 @@ function QoderAccountsPanel({
    */
   const [renewingUids, setRenewingUids] = useState<ReadonlySet<string>>(() => new Set());
   /** 批量签到结果条（含失败项，可只重试失败项）。`null` = 不渲染。 */
-  /* 四档：成功数 / 通道未开放 / 失败 / **未处理**（协作式取消后没发出的）。 */
+  /* 五档：成功数 / 通道未开放 / **未到签到时间** / 失败 / 未处理（协作式取消后没发出的）。 */
   const [checkinResult, setCheckinResult] = useState<{
     okCount: number;
     /** 本次**真领到**的额度合计（活动通道；只作展示，不参与成败判定）。 */
     earned: number;
     disabled: FailedItem[];
+    /** 每日 10:00 窗口还没开 / 活动尚未刷新：跳过且不发起领取，既不是成功也不是失败。 */
+    notStarted: FailedItem[];
     failed: FailedItem[];
     unprocessed: FailedItem[];
   } | null>(null);
@@ -704,16 +707,22 @@ function QoderAccountsPanel({
     [checkinMap, checkinRows, accounts],
   );
 
-  /** 今日签到三态（`null` = 未知，**不伪装成未签**）。
+  /**
+   * 今日签到**展示态**（卡片 / 表格 / 菜单 / 一键按钮**全部**经由这里取值）。
    *
-   * ⚠️ 卡片、表格、抽屉指标块与签到页签**全部**经由 {@link checkinEntryOf} / 本函数取值：
-   * 两处各读一份（`checkinMap` vs `checkinRows`）会出现「刷新后卡片已签到、抽屉仍说未签到」。
+   * ★ Qoder 的「今天」是 UTC+8 10:00 起的窗口，不是自然日：
+   * - 窗口未开时上游的 `CLAIMED` 属于上一轮 ⇒ `notStarted`（不是「今日已签」）；
+   * - 窗口已开但列表里没有积分类活动 ⇒ `refreshing`（官方还没刷出来，不是「未签」）。
+   * 把这两档压回布尔，就会出现「10 点前显示已签、10 点后显示未签」的假状态。
    */
-  const checkinTodayOf = useCallback(
-    (account: QoderAccountView): boolean | null => {
+  const checkinDisplayOf = useCallback(
+    (account: QoderAccountView): QoderCheckinDisplay => {
       const entry = checkinEntryOf(account.uid);
-      if (!entry || !entry.ok) return null;
-      return entry.todayCheckedIn === true;
+      if (!entry || !entry.ok) return "unknown";
+      if (entry.windowOpen === false) return "notStarted";
+      if (entry.todayCheckedIn === true) return "checked";
+      if (entry.status === "NONE") return "refreshing";
+      return "unchecked";
     },
     [checkinEntryOf],
   );
@@ -1141,9 +1150,21 @@ function QoderAccountsPanel({
    */
   async function runCheckin(targets: QoderAccountView[], baseOk = 0, baseEarned = 0) {
     if (targets.length === 0 || busy) return;
+    /* ★ 窗口没开 / 活动还没刷出来的账号**不发起领取**：
+       Qoder 每日 10:00 才切到新一天，此时上游的 CLAIMED 属于上一轮，领不出今天的奖励。
+       这些账号既不是成功也不是失败，单列一档（否则它们会被记成失败、反复重试）。 */
+    const notStartedTargets = targets.filter((account) => {
+      const state = checkinDisplayOf(account);
+      return state === "notStarted" || state === "refreshing";
+    });
+    const runnable = targets.filter((account) => !notStartedTargets.includes(account));
+    if (runnable.length === 0) {
+      toast.info(t("qoder.page.accounts.checkin.notStartedToast"));
+      return;
+    }
     setBusy(true);
     try {
-      const outcomes = await runBatch(targets, async (account) => {
+      const outcomes = await runBatch(runnable, async (account) => {
         try {
           return await api.qoderCheckinClaim(scope, account.uid);
         } catch {
@@ -1152,12 +1173,16 @@ function QoderAccountsPanel({
       });
       const failed: FailedItem[] = [];
       const disabled: FailedItem[] = [];
+      const notStarted: FailedItem[] = notStartedTargets.map((account) => ({
+        uid: account.uid,
+        name: qoderAccountName(account),
+      }));
       const unprocessed: FailedItem[] = [];
       const checkedUids: string[] = [];
       let ok = baseOk;
       let earned = baseEarned;
       outcomes.forEach((outcome, index) => {
-        const account = targets[index];
+        const account = runnable[index];
         /* 先按**目标索引**取结果：稠密数组里未执行项是 `undefined`，
            这里必须算进「未处理」而不是被跳过（取消后不能报全部成功）。 */
         const item = { uid: account.uid, name: qoderAccountName(account) };
@@ -1175,6 +1200,9 @@ function QoderAccountsPanel({
           // 活动通道会带「真领到多少」；旧通道没这个字段 ⇒ 记 0，不编数。
           earned += outcome.rewardCredits ?? 0;
         } else if (outcome.disabled) disabled.push(item);
+        /* 后端也可能回 `notStarted` / `refreshing`（状态行还没刷新）：
+           跳过，不算失败、不进重试。 */
+        else if (outcome.notStarted || outcome.refreshing) notStarted.push(item);
         else failed.push(item);
       });
       for (const uid of checkedUids) markCheckinWrite(uid);
@@ -1192,7 +1220,14 @@ function QoderAccountsPanel({
         }
         return next;
       });
-      setCheckinResult({ okCount: ok, earned, disabled, failed, unprocessed });
+      setCheckinResult({
+        okCount: ok,
+        earned,
+        disabled,
+        notStarted,
+        failed,
+        unprocessed,
+      });
       /* 回读账号库：`lastCheckinToday` 是签到状态的**落盘初值**（重开页面时唯一的依据），
          签到成功后必须让它跟上，否则下次打开又变回「未知」。 */
       await reload();
@@ -1569,8 +1604,13 @@ function QoderAccountsPanel({
       return checkinUnavailable ? { kind: "unavailable" } : { kind: "unknown" };
     }
     if (!entry.ok) return { kind: "unreadable", reason: entry.error };
+    /* 窗口未开（每日 10:00 前）：上游的 CLAIMED 属于上一轮 —— 到点再签，不是「未签」。 */
+    if (entry.windowOpen === false) return { kind: "notStarted" };
+    if (entry.todayCheckedIn) return { kind: "checked" };
+    /* 窗口已开但活动还没刷出来：不是「未签」，稍后刷新即可。 */
+    if (entry.status === "NONE") return { kind: "refreshing" };
     if (entry.active === false) return { kind: "unavailable" };
-    return entry.todayCheckedIn ? { kind: "checked" } : { kind: "unchecked" };
+    return { kind: "unchecked" };
   }
 
   /**
@@ -2071,6 +2111,12 @@ function QoderAccountsPanel({
     if (!row || !row.ok || row.todayCheckedIn === undefined) return null;
     return {
       todayCheckedIn: row.todayCheckedIn === true,
+      /* 窗口未开（每日 10:00 前）⇒ 抽屉写「未开始」并把签到按钮禁用；
+         否则上游的「已签」是上一轮的事实，不能当成今天。 */
+      windowOpen: row.windowOpen !== false,
+      /* 窗口已开但上游列表还是上一轮 ⇒ 抽屉写「活动刷新中」，按钮禁用。 */
+      refreshing: row.windowOpen !== false && row.status === "NONE",
+      nextWindowText: row.nextWindowText ?? null,
       todayCredit: row.todayCredit ?? null,
       streakDays: row.streakDays ?? null,
       totalCredits: row.totalCredits ?? null,
@@ -2144,7 +2190,7 @@ function QoderAccountsPanel({
               `data-no-account-open`，点标签跳页签不会被行点击覆盖成「打开概览」。 */}
           <QoderStatusChips
             account={account}
-            checkinToday={checkinTodayOf(account)}
+            checkin={checkinDisplayOf(account)}
             onOpenTab={(tab) => openDetail(account, tab)}
           />
           <QoderForeignBadge account={account} />
@@ -2298,10 +2344,20 @@ function QoderAccountsPanel({
 
   /**
    * 页头一键动作的可用性 —— **做不了就禁用**，别让按钮点下去只弹一句「没活可干」。
-   * 签到判据走 `checkinTodayOf`（上游读数优先、快照兜底），与卡片/抽屉同源。
+   * 签到判据走 `checkinDisplayOf`（上游读数优先、快照兜底），与卡片/抽屉同源。
+   * 「未开始 / 刷新中」不算待签（窗口没开时点它必然什么都不做）。
    */
   const noRows = rows.length === 0;
-  const checkinHasPending = rows.some((row) => checkinTodayOf(row) !== true);
+  const checkinHasPending = rows.some((row) => {
+    const state = checkinDisplayOf(row);
+    return state === "unchecked" || state === "unknown";
+  });
+  const allCheckinNotStarted =
+    rows.length > 0 &&
+    rows.every((row) => {
+      const state = checkinDisplayOf(row);
+      return state === "notStarted" || state === "refreshing";
+    });
   const quickBlocked = busy || quickBusy !== null;
 
   const productLabel = t(platformDescriptor(product).labelKey);
@@ -2342,7 +2398,9 @@ function QoderAccountsPanel({
               noRows
                 ? t("shared.toolbar.quickNoAccounts")
                 : !checkinHasPending
-                  ? t("shared.toolbar.quickCheckinNone")
+                  ? allCheckinNotStarted
+                    ? t("qoder.page.accounts.toolbar.checkinNotStarted")
+                    : t("shared.toolbar.quickCheckinNone")
                   : undefined
             }
             onClick={() => void quickCheckinAll()}
@@ -2425,6 +2483,8 @@ function QoderAccountsPanel({
                 failedNames: checkinResult.failed.map((item) => item.name),
                 /* ⚠️ 「通道未开放」单独一档：不算成功、也不进重试桶。 */
                 skippedNames: checkinResult.disabled.map((item) => item.name),
+                /* 「未到签到时间 / 活动未刷新」单独一档：跳过了、没发请求，也不是失败。 */
+                notStartedNames: checkinResult.notStarted.map((item) => item.name),
                 /* 真领到的额度合计：只说「成功 1 个」不足以证明到账。 */
                 earnedCredits: checkinResult.earned,
                 /* 协作式取消后的「未处理」：既不是成功也不是失败，单列一档。 */
@@ -2537,7 +2597,7 @@ function QoderAccountsPanel({
                     }
                   : null
               }
-              checkinToday={checkinTodayOf(account)}
+              checkin={checkinDisplayOf(account)}
               creditPriority={account.uid === priorityAccountId}
               programs={programs}
               packs={webPacks[account.uid]}

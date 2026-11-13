@@ -1638,6 +1638,17 @@ export type CheckinStatusEntry = {
   status?: string;
   /** ★ Qoder 专有：活动是否活跃（`false` ⇒ 本区域未开放，前端据此换文案）。 */
   active?: boolean;
+  /**
+   * ★ Qoder 专有：**今日签到窗口是否已开放**（每日 UTC+8 10:00 起算）。
+   *
+   * 缺省 = 老后端（无此字段）⇒ 按「窗口开放」处理，保持旧行为。
+   * `false` 时上游的 `todayCheckedIn` 属于**上一窗口**，界面必须显示「未开始」。
+   */
+  windowOpen?: boolean;
+  /** 下一个签到窗口的 epoch 秒（每日 10:00，UTC+8）。 */
+  nextWindowAt?: number;
+  /** 下一个签到窗口的可读文本（`MM-DD HH:mm`）。 */
+  nextWindowText?: string;
   raw?: unknown;
 };
 
@@ -3436,6 +3447,10 @@ export interface QoderCheckinRow {
   status?: string;
   active?: boolean;
   todayCheckedIn?: boolean;
+  /** 今日签到窗口是否已开放（UTC+8 10:00）；`false` ⇒ 未开始，不能当「未签」。 */
+  windowOpen?: boolean;
+  nextWindowAt?: number;
+  nextWindowText?: string;
   streakDays?: number;
   totalClaimDays?: number;
   rewardCredits?: number;
@@ -3478,6 +3493,16 @@ export interface QoderCheckinClaimResult {
   uid: string;
   already?: boolean;
   disabled?: boolean;
+  /**
+   * 今日窗口还没开（每日 10:00 前）或活动尚未刷新：**未发起领取**。
+   * 既不是成功也不是失败，前端不得计入失败 / 重试。
+   */
+  notStarted?: boolean;
+  /** 窗口已按上游时间开启，但活动列表仍是上一轮：稍后刷新，同样不计失败。 */
+  refreshing?: boolean;
+  /** 下一个窗口（未开始时给出，便于界面提示「10:00 后再试」）。 */
+  nextAvailableAt?: number;
+  nextAvailableNote?: string;
   rewardCredits?: number;
   status?: string;
   rechecked?: boolean;

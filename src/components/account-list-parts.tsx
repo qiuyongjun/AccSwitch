@@ -108,6 +108,13 @@ export interface CheckinResultBarProps {
    */
   skippedNames?: string[];
   /**
+   * 「未到签到时间」的账号显示名（Qoder 每日 10:00 开窗；活动尚未刷新的也归这档）。
+   *
+   * 这些账号**没有发起领取请求**：既不算成功，也不算失败，更不能进重试名单。
+   * 可选且默认为空 ⇒ 其它平台 / 老调用点的渲染逐字不变。
+   */
+  notStartedNames?: string[];
+  /**
    * 本次**真领到**的额度合计（活动通道专用；其它平台不传）。
    *
    * ⚠️ 可选且**默认为 0/不传** ⇒ 不渲染这枚徽标，WB / Trae 的输出逐字不变。
@@ -147,6 +154,7 @@ export function CheckinResultBar({
   okCount,
   failedNames,
   skippedNames,
+  notStartedNames,
   earnedCredits = 0,
   unprocessedCount = 0,
   onRetry,
@@ -156,8 +164,10 @@ export function CheckinResultBar({
   /* 「通道未开放」是第三档：既不是成功、也不算失败（重试它永远不会成功）。
      ⚠️ 默认空数组 ⇒ WB / Trae 走的仍是原来那两档分支，渲染逐字不变。 */
   const skipped = skippedNames ?? [];
+  const notStarted = notStartedNames ?? [];
   const hasFail = failedNames.length > 0;
   const hasSkipped = skipped.length > 0;
+  const hasNotStarted = notStarted.length > 0;
   const hasUnprocessed = unprocessedCount > 0;
   const degraded = hasFail || hasSkipped || hasUnprocessed;
   const { busy, run } = useRefreshAction();
@@ -197,6 +207,11 @@ export function CheckinResultBar({
           {t("shared.checkinResult.unprocessed", { n: String(unprocessedCount) })}
         </Badge>
       ) : null}
+      {hasNotStarted ? (
+        <Badge variant="outline" className="shrink-0 tabular-nums border-transparent">
+          {t("shared.checkinResult.notStartedBadge", { n: String(notStarted.length) })}
+        </Badge>
+      ) : null}
       <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
         {hasFail
           ? t("shared.checkinResult.failedNames", { names: failedNames.join(t("shared.punct.comma")) })
@@ -206,11 +221,16 @@ export function CheckinResultBar({
               t("shared.checkinResult.skippedNames", {
                 names: skipped.join(t("shared.punct.comma")),
               })
-            : hasUnprocessed
-              ? /* ★ 取消后**不能**说「全部账号已签到」：这些账号一个请求都没发出，
-                   把「没轮到」说成「已签到」是直接骗用户。 */
-                t("shared.batch.cancelled", { n: String(unprocessedCount) })
-              : t("shared.checkinResult.allOk")}
+            : hasNotStarted
+              ? /* 没到签到时间 = 这些账号一个请求都没发出（每日 10:00 开窗 / 活动未刷新）。 */
+                t("shared.checkinResult.notStartedNames", {
+                  names: notStarted.join(t("shared.punct.comma")),
+                })
+              : hasUnprocessed
+                ? /* ★ 取消后**不能**说「全部账号已签到」：这些账号一个请求都没发出，
+                     把「没轮到」说成「已签到」是直接骗用户。 */
+                  t("shared.batch.cancelled", { n: String(unprocessedCount) })
+                : t("shared.checkinResult.allOk")}
       </span>
       {(hasFail || hasUnprocessed) && onRetry ? (
         <Button

@@ -77,12 +77,16 @@ import { CheckinIcon, GrowthTaskIcon } from "@/lib/semantic-icons";
  * - `unchecked`：可签；
  * - `unknown`：还没查到 —— **不伪装成未签**（隐藏该项，等刷新后再说）；
  * - `unreadable`：查询失败 —— 给出原因，引导去「刷新签到状态」；
- * - `unavailable`：通道未开放 —— 重试永远无效，不摆可点项。
+ * - `unavailable`：通道未开放 —— 重试永远无效，不摆可点项；
+ * - `notStarted`：今日窗口还没开（Qoder 每日 10:00 开放）—— 到点再签，不是失败；
+ * - `refreshing`：窗口已开但官方活动还没刷出来 —— 稍后刷新，不是失败。
  */
 export type AccountCheckinState =
   | { kind: "checked" }
   | { kind: "unchecked" }
   | { kind: "unknown" }
+  | { kind: "notStarted" }
+  | { kind: "refreshing" }
   | { kind: "unreadable"; reason?: string }
   | { kind: "unavailable"; reason?: string };
 
@@ -287,6 +291,22 @@ export function AccountMoreMenu({
             icon={<CheckinIcon className="size-4" />}
             hint={t("shared.cardMenu.needLoginHint")}
             state={t("shared.cardMenu.needLogin")}
+          >
+            {t("wbAccounts.card.manualCheckin")}
+          </MenuStateItem>
+        ) : checkinKind === "notStarted" ? (
+          <MenuStateItem
+            icon={<CheckinIcon className="size-4" />}
+            hint={t("shared.cardMenu.checkinNotStartedHint")}
+            state={t("shared.cardMenu.checkinNotStarted")}
+          >
+            {t("wbAccounts.card.manualCheckin")}
+          </MenuStateItem>
+        ) : checkinKind === "refreshing" ? (
+          <MenuStateItem
+            icon={<CheckinIcon className="size-4" />}
+            hint={t("shared.cardMenu.checkinRefreshingHint")}
+            state={t("shared.cardMenu.checkinRefreshing")}
           >
             {t("wbAccounts.card.manualCheckin")}
           </MenuStateItem>

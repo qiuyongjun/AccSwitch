@@ -27,6 +27,14 @@
 //!   本地盖章（`account::last_checkin`）只作**展示提示**，不作判据。
 //! - 旧通道：上游 `lastClaimedAt`（该通道自带，无需本地状态）。
 //!
+//! ## ★ 每日窗口（以积分类活动的 `startAt` 为准）
+//!
+//! Qoder 的「今天」不是自然日，而是上游积分活动的一轮窗口（实测 `startAt` = 当天
+//! 10:00、`endAt` = 次日 09:59）。00:00–09:59 列表里的 `CLAIMED` 属于**上一轮**，
+//! 直接当作「今日已签」是假阳性。因此每行状态都带
+//! `windowOpen` / `nextWindowAt` / `nextWindowText`：窗口未开时界面显示「未开始」，
+//! 签到请求也**不发起领取**（只读一次活动列表用于判定，见 `campaign::checkin_for`）。
+//!
 //! ## 排程（`ScheduleTask::QoderCheckin`）
 //!
 //! [`run_cycle_for`] 逐账号**顺序**调用 [`claim_for`]（并发会踩风控）；
@@ -180,7 +188,30 @@ fn campaign_entry(
     } else {
         summary.claimed_amount
     };
-    let status = if summary.claimed {
+    // ★ 只有**真正的签到类**活动（可领 / 已领 / 待领 / 被锁）才算「今天有活动」。
+    //   实测的「首次订阅福利」也是空 kind 的积分类，但 action=VIEW_DETAILS、金额为 0，
+    //   不能拿它撑起「有活动」，否则活动空窗期会被显示成「今日未签」而不是「刷新中」。
+    let has_checkin_activity = snapshot.items.iter().any(|item| {
+        item.is_credit_kind() && campaign::classify(item) != campaign::CampaignClass::View
+    });
+    let now = campaign::now_secs();
+    let window = campaign::window_from_items(&snapshot.items, now);
+    // 上游是否给了**可用的窗口时间**（正常响应都有；老版本 / 异常载荷可能没有）。
+    // 没有时间数据时退回旧口径（直接信 claimStatus），否则测试结果会随「跑测试的时刻」漂移。
+    let has_upstream_window = snapshot.items.iter().any(|item| {
+        item.is_credit_kind()
+            && campaign::classify(item) != campaign::CampaignClass::View
+            && item.start_at > 0
+    });
+    // ★ 上一轮的 CLAIMED 不能当作「今天已签」：窗口未开（startAt 还是昨天）时不算；
+    //   列表落后于时钟（stale）时更不可信 —— 直接归到「刷新中」。
+    let today_checked_in =
+        summary.claimed && (!has_upstream_window || (window.open && !window.stale));
+    let status = if window.stale || !has_checkin_activity {
+        // 没有新一轮的签到活动（列表还没刷出来）：既不是「已签」也不是「未签」，
+        // 让界面显示「刷新中」。
+        "NONE"
+    } else if summary.claimed {
         "CLAIMED"
     } else if summary.claimable {
         "CLAIMABLE"
@@ -193,14 +224,18 @@ fn campaign_entry(
         "uid": uid,
         "name": name,
         "ok": true,
-        "todayCheckedIn": summary.claimed,
+        "todayCheckedIn": today_checked_in,
         "dailyCredit": daily,
-        "todayCredit": if summary.claimed { json!(summary.claimed_amount) } else { Value::Null },
+        "todayCredit": if today_checked_in { json!(summary.claimed_amount) } else { Value::Null },
         "totalCredits": summary.claimed_amount,
         // 活动平台没有「连续天数」这个概念：给 null 而不是编一个 0。
         "streakDays": Value::Null,
         "status": status,
-        "active": summary.claimable || summary.claimed,
+        "active": !window.stale && (summary.claimable || summary.claimed),
+        // 窗口由上游积分类活动的 `startAt` 推导（每轮 = 当天 10:00），不是本地硬编码。
+        "windowOpen": window.open,
+        "nextWindowAt": window.next_at,
+        "nextWindowText": window.next_text,
         // 身份来源（`runtime-info` / `derived`）与机器头状态 —— 国际版拿不到活动时，
         // 界面要能说清「是没装客户端」而不是「今天没有活动」。
         "source": "campaign",
@@ -259,24 +294,33 @@ async fn status_row_for(
     }
     // ── 整区没有活动平台（404/405/410）⇒ 旧通道兜底 ──
     match api::checkin_status(region, &uid, &access).await {
-        Ok(status) => (
-            json!({
-                "uid": uid,
-                "name": name,
-                "ok": true,
-                "status": status.status,
-                "active": status.active,
-                "todayCheckedIn": status.today_checked_in,
-                "streakDays": status.streak_days,
-                "totalClaimDays": status.total_claim_days,
-                "rewardCredits": status.reward_credits,
-                "totalRewardCredits": status.total_reward_credits,
-                "nextClaimAt": status.next_claim_at,
-                "lastClaimedAt": status.last_claimed_at,
-                "unavailable": false,
-            }),
-            None,
-        ),
+        Ok(status) => {
+            let now = campaign::now_secs();
+            // 旧通道没有活动时间，走 `window_from_items(&[], …)` 的 10:00 兜底；
+            // 与活动通道同一口径：窗口未开放时上游的「今日已签」同样不可信。
+            let window = campaign::window_from_items(&[], now);
+            (
+                json!({
+                    "uid": uid,
+                    "name": name,
+                    "ok": true,
+                    "status": status.status,
+                    "active": status.active,
+                    "todayCheckedIn": status.today_checked_in && window.open,
+                    "streakDays": status.streak_days,
+                    "totalClaimDays": status.total_claim_days,
+                    "rewardCredits": status.reward_credits,
+                    "totalRewardCredits": status.total_reward_credits,
+                    "nextClaimAt": status.next_claim_at,
+                    "lastClaimedAt": status.last_claimed_at,
+                    "windowOpen": window.open,
+                    "nextWindowAt": window.next_at,
+                    "nextWindowText": window.next_text,
+                    "unavailable": false,
+                }),
+                None,
+            )
+        }
         Err(error) if error.starts_with(api::CHECKIN_REASON_NOT_FOUND) => (
             // 区域级结论：接口不存在 ⇒ 整区标记，逐账号不再重复报。
             json!({
@@ -618,12 +662,19 @@ pub async fn run_cycle_for(region: QoderRegion) -> Value {
     let file = account::load_accounts_for(region);
     let mut results = Vec::new();
     let mut ok_count = 0usize;
+    let mut not_started_count = 0usize;
     let mut earned = 0i64;
     for account in &file.accounts {
         match claim_for(region, &account.uid).await {
             Ok(value) => {
                 if value.get("ok") == Some(&Value::Bool(true)) {
                     ok_count += 1;
+                }
+                // 窗口还没开 / 官方活动尚未刷新：既不是成功也不是失败，单独计数。
+                if value.get("notStarted") == Some(&Value::Bool(true))
+                    || value.get("refreshing") == Some(&Value::Bool(true))
+                {
+                    not_started_count += 1;
                 }
                 earned += value.get("earned").and_then(Value::as_i64).unwrap_or(0);
                 results.push(json!({
@@ -643,6 +694,7 @@ pub async fn run_cycle_for(region: QoderRegion) -> Value {
         "region": region.as_str(),
         "total": file.accounts.len(),
         "okCount": ok_count,
+        "notStartedCount": not_started_count,
         "earned": earned,
         "results": results,
     })

@@ -343,6 +343,15 @@ export interface AccountDetailDrawerProps {
    */
   checkin?: {
     todayCheckedIn: boolean;
+    /**
+     * 今日签到窗口是否已开放（Qoder：每日 UTC+8 10:00）。
+     * 缺省 = 其它平台 / 老后端 ⇒ 按「已开放」处理，渲染与原来逐字一致。
+     */
+    windowOpen?: boolean;
+    /** 窗口已开但上游活动列表还是上一轮（Qoder）：稍后刷新，不是失败。 */
+    refreshing?: boolean;
+    /** 下一个签到窗口的可读文本（`MM-DD HH:mm`），未开始时用于提示。 */
+    nextWindowText?: string | null;
     dailyCredit?: number | null;
     todayCredit?: number | null;
     totalCredits?: number | null;
@@ -601,9 +610,10 @@ export function AccountDetailDrawer({
    * 今日签到**真领到**的积分；`null` = 已签到但金额未知（上游只回状态）。
    * 抽屉与 tooltip 都据此显示「—」，**不补 0**（R：未知 ≠ 零）。
    */
-  const todayGain = checkin?.todayCheckedIn
-    ? (checkin.todayCredit ?? checkin.dailyCredit ?? null)
-    : null;
+  const todayGain =
+    checkin?.todayCheckedIn && checkin.windowOpen !== false && !checkin.refreshing
+      ? (checkin.todayCredit ?? checkin.dailyCredit ?? null)
+      : null;
   const isEmpty =
     packs.length === 0 &&
     sections.length === 0 &&
@@ -1130,13 +1140,22 @@ export function AccountDetailDrawer({
                           type="button"
                           size="sm"
                           className="h-7 px-2.5 text-[11px]"
-                          disabled={checkin.todayCheckedIn || !actions.showCheckin}
+                          disabled={
+                            checkin.todayCheckedIn ||
+                            checkin.windowOpen === false ||
+                            checkin.refreshing ||
+                            !actions.showCheckin
+                          }
                           onClick={actions.onCheckin}
                         >
                           <CheckinIcon className="size-3.5" />
-                          {checkin.todayCheckedIn
-                            ? t("shared.drawer.checkin.done")
-                            : t("shared.drawer.checkin.action")}
+                          {checkin.windowOpen === false
+                            ? t("shared.drawer.checkin.notStartedAction")
+                            : checkin.refreshing
+                              ? t("shared.drawer.checkin.refreshingAction")
+                              : checkin.todayCheckedIn
+                                ? t("shared.drawer.checkin.done")
+                                : t("shared.drawer.checkin.action")}
                         </Button>
                       ) : null}
                     </div>
@@ -1155,20 +1174,36 @@ export function AccountDetailDrawer({
                     <CheckinStat
                       label={t("shared.drawer.checkin.today")}
                       value={
-                        !checkin.todayCheckedIn
-                          ? t("shared.drawer.checkin.notCheckedIn")
-                          : /* 金额未知（上游只回了「已签到」/ 台账兜底）⇒ 写「已签到」，**不补成 +0**
-                               —— 补零会让用户以为确实领到 0 积分；写「—」又会和上方指标块的
-                               「已签到」打架（2026-10-29 用户报障「卡片说已签、签到页一片 —」）。 */
-                            todayGain !== null
-                            ? `+${todayGain}`
-                            : t("shared.stat.checkedIn")
+                        checkin.windowOpen === false
+                          ? /* 窗口没开（每日 10:00 前）：上游的「已签」属于上一轮，
+                               这里必须写「未开始」，不能让用户以为今天已经签过了。 */
+                            t("shared.drawer.checkin.notStarted")
+                          : checkin.refreshing
+                            ? t("shared.drawer.checkin.refreshing")
+                            : !checkin.todayCheckedIn
+                              ? t("shared.drawer.checkin.notCheckedIn")
+                              : /* 金额未知（上游只回了「已签到」/ 台账兜底）⇒ 写「已签到」，**不补成 +0**
+                                   —— 补零会让用户以为确实领到 0 积分；写「—」又会和上方指标块的
+                                   「已签到」打架（2026-10-29 用户报障「卡片说已签、签到页一片 —」）。 */
+                                todayGain !== null
+                                ? `+${todayGain}`
+                                : t("shared.stat.checkedIn")
                       }
-                      tone={checkin.todayCheckedIn ? "ok" : "muted"}
+                      tone={
+                        checkin.todayCheckedIn &&
+                        checkin.windowOpen !== false &&
+                        !checkin.refreshing
+                          ? "ok"
+                          : "muted"
+                      }
                       title={
-                        todayGain !== null
-                          ? t("shared.drawer.checkin.todayGain", { n: todayGain })
-                          : undefined
+                        checkin.windowOpen === false && checkin.nextWindowText
+                          ? t("shared.drawer.checkin.notStartedTip", {
+                              time: checkin.nextWindowText,
+                            })
+                          : todayGain !== null
+                            ? t("shared.drawer.checkin.todayGain", { n: todayGain })
+                            : undefined
                       }
                     />
                     <CheckinStat
@@ -1200,7 +1235,8 @@ export function AccountDetailDrawer({
                       }
                     />
                   </div>
-                  {!checkin.todayCheckedIn && actions?.credentialUnavailable && (
+                  {(checkin.windowOpen === false || !checkin.todayCheckedIn) &&
+                    actions?.credentialUnavailable && (
                     <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
                       {t("shared.drawer.actions.credentialNote")}
                     </p>

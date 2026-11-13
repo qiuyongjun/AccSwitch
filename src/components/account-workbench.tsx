@@ -120,6 +120,8 @@ export interface AccountWorkbenchProps<T> {
     okCount: number;
     failedNames: string[];
     skippedNames?: string[];
+    /** 「未到签到时间」的账号（Qoder 每日 10:00 开窗；可选，其它平台不传）。 */
+    notStartedNames?: string[];
     /** 本次真领到的额度合计（活动通道专用；不传 = 不渲染那枚徽标）。 */
     earnedCredits?: number;
     /** 协作式取消后**未处理**的账号数（不传 / 0 = 不渲染）。 */
@@ -289,6 +291,7 @@ export function AccountWorkbench<T>({
             okCount={checkinResult.okCount}
             failedNames={checkinResult.failedNames}
             skippedNames={checkinResult.skippedNames}
+            notStartedNames={checkinResult.notStartedNames}
             unprocessedCount={checkinResult.unprocessedCount}
             onRetry={checkinResult.onRetry}
             onDismiss={onDismissCheckinResult ?? (() => undefined)}
