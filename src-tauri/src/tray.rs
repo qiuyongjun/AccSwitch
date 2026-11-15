@@ -169,7 +169,11 @@ fn should_keep_tray_alive(code: Option<i32>) -> bool {
     code.is_none()
 }
 
-fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+/// 把主窗口带到前台（托盘「打开主界面」与**单实例回调**共用）。
+///
+/// 单实例回调走这里而不是直接 `show()`：用户第二次双击 exe 时，主窗口可能处于
+/// 隐藏到托盘（关闭按钮）或已被销毁（轻量模式）两种状态，只有这条路径两种都能恢复。
+pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     // Recreate if the WebView is gone even when the flag is already false
     // (e.g. destroy() completed after a failed lightweight toggle).
     if LIGHTWEIGHT_MODE.load(Ordering::Acquire)

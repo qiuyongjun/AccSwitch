@@ -288,7 +288,27 @@ fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tauri::
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // ★ 单实例守卫必须是**第一个**注册的插件：插件按注册顺序执行，第二个实例的
+    //   拦截必须发生在其余插件的 setup 之前（否则它已经拉起了 WebView / 托盘）。
+    //   Windows 用命名互斥 + 隐藏窗口，macOS 用 Unix socket —— 判据是 bundle identifier。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        // 第二个实例的 `--hidden`（系统自启）保持静默：否则「开机自启 + 已在运行」
+        // 会莫名把窗口弹到前台。普通双击则唤出已运行实例的主界面。
+        if tray::is_silent_startup(argv) {
+            return;
+        }
+        // ★ 必须投递回主线程：Windows 的回调来自隐藏窗口的 WndProc（主线程），但 macOS
+        //   的回调来自插件的 tokio 任务；而 `show_main_window` 的 macOS 分支会直接调
+        //   AppKit（`apply_macos_app_icon` 依赖 `MainThreadMarker::new_unchecked`），
+        //   跨线程调用违反其安全前提。
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || tray::show_main_window(&handle));
+    }));
+
+    let mut builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
