@@ -956,10 +956,18 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
             }),
             detail: description,
           });
-          toast.warning(t("trae.page.accounts.actionDone", { label }), {
-            id: toastId,
-            description,
-          });
+          /* toast 标题与状态条一致（switchedNotLaunched）：这里是警告分支，
+             「{label}完成」会让人以为客户端也起来了。 */
+          toast.warning(
+            t("shared.switchProgress.switchedNotLaunched", {
+              name: accountName,
+              client: programLabel,
+            }),
+            {
+              id: toastId,
+              description,
+            },
+          );
         }
       } else if (restart) {
         /* launch 步骤明确失败 / 跳过（没装、找不到可执行文件）：切换本身已成功。 */
@@ -973,10 +981,16 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
           }),
           detail: description,
         });
-        toast.warning(t("trae.page.accounts.actionDone", { label }), {
-          id: toastId,
-          description,
-        });
+        toast.warning(
+          t("shared.switchProgress.switchedNotLaunched", {
+            name: accountName,
+            client: programLabel,
+          }),
+          {
+            id: toastId,
+            description,
+          },
+        );
       } else {
         await loadAll();
         op.settle({

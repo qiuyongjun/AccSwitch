@@ -1139,7 +1139,9 @@ function QoderAccountsPanel({
           title: t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }),
           detail: description,
         });
-        toast.warning(t("qoder.page.accounts.switch.done", { name }), {
+        /* toast 标题与状态条一致（switchedNotLaunched）：这里是警告分支，
+           沿用「已切换到 {name}」会让人以为客户端也起来了。 */
+        toast.warning(t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }), {
           id: toastId,
           description,
         });
@@ -1197,7 +1199,7 @@ function QoderAccountsPanel({
             title: t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }),
             detail: description,
           });
-          toast.warning(t("qoder.page.accounts.switch.done", { name }), {
+          toast.warning(t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }), {
             id: toastId,
             description: [description, backupNote].filter(Boolean).join(t("shared.punct.semicolon")),
           });
