@@ -36,7 +36,8 @@ export const zh = {
   // ---- 顶部应用栏（redesign L1 作用域 + 全局动作）----
   "topbar.scope.aria": "切换作用域",
   "topbar.scope.menuLabel": "作用域（平台 × 区域）",
-  "topbar.scope.sub.loggedIn": "{name} · {n} 个账号",
+  // ★ 2026-11-16：不再显示已登录账号名（隐私考量），只显示账号数量。
+  "topbar.scope.sub.loggedIn": "{n} 个账号",
   "topbar.scope.sub.loggedOut": "未登录 · {n} 个账号",
   "topbar.scope.sub.missing": "未检测到 · {n} 个账号",
   // 有需处理账号时缀在副标题后（原型 `scope-menu`）—— 切之前就能看出哪个作用域有事要办。

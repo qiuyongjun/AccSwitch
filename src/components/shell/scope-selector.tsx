@@ -53,8 +53,11 @@ export function ScopeSelector({
   const subOf = (s: Scope): string => {
     const status = statuses[s];
     const n = status.accountCount;
+    /* ★ 2026-11-16（用户要求）：作用域副标题不再显示已登录账号名（`loggedInName`），
+       只显示账号数量 —— 账号名可能含昵称 / UID 等敏感信息，不该常驻在顶栏下拉里。
+       `loggedOut` / `missing` 两个键本就不含账号名，保持原样。 */
     const base = status.loggedInName
-      ? t("topbar.scope.sub.loggedIn", { name: status.loggedInName, n })
+      ? t("topbar.scope.sub.loggedIn", { n })
       : t(status.installed ? "topbar.scope.sub.loggedOut" : "topbar.scope.sub.missing", { n });
     /* 原型 `scope-menu`（`buddy-switch-prototype.html:3889`）：有需处理项时再缀一段 ——
        目的是「切之前就能看出哪个作用域有账号待处理」，不必先切过去看账号页。

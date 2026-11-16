@@ -41,7 +41,8 @@ export const en = {
   // ---- Top app bar (redesign L1 scope + global actions) ----
   "topbar.scope.aria": "Switch scope",
   "topbar.scope.menuLabel": "Scopes (platform × region)",
-  "topbar.scope.sub.loggedIn": "Signed in as {name} · {n} accounts",
+  // ★ 2026-11-16: no longer shows the signed-in account name (privacy) — count only.
+  "topbar.scope.sub.loggedIn": "{n} accounts",
   "topbar.scope.sub.loggedOut": "Not signed in · {n} accounts",
   "topbar.scope.sub.missing": "Not detected · {n} accounts",
   // Appended when a scope has accounts needing action (prototype `scope-menu`).
