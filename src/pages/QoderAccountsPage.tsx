@@ -804,6 +804,57 @@ function QoderAccountsPanel({
       });
   }, [detail, checkinLoaded, checkinEntryOf, scope]);
 
+  /**
+   * 首屏**补齐**：区域快照落地后，对**仍没有上游读数**的账号补一次逐账号查询。
+   *
+   * ★ 2026-11-16（用户报障「打开账号页默认没有签到状态，手点刷新才显示」）：
+   * 首屏唯一的上游来源是 `qoder_checkin_status` 的**区域快照**；它一次失败
+   * （冷启动的身份探测互相踩、上游限流、某账号 401）就会让整批卡片落回「凭据可用」
+   * 徽章 —— 而逐账号的 `qoder_checkin_status_map` 此前**只在你手点刷新时**才发
+   * （见 `checkinMap` 的注释）。于是「打开没有、刷新才有」成了固定观感。
+   * 这里把抽屉已有的补取口径（`checkinAutoFetched`）搬到首屏：只补**缺读数**的账号，
+   * 每个 uid 每次挂载只试一次，失败不记账、不打扰。
+   *
+   * 边界：
+   * - `checkinUnavailable`（本区域未开放签到）⇒ 整批跳过，不做 N 次必失败的请求；
+   * - 台账已给出「今日已签」的账号**不再补取**（`entry.ok` 已成立，卡片画得出结论）；
+   * - 在途期间用户手动刷新 / 签到成功 ⇒ 写入序号已前进，这份旧响应丢弃。
+   */
+  const checkinFillAttempted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!checkinLoaded || checkinUnavailable) return;
+    if (!accounts || accounts.length === 0) return;
+    const missing = accounts.filter((account) => {
+      if (checkinFillAttempted.current.has(account.uid)) return false;
+      return !checkinEntryOf(account.uid)?.ok;
+    });
+    if (missing.length === 0) return;
+    /* 先记账再发请求：这批 uid 本轮只试一次，效果失败也不会因为
+       `setCheckinMap` 引起的重渲染而反复重发。 */
+    const uids = missing.map((account) => account.uid);
+    for (const uid of uids) checkinFillAttempted.current.add(uid);
+    const seqAtStart: Record<string, number> = Object.fromEntries(
+      uids.map((uid) => [uid, checkinWriteSeq.current[uid] ?? 0]),
+    );
+    void api
+      .qoderCheckinStatusMap(scope, uids)
+      .then((map) => {
+        if (!aliveRef.current) return;
+        const accepted: Record<string, CheckinStatusEntry> = {};
+        for (const uid of uids) {
+          const row = map[uid];
+          if (!row?.ok) continue;
+          if ((checkinWriteSeq.current[uid] ?? 0) !== seqAtStart[uid]) continue;
+          accepted[uid] = row;
+        }
+        if (Object.keys(accepted).length === 0) return;
+        setCheckinMap((prev) => ({ ...prev, ...accepted }));
+      })
+      .catch(() => {
+        /* 后台补齐失败不打扰：卡片保持「未知」并回落凭据徽章；手点刷新仍可重试。 */
+      });
+  }, [accounts, checkinEntryOf, checkinLoaded, checkinUnavailable, scope]);
+
   /* ── 选择（照 Trae：全选只作用于**当前可见**的行） ── */
 
   const allVisibleSelected = sorted.length > 0 && sorted.every((a) => selected.has(a.uid));

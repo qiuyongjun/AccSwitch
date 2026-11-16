@@ -84,6 +84,31 @@ pub fn disabled() -> bool {
     )
 }
 
+/// 缓存命中（**含命中一条失败负缓存**）⇒ `Some(值)`；`None` = 未命中 / 已过期。
+fn cached_value(region: QoderRegion, force: bool) -> Option<Option<NativeIdentity>> {
+    if force {
+        return None;
+    }
+    let guard = cache().lock().ok()?;
+    let (at, value) = guard.get(&region)?;
+    let ttl = if value.is_some() { TTL } else { NEGATIVE_TTL };
+    (at.elapsed() < ttl).then(|| value.clone())
+}
+
+/// 探测互斥：冷启动时**同一区域**会有多个调用者并发进来（`status_for` 自己就有
+/// `STATUS_MAP_MAX_INFLIGHT` = 4 个任务，额度 / 程序位另算），而缓存是「组件返回后
+/// 才写」的 ⇒ 每个调用者都会各拉起一份 `runtime-info.exe`（各约 3.7s）。
+///
+/// ★ 2026-11-16（用户报障「打开 Qoder 账号页默认没有签到状态，手点刷新才显示」）：
+/// 并发执行同一组件不只是浪费 —— 任一路拿不到身份，那条账号的签到行就是 `ok:false`
+/// （没有机器头 ⇒ 上游拒），而失败要**负缓存 5 分钟**（[`NEGATIVE_TTL`]），
+/// 于是整批卡片回落成「凭据可用」徽章，只有手点刷新（逐账号重取、缓存已热）才对。
+/// 拿到锁后**重查一次缓存**（double-check）：冷启动真正执行组件的只有第一个调用者。
+///
+/// ⚠️ 这把锁是 `std::sync::Mutex`：它会阻塞调用线程，但组件本身本来就是同步阻塞的
+/// （`run_cmd_timeout_full`），这里只是让「阻塞」从 N 份并发变成 1 份串行等待。
+static PROBE_LOCK: Mutex<()> = Mutex::new(());
+
 /// 取（可缓存的）原生身份；取不到返回 `None`（调用方回退派生）。
 ///
 /// `force = true` 跳过缓存重新取值（服务端明确拒绝当前身份时的自愈路径用）。
@@ -91,15 +116,15 @@ pub fn cached_identity(region: QoderRegion, uid: &str, force: bool) -> Option<Na
     if disabled() {
         return None;
     }
-    if !force {
-        if let Ok(guard) = cache().lock() {
-            if let Some((at, value)) = guard.get(&region) {
-                let ttl = if value.is_some() { TTL } else { NEGATIVE_TTL };
-                if at.elapsed() < ttl {
-                    return value.clone();
-                }
-            }
-        }
+    if let Some(value) = cached_value(region, force) {
+        return value;
+    }
+    let _probe = PROBE_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    // 抢到锁时别的调用者可能刚写完缓存 ⇒ 再查一次，不重复执行组件（见 `PROBE_LOCK`）。
+    if let Some(value) = cached_value(region, force) {
+        return value;
     }
     let value = identity_from_component(region, uid);
     if let Ok(mut guard) = cache().lock() {

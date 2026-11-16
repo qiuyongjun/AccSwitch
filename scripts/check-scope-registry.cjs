@@ -2209,7 +2209,19 @@ check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 �
   if (/useState\(\(\) => cachedEnrichment !== undefined\)/.test(qoder)) {
     throw new Error("Qoder `checkinLoaded` 又用缓存代替「本轮已尝试」—— 抽屉会与在途快照并发补取（spec §11）");
   }
-  return "单航班复用 · 全量时刻独立 · TTL 读全量时刻 · 无 30 分钟定时器 · 一键刷新按层判定 · Qoder 快照契约";
+  /* ★ 2026-11-16（spec §13）：首屏不得再依赖「区域快照一次成功」—— 缺读数的账号必须补一轮
+     逐账号查询，否则「打开没有、刷新才有」会复发；而「本区域未开放签到」必须整批跳过。 */
+  if (!/checkinFillAttempted/.test(qoder) || !/qoderCheckinStatusMap\(scope, uids\)/.test(qoder)) {
+    throw new Error("Qoder 首屏签到补取丢了 —— 区域快照全失败时卡片会一直停在「凭据可用」（spec §13）");
+  }
+  if (!/if \(!checkinLoaded \|\| checkinUnavailable\) return;/.test(qoder)) {
+    throw new Error("首屏签到补取没排除「本区域未开放签到」—— 会白发 N 次必失败的请求（spec §13）");
+  }
+  const nativeBridge = stripComments(readCode("crates/buddy-switch-core/src/modules/qoder/native.rs"));
+  if (!/PROBE_LOCK/.test(nativeBridge)) {
+    throw new Error("原生身份探测又回到「缓存未命中各自拉起组件」—— 冷启动并发会互相踩（spec §13）");
+  }
+  return "单航班复用 · 全量时刻独立 · TTL 读全量时刻 · 无 30 分钟定时器 · 一键刷新按层判定 · Qoder 快照契约 · 首屏签到补取 · 身份探测单航班";
 });
 
 check("★ 冷启动提速（spec §12.9）：负缓存期保便宜层 · Trae 单航班 · 状态闸门只挡事件路径", () => {
