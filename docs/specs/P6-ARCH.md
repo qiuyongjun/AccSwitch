@@ -127,7 +127,8 @@ PLAN §3.11 要求：命令面板 = combobox 语义 + `aria-activedescendant` + 
 - 新增依赖 `cmdk`；新增 shadcn 风格薄封装 `src/components/ui/command.tsx`（`Command` / `Command.Input` / `Command.List` / `Command.Group` / `Command.Item`）；
 - 外层用既有 `@radix-ui/react-dialog`（已装）承载浮层 ⇒ **焦点陷阱 + `Esc` 关闭 + 关闭后焦点归还触发按钮**由 Radix 默认能力提供（§3.11），**不手写**；
 - **`aria-live` 播报结果数**（`「N 个结果」`）；
-- 触发：`⌘K` / `Ctrl+K` 全局键 + 侧栏「搜索或跳转」入口按钮（**搜索入口 ≠ 作用域切换器**，不违反「第二个看起来能切的控件」）。
+- 触发：`⌘K` / `Ctrl+K` 全局键（★ 2026-11-16：顶栏搜索按钮已随顶栏收敛移除，⌘K 是**唯一**入口；
+  原计划的侧栏入口按钮从未落地）。
 
 ### 1.7 「无数据不渲染」在本期的三处落点（§3.4 规则 1）
 
@@ -204,7 +205,7 @@ export function collectPaletteActions(): readonly PaletteAction[];
 | 相对路径 | 改动 |
 |:---|:---|
 | `package.json` | 新增依赖 **`cmdk`**（PLAN §3.11 指定） |
-| `src/App.tsx` | 挂载 `<CommandPalette />` + `<FirstRunHint />`；`Layout` 内注册**全局键**（`⌘K` + `⌘1..N`，含输入框豁免）；侧栏「搜索或跳转」入口按钮 |
+| `src/App.tsx` | 挂载 `<CommandPalette />` + `<FirstRunHint />`；`Layout` 内注册**全局键**（`⌘K` + `⌘1..N`，含输入框豁免）。（★ 2026-11-16：顶栏搜索按钮移除后 `palette.entry` 词条随之删除） |
 | `src/pages/AccountsPage.tsx` | ① 接线 `?q=` 一次性种子（§1.8）；② 删除成功后调 `showUndoToast({ undo: () => api.accountRestore(...) })`（**受 P5 约束**，§1.4） |
 | `src/pages/TraeAccountsPage.tsx` | 同上（Trae 侧；键 = `userId`） |
 | `src/pages/SettingsPage.tsx`（或 `src/components/app-settings.tsx`） | 「键盘快捷键」开关（关闭 ⇒ `bindings=∅`）；降级时**不显示开关**（§1.7） |
@@ -677,6 +678,8 @@ sequenceDiagram
 
 5. **命令面板入口位置** → ✅ **侧栏按钮**（`ProductSwitch` 之下、`nav` 之上，文案「搜索或跳转 ⌘K」）。
    理由：它是**搜索/跳转入口**，**不是作用域切换器** ⇒ 不违反「不许第二个看起来能切的控件」。
+   ★ 2026-11-16 复核：该侧栏按钮最终未落地，入口后迁顶栏搜索按钮；顶栏按钮现已随顶栏收敛移除
+   ⇒ **⌘K 全局键是唯一入口**（见 §1.6）。
 
 6. **P7 动作扩展方式** → ✅ **两者都留口子**（`registerPaletteActions` 注册函数 + `palette-actions.ts` 默认清单）。
    理由：注册函数**解耦更彻底**（P7 不改面板组件），默认清单作为轻量兜底；P6 先落，P7 落地时二选一。

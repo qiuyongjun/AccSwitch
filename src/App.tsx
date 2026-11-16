@@ -1,7 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type ElementType } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, GitBranch, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
-import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -18,7 +17,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { demoModeEnabled, pagesDemoHostingEnabled } from "@/lib/demo-mode";
 import { useT } from "@/lib/i18n";
-import { scopeLabel } from "@/lib/command-palette";
 import type { TranslationKey } from "@/locales/zh";
 import { planScopeShortcuts, scopeShortcutTarget } from "@/lib/scope-shortcuts";
 import { useVisibleScopes } from "@/lib/scope-visibility";
@@ -560,10 +558,10 @@ function Layout() {
   const navRegion = product === "trae" ? traeRegion : wbRegion;
   const scope = scopeOf(product, navRegion);
   /** 六个作用域的环境状态（顶栏作用域菜单的唯一取数来源）。 */
-  const { statuses, refreshProduct } = useScopeStatus();
+  const { statuses } = useScopeStatus();
 
-  /* P6：命令面板（⌘K）的开关状态。入口有两个 —— 顶栏搜索按钮与全局 ⌘K。
-     状态放在 `Layout`（而非 `App`）里，是为了与顶栏入口共享、且都处于 Router 上下文内。 */
+  /* P6：命令面板（⌘K）的开关状态。顶栏搜索按钮已于 2026-11-16 移除 ⇒ 唯一入口是全局 ⌘K。
+     状态放在 `Layout`（而非 `App`）里，是为了处于 Router 上下文内。 */
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   /* P6：作用域快捷键规划。降级（>9 个作用域或用户关闭）⇒ 空绑定 ⇒ 序号提示同步消失。
@@ -714,49 +712,19 @@ function Layout() {
   }
 
   /**
-   * 刷新「当前作用域」的账号与状态（顶栏 ⟳）。
-   *
-   * - **WorkBuddy**：走账号 store 自己的命令（`refreshRegionStatus` + `reconcileAccounts`），
-   *   与命令面板的「刷新当前作用域」同口径；
-   * - **Trae / Qoder**：走 `useScopeStatus` 聚合快照的 `refreshProduct`（顶栏状态的数据源；
-   *   两条产品线的快照是两个键，所以必须按产品分派）。
-   *
-   * ★ 返回 Promise 且**自带结果反馈**（原型 `doRefresh` 的「已刷新」toast）：
-   * 成功/失败都给出显式提示，不再让请求静默跑完 —— 顶栏按钮的进行中态由它驱动
-   * （`top-bar.tsx` 用 `useRefreshAction` 包装）。
+   * 顶栏不再有刷新动作（2026-11-16 移除）：原 `refreshCurrentScope` 只能重读聚合快照 /
+   * `reconcileAccounts`——快照本就有 60 秒轮询、账号页「一键刷新」又是其真子集，
+   * 且在账号页以外的页面点击后页面内容不变、只弹「已刷新」toast。刷新语义收敛到
+   * 账号页三作用域；命令面板的「刷新当前作用域」保留为兜底入口。
    */
-  async function refreshCurrentScope() {
-    try {
-      if (product === "workbuddy") {
-        const store = useAccountsStore.getState();
-        // 运行状态探测沿用「静默」口径（`refreshRegionStatus` 内部吞错，下一轮轮询会再探）；
-        // 账号列表重读是本轮刷新的主判据，失败必须冒泡给下面的 toast。
-        void store.refreshRegionStatus(navRegion);
-        await store.reconcileAccounts(navRegion);
-      } else {
-        // Trae / Qoder 的刷新失败不抛错（写进快照的 `error` 字段）⇒ 用显式结果判成败。
-        const aggregateError = await refreshProduct(product);
-        if (aggregateError) throw new Error(aggregateError);
-      }
-      toast.success(t("topbar.refreshDone"), {
-        description: t("topbar.refreshDoneDesc", { scope: scopeLabel(scope, t) }),
-      });
-    } catch (error) {
-      toast.error(t("topbar.refreshFailed"), { description: api.asError(error) });
-    }
-  }
-
   return (
     <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-background">
-      {/* ══ 顶部应用栏（L0/L1）：作用域 + 运行态 + 搜索 + 刷新 + 主题 + 应用设置 ══ */}
+      {/* ══ 顶部应用栏（L0/L1）：作用域 + 运行态 + 主题 + 应用设置 ══ */}
       <TopBar
         scope={scope}
         statuses={statuses}
         shortcutBindings={shortcutPlan.bindings}
         onSelectScope={selectScope}
-        searchLabel={t("palette.entry")}
-        onOpenSearch={() => setPaletteOpen(true)}
-        onRefresh={refreshCurrentScope}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -839,7 +807,8 @@ function Layout() {
         </main>
       </div>
 
-      {/* P6：命令面板（Radix Dialog + cmdk）。挂在 Layout 内 ⇒ 与顶栏入口共享开关状态。 */}
+      {/* P6：命令面板（Radix Dialog + cmdk）。挂在 Layout 内；⌘K 全局键是唯一入口
+          （顶栏搜索按钮 2026-11-16 移除）。 */}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   );

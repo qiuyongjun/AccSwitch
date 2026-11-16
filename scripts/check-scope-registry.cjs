@@ -4348,16 +4348,20 @@ check("★ P6 `?q=` 一次性种子：两账号页读一次并 replace 清参（
   return "两页都读一次 ?q= 并 replace 清参";
 });
 
-check("★ P6 面板接线：App 挂载面板 + 首次引导条 + 侧栏入口按钮 + ⌘K/⌘1..N（入口是按钮不是切换器）", () => {
+check("★ P6 面板接线：App 挂载面板 + 首次引导条 + ⌘K/⌘1..N（⌘K 键盘唤起；顶栏搜索按钮 2026-11-16 移除）", () => {
   const app = readCode(APP_TSX);
   if (!/<CommandPalette\b/.test(app)) throw new Error("没有挂载 <CommandPalette>");
   if (!/<FirstRunHint\b/.test(app)) throw new Error("没有挂载 <FirstRunHint>");
-  if (!/palette\.entry/.test(app)) throw new Error("侧栏没有「搜索或跳转」入口按钮");
+  /* 顶栏搜索按钮（原 `palette.entry` 的唯一消费者）已随 2026-11-16 收敛移除，
+     面板入口只剩全局 ⌘K —— 此处不再断言任何 UI 入口按钮。 */
+  if (/palette\.entry/.test(app)) {
+    throw new Error("App 仍引用已删除的 `palette.entry` 词条（顶栏搜索按钮已移除）");
+  }
   if (!/event\.key\.toLowerCase\(\)\s*!==\s*"k"/.test(app)) throw new Error("没有 ⌘K 全局键");
   if (!/\/\^\[1-9\]\$\//.test(app)) throw new Error("没有 ⌘1..N 全局键");
   if (!/scopeShortcutTarget\(/.test(app)) throw new Error("⌘1..N 没有用 `scopeShortcutTarget`");
   if (!/planScopeShortcuts\(/.test(app)) throw new Error("App 没有用 `planScopeShortcuts` 规划快捷键");
-  return "挂载面板 + 引导 + 入口 + ⌘K + ⌘1..N";
+  return "挂载面板 + 引导 + ⌘K + ⌘1..N";
 });
 
 /* ── P6 接线级验证（T05 独立验证补强）──────────────────────────────────────────

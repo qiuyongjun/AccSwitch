@@ -805,8 +805,13 @@ CodeBuddy IDE / CLI 的切换是各自独立模块、不带会话复制。
 
 | 入口 | 负责 | 与对方的关系 |
 |:--|:--|:--|
-| 顶栏 ⟳ | 「重新发现账号库」：账号增减 / 安装与运行状态（`refreshRegionStatus` + `reconcileAccounts`） | 与一键刷新**共用** `reconcileAccounts`，重叠是刻意的 |
 | 页头一键刷新 | 「刷新这张卡上的数字」：积分 / 旅行 / 签到状态 / **凭据状态（含到期时刻）** / 任务摘要 | 不含今日 Token |
+
+> **顶栏 ⟳ 已移除（2026-11-16 用户拍板）**：它只能「重新发现账号库」
+> （`refreshRegionStatus` + `reconcileAccounts`），而聚合快照本就有 60 秒可见时轮询、
+> 账号页一键刷新又含 `reconcileAccounts`（真子集）；且在账号页以外的页面点击后页面
+> 内容不变、只弹「已刷新」toast。两个刷新并存让用户不知道用哪个 ⇒ 刷新语义收敛到
+> 账号页三作用域（单账号 / 批量 / 一键）；命令面板的「刷新当前作用域」保留为兜底入口。
 
 为什么不能把凭据拆出去：卡片的「凭据到期 / 刷新令牌到期」来自 `account.expiresAt` /
 `refreshExpiresAt`，**只有** `getAccounts`（即 `reconcileAccounts`）能更新，而且该接口只有

@@ -52,13 +52,12 @@ export const en = {
   "topbar.run.running": "Running",
   "topbar.run.stopped": "Not running",
   "topbar.run.missing": "Not detected",
-  "topbar.search": "Search accounts, pages, or actions",
-  "topbar.refresh": "Refresh current scope",
-  // Refresh-complete toast (prototype `doRefresh` success note). Wording follows what the
-  // top-bar refresh actually rereads: the account list + running status (no credits).
-  "topbar.refreshDone": "Refreshed",
-  "topbar.refreshDoneDesc": "{scope}: accounts and status updated",
-  "topbar.refreshFailed": "Refresh failed",
+  // "topbar.refresh / refreshDone / refreshDoneDesc / refreshFailed" were removed on 2026-11-16
+  // along with the top-bar refresh button: refresh semantics live in the accounts pages
+  // (single / batch / one-click), the command palette keeps "refresh current scope" as a fallback.
+  // "topbar.search / palette.entry" were removed the same day with the top-bar search button:
+  // the ⌘K command palette stays (keyboard-invoked), it just no longer has a permanent
+  // search box in the top bar.
   "topbar.theme": "Switch light/dark theme",
   "topbar.appMenu": "App settings",
 
@@ -73,7 +72,6 @@ export const en = {
   "pageHead.sessions": "One session with a copy in each account — who lags, who diverged, sync to whom",
 
   // ---- Command palette (⌘K, P6 §3.7) ----
-  "palette.entry": "Search or jump",
   "palette.title": "Search or jump",
   "palette.description": "Search accounts, pages, and actions across scopes; press Enter to go.",
   "palette.aria": "Command palette",

@@ -30,7 +30,7 @@
  * 侧栏一颗圆点，现在是一张跨作用域的状态表 —— 信息的范围变了，取数范围随之改变。
  */
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import * as api from "@/lib/api";
 import type { AccountMeta, AppStatus } from "@/lib/types";
@@ -45,7 +45,6 @@ import {
 import { useCachedResource } from "@/lib/use-cached-resource";
 import { useDocumentVisible } from "@/lib/use-document-visible";
 import { useAccountsStore } from "@/stores/accounts";
-import { useResourceStore } from "@/stores/resources";
 import { identityDisplayName } from "@/components/account-card";
 
 /** 单个作用域的环境状态。 */
@@ -238,19 +237,20 @@ function workbuddyStatus(status: AppStatus | null, accounts: AccountMeta[]): Sco
 }
 
 /**
- * 四作用域状态表 + Trae 侧的强制刷新入口。
+ * 四作用域状态表。
  *
- * `refreshTrae` 供顶栏「刷新当前作用域」在 Trae 作用域下使用；WorkBuddy 侧刷新走
- * 账号 store 自己的命令（见 `Layout` 的刷新实现）。
+ * 原先这里的 `refreshProduct` 只服务顶栏 ⟳；该按钮已于 2026-11-16 移除
+ * （快照本就有 60 秒轮询、账号页「一键刷新」覆盖面更大，详见 `top-bar.tsx` 模块注释），
+ * `refreshProduct` 随之删除。
  *
  * ## ★ Trae 侧为什么要自己带轮询（本 hook 的一处**已修缺陷**）
  *
  * WorkBuddy 侧的两条状态由账号 store 维护，store 自带 60 秒轮询
  * （`useWorkbuddyStatusRefresh`）⇒ 顶栏是活的。
  * Trae 侧只有一份 `useCachedResource` 快照，而 `useCachedResource` **只负责
- * 「挂载时取一次 + 窗口内复用」，它没有定时器** —— 于是 Trae 的三个事实
- * （已安装 / 运行中 / 当前登录）**只有点顶栏 ⟳ 才会更新**：用户看到的正是
- * 「这个不会自动刷新，只能手动刷」。本 hook 因此自己起一个 60 秒轮询。
+ * 「挂载时取一次 + 窗口内复用」，它没有定时器** —— 不自己轮询的话，Trae 的三个事实
+ * （已安装 / 运行中 / 当前登录）就只会停留在挂载那一刻：用户看到的正是
+ * 「这个不会自动刷新」。本 hook 因此自己起一个 60 秒轮询。
  *
  * 两个细节都不是随手写的：
  *
@@ -262,20 +262,6 @@ function workbuddyStatus(status: AppStatus | null, accounts: AccountMeta[]): Sco
  */
 export function useScopeStatus(): {
   statuses: ScopeStatusMap;
-  /**
-   * 强制刷新**非 WorkBuddy** 作用域的聚合快照（Trae / Qoder）；**返回错误文案**（`null` = 成功）。
-   *
-   * WorkBuddy 的刷新不在这里：它走账号 store 自己的命令（见 `Layout.refreshCurrentScope`）。
-   * ⚠️ 两个产品线的快照**来自不同键**，所以刷新也必须按产品分派 —— 用同一个函数刷另一条，
-   * 只会让顶栏那个「已刷新」toast 说谎。
-   *
-   * ⚠️ 为什么返回值不是 `void`：`useCachedResource.refresh` 吞掉异常（失败写进
-   * 快照的 `error`，见 `stores/resources.ts` 的 `load`）⇒ 顶栏刷新若只看
-   * 「await 有没有抛」，Trae / Qoder 的失败会被当成成功去报「已刷新」。这里在刷新结束
-   * 后直接读 store 的**最新** entry（不受 React 渲染时序影响），把结果转成
-   * 显式值给调用方。
-   */
-  refreshProduct: (product: "trae" | "qoder") => Promise<string | null>;
 } {
   const cnStatus = useAccountsStore((s) => s.status);
   const cnAccounts = useAccountsStore((s) => s.accounts);
@@ -321,16 +307,5 @@ export function useScopeStatus(): {
     [cnStatus, cnAccounts, globalStatus, globalAccounts, trae.data, qoder.data],
   );
 
-  // 见返回类型处的说明：refresh 不抛错 ⇒ 刷新完成后从 store 读最新 entry 判成败。
-  const refreshProduct = useCallback(
-    async (product: "trae" | "qoder"): Promise<string | null> => {
-      const key = product === "trae" ? TRAE_SCOPE_STATUS_KEY : QODER_SCOPE_STATUS_KEY;
-      await (product === "trae" ? trae.refresh() : qoder.refresh());
-      const entry = useResourceStore.getState().entries[key];
-      return entry?.error == null ? null : api.asError(entry.error);
-    },
-    [trae.refresh, qoder.refresh],
-  );
-
-  return { statuses, refreshProduct };
+  return { statuses };
 }

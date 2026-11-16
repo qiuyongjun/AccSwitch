@@ -47,13 +47,10 @@ export const zh = {
   "topbar.run.running": "运行中",
   "topbar.run.stopped": "未运行",
   "topbar.run.missing": "未检测到",
-  "topbar.search": "搜索账号、页面或动作",
-  "topbar.refresh": "刷新当前作用域",
-  // 刷新完成的 toast（原型 `doRefresh` 的成功提示）。文案从实：顶栏刷新重读的是
-  // 账号列表 + 运行状态（原型文案提「积分」但本项目顶栏刷新不含积分口径）。
-  "topbar.refreshDone": "已刷新",
-  "topbar.refreshDoneDesc": "{scope} 的账号与状态已更新",
-  "topbar.refreshFailed": "刷新失败",
+  // 「topbar.refresh / refreshDone / refreshDoneDesc / refreshFailed」已于 2026-11-16 随顶栏 ⟳ 一起移除：
+  // 刷新语义收敛到账号页三作用域（单账号 / 批量 / 一键），命令面板保留「刷新当前作用域」兜底。
+  // 「topbar.search / palette.entry」同日随顶栏搜索按钮移除：⌘K 命令面板保留（键盘唤起），
+  // 只是不再在顶栏给搜索框常驻位置。
   "topbar.theme": "切换明暗主题",
   "topbar.appMenu": "应用设置",
 
@@ -68,7 +65,6 @@ export const zh = {
   "pageHead.sessions": "同一份会话在各账号里的副本 —— 谁落后、谁分叉、同步给谁",
 
   // ---- 命令面板（⌘K，P6 §3.7）----
-  "palette.entry": "搜索或跳转",
   "palette.title": "搜索或跳转",
   "palette.description": "跨作用域搜索账号、页面与动作，回车直达。",
   "palette.aria": "命令面板",
