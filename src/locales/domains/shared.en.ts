@@ -841,4 +841,16 @@ export const en = {
   // ---- Page-head "background sync" indicator (components/sync-indicator.tsx, all platforms) ----
   "shared.sync.syncing": "Syncing…",
   "shared.sync.done": "Up to date",
+
+  // ---- Account switch progress (components/switch-progress-banner.tsx, all platforms) ----
+  "shared.switchProgress.switchingTo": "Switching to \"{name}\"",
+  "shared.switchProgress.preparing": "Preparing to switch…",
+  "shared.switchProgress.launching": "Starting {client}…",
+  "shared.switchProgress.launchingDetail": "Login state switched; waiting for the client to start",
+  "shared.switchProgress.clientStarted": "{client} started",
+  "shared.switchProgress.done": "Switched to \"{name}\"",
+  "shared.switchProgress.doneLaunched": "Switched to \"{name}\"; {client} started",
+  "shared.switchProgress.launchTimeout": "{client} did not start in time. The login state is switched; you can open the client manually.",
+  "shared.switchProgress.switchedNotLaunched": "Switched to \"{name}\", but {client} did not start",
+  "shared.switchProgress.failed": "Switch failed",
 };

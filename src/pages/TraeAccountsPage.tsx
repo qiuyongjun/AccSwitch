@@ -38,6 +38,7 @@ import {
   type AccountCheckinState,
 } from "@/components/account-more-menu";
 import { AccountWorkbench } from "@/components/account-workbench";
+import { SwitchProgressBanner } from "@/components/switch-progress-banner";
 import { SyncIndicator } from "@/components/sync-indicator";
 import { type AccountColumn } from "@/components/account-table";
 import { type ToolbarOption } from "@/components/account-toolbar";
@@ -69,6 +70,7 @@ import {
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { REFRESH_DONE_LABEL, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
 import { mapWithConcurrency } from "@/lib/concurrency";
+import { useSwitchProgress, waitForClientRunning } from "@/lib/switch-progress";
 import { TraeExportAccountsDialog } from "@/components/trae-export-accounts-dialog";
 import { TraeImportAccountsDialog } from "@/components/trae-import-accounts-dialog";
 import { ClientlessEmptyCard, ClientlessStrip } from "@/components/clientless-notice";
@@ -351,6 +353,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const logins = snapshot?.logins ?? {};
 
   const [busy, setBusy] = useState<string | null>(null);
+  /** 切换 / 启动客户端的长任务状态（页头状态条，见 `switch-progress-banner.tsx`）。 */
+  const switchProgress = useSwitchProgress();
   /**
    * 收敛迁移的**一次性升级引导**内容（issue #28）。
    *
@@ -449,6 +453,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    */
   const [switchConfirm, setSwitchConfirm] = useState<{
     userId: string;
+    /** 账号展示名（状态条上用；卡片菜单与 toast 的 `label` 是程序位名，二者不同）。 */
+    name: string;
     variant: TraeVariantId;
     label: string;
   } | null>(null);
@@ -838,11 +844,22 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     programVariant: TraeVariantId,
     programLabel: string,
     restart: boolean,
+    accountName: string,
   ) {
     const key = `switch-${userId}@${programVariant}`;
     if (busy !== null) return;
     setBusy(key);
     const label = t("trae.page.accounts.actionSwitch", { line: programLabel });
+    /**
+     * 页头状态条：切换接口返回时客户端往往**还没起来**（后端只是 `spawn` 了进程），
+     * 此前忙态立刻清掉 ⇒ 用户以为切换失败 / 已经不在切了。
+     */
+    const op = switchProgress.begin(
+      t("trae.page.accounts.switchLoading", { line: programLabel }),
+      restart
+        ? t("trae.page.accounts.switchLoadingAuto", { line: programLabel })
+        : t("trae.page.accounts.switchLoadingManual", { line: programLabel }),
+    );
     const toastId = toast.loading(t("trae.page.accounts.switchLoading", { line: programLabel }), {
       description: restart
         ? t("trae.page.accounts.switchLoadingAuto", { line: programLabel })
@@ -851,11 +868,15 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
 
     /* 进度事件（桌面端）：通道不可用不影响主流程 —— 返回的整份报告才是事实来源。 */
     let unlisten: (() => void) | undefined;
+    /** 已进入「等待客户端启动」：后端收尾事件不该再把状态条改回「切换中」。 */
+    let awaitingLaunch = false;
     if (!api.isWebui()) {
       try {
         unlisten = await listen<{ message: string }>("trae-switch-progress", (event) => {
+          if (awaitingLaunch) return;
           const message = event.payload?.message;
           if (!message) return;
+          op.update({ detail: message });
           toast.loading(t("trae.page.accounts.switchLoading", { line: programLabel }), {
             id: toastId,
             description: message,
@@ -872,18 +893,117 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         launch: restart,
         variant: programVariant,
       });
-      /* 成功时把**最后一步**（「已启动客户端」/「切换完成」）留在提示里 ——
-         那正是用户最想确认的一句；没有步骤时退回程序位名字。 */
+      const launchStep = outcome.steps?.find((step) => step.stage === "launch");
       const last = outcome.steps?.[outcome.steps.length - 1];
-      toast.success(t("trae.page.accounts.actionDone", { label }), {
-        id: toastId,
-        description: last?.message ?? programLabel,
-      });
-      await loadAll();
+
+      if (restart && launchStep?.status !== "fail" && launchStep?.status !== "skip") {
+        /* 自动重开：继续等客户端**真的跑起来**，而不是启动命令一发出去就报完成。
+           先把状态条切到「正在启动」，再回读账号 / 程序位（回读可能还要一两秒）。 */
+        awaitingLaunch = true;
+        op.update({
+          phase: "launching",
+          title: t("shared.switchProgress.launching", { client: programLabel }),
+          detail: t("shared.switchProgress.launchingDetail"),
+        });
+        toast.loading(t("shared.switchProgress.launching", { client: programLabel }), {
+          id: toastId,
+          description: t("shared.switchProgress.launchingDetail"),
+        });
+        /* 切换已经生效，卡片上的「当前登录」应立刻跟着走。 */
+        await loadAll();
+
+        const started = await waitForClientRunning(
+          async () => {
+            const view = await api.getTraeVariants();
+            return (view.variants ?? []).some((item) =>
+              item.programs.some(
+                (program) => program.variant === programVariant && program.running,
+              ),
+            );
+          },
+          { signal: op.signal },
+        );
+        if (op.signal.aborted) {
+          /* 页面已卸载 / 新一轮切换已开始：别把 loading toast 永远挂在屏幕上。 */
+          toast.dismiss(toastId);
+          return;
+        }
+
+        if (started) {
+          op.settle({
+            phase: "done",
+            title: t("shared.switchProgress.doneLaunched", {
+              name: accountName,
+              client: programLabel,
+            }),
+            detail: launchStep?.message,
+          });
+          /* 成功时把**最后一步**（「已启动客户端」/「切换完成」）留在提示里 ——
+             那正是用户最想确认的一句；没有步骤时退回程序位名字。 */
+          toast.success(t("trae.page.accounts.actionDone", { label }), {
+            id: toastId,
+            description: t("shared.switchProgress.clientStarted", { client: programLabel }),
+          });
+        } else {
+          const description = t("shared.switchProgress.launchTimeout", {
+            client: programLabel,
+          });
+          op.settle({
+            phase: "warning",
+            title: t("shared.switchProgress.switchedNotLaunched", {
+              name: accountName,
+              client: programLabel,
+            }),
+            detail: description,
+          });
+          toast.warning(t("trae.page.accounts.actionDone", { label }), {
+            id: toastId,
+            description,
+          });
+        }
+      } else if (restart) {
+        /* launch 步骤明确失败 / 跳过（没装、找不到可执行文件）：切换本身已成功。 */
+        await loadAll();
+        const description = launchStep?.message ?? programLabel;
+        op.settle({
+          phase: "warning",
+          title: t("shared.switchProgress.switchedNotLaunched", {
+            name: accountName,
+            client: programLabel,
+          }),
+          detail: description,
+        });
+        toast.warning(t("trae.page.accounts.actionDone", { label }), {
+          id: toastId,
+          description,
+        });
+      } else {
+        await loadAll();
+        op.settle({
+          phase: "done",
+          title: t("shared.switchProgress.done", { name: accountName }),
+          detail: [
+            t("sessions.restart.resultNotRestarted", { client: programLabel }),
+            last?.message,
+          ]
+            .filter(Boolean)
+            .join(t("shared.punct.semicolon")),
+        });
+        toast.success(t("trae.page.accounts.actionDone", { label }), {
+          id: toastId,
+          description: last?.message ?? programLabel,
+        });
+      }
     } catch (e) {
+      const description = api.asError(e);
+      op.settle({
+        phase: "failed",
+        title: t("shared.switchProgress.failed"),
+        detail: description,
+      });
       toast.error(t("trae.page.accounts.actionFailed", { label }), {
         id: toastId,
-        description: api.asError(e),
+        description,
       });
     } finally {
       unlisten?.();
@@ -1054,6 +1174,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   function requestSwitchTo(account: TraeAccount, programVariant: TraeVariantId, label: string) {
     setSwitchConfirm({
       userId: account.userId,
+      name: displayText(account.name)?.trim() || account.userId,
       variant: programVariant,
       label,
     });
@@ -3017,6 +3138,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         </div>
       </header>
 
+      {/* 切换 / 启动客户端的长任务状态：接口返回 ≠ 客户端已经打开，状态条一直跟到进程真的在跑。 */}
+      <SwitchProgressBanner state={switchProgress.state} />
+
       {/* ★ 账号工作台（**两平台共用容器**）—— 与 `AccountsPage` 是**同一个组件**，
           差异只在 props：排序/分组选项、工具栏专属控件、卡片渲染、列定义、首屏空态。
           这正是原型 `curPlatform()` 的机制（同一段 `viewAccounts`，只换数据）。 */}
@@ -3422,7 +3546,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         onConfirm={(restart) => {
           const target = switchConfirm;
           setSwitchConfirm(null);
-          if (target) void doSwitchTo(target.userId, target.variant, target.label, restart);
+          if (target) {
+            void doSwitchTo(target.userId, target.variant, target.label, restart, target.name);
+          }
         }}
       />
 

@@ -59,6 +59,7 @@ import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { RecycleBinSheet } from "@/components/recycle-bin-sheet";
 import { RestartConfirmDialog } from "@/components/restart-confirm-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
+import { SwitchProgressBanner } from "@/components/switch-progress-banner";
 import { SyncIndicator } from "@/components/sync-indicator";
 import { ExtSessionDrawer } from "@/components/sessions/ext-session-drawer";
 import * as api from "@/lib/api";
@@ -69,6 +70,7 @@ import { attentionOf, needsManualAttention } from "@/lib/account-attention";
 import { accountSearchText } from "@/lib/account-search";
 /** 批量动作的并发口径（与积分刷新同一档削峰）：串行会让 20 个账号的批处理变成 20 次 RTT。 */
 import { mapWithConcurrency } from "@/lib/concurrency";
+import { useSwitchProgress } from "@/lib/switch-progress";
 import { readCreditCache, creditCacheNote } from "@/lib/credit-cache";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
@@ -378,6 +380,8 @@ function RegionPanel({ region }: { region: Region }) {
   const [exportTargets, setExportTargets] = useState<AccountMeta[] | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [switchAccount, setSwitchAccount] = useState<AccountMeta | null>(null);
+  /** 切换 / 启动客户端的长任务状态（页头状态条，见 `switch-progress-banner.tsx`）。 */
+  const switchProgress = useSwitchProgress();
   /**
    * ★ P14 S4a · 插件会话抽屉的目标（`null` = 关闭）。
    *
@@ -3332,6 +3336,9 @@ function RegionPanel({ region }: { region: Region }) {
         </div>
       </header>
 
+      {/* 切换 / 启动客户端的长任务状态：接口返回 ≠ 客户端已经打开，状态条一直跟到进程真的在跑。 */}
+      <SwitchProgressBanner state={switchProgress.state} />
+
       {/* 区域不匹配（安全红线） */}
       {mismatch && (
         <Alert variant="warning" className="mb-4">
@@ -3617,6 +3624,12 @@ function RegionPanel({ region }: { region: Region }) {
                               creditCachedAt={cachedCreditAt(a.id)}
                               creditPriority={a.id === priorityAccountId}
                               workbuddyActive={isWorkbuddyCurrent(a, current)}
+                              /* ★ 卡片页脚的 WB 程序位按钮 = **直接打开切换向导**。
+                                 ⚠️ 必须传：`AccountCard` 的该按钮判据是
+                                 `disabled={featuresDisabled || !onSwitch}`，不传就会渲染成
+                                 一颗点不动的灰按钮 —— 用户点它 → 落到卡片本体 → 打开详情，
+                                 还得在详情里再点一次「切换账号向导」。 */
+                              onSwitch={setSwitchAccount}
                               codebuddyCliConfigured={codebuddyCli?.configured && !codebuddyCli.migrationRequired && !codebuddyCli.syncPending}
                               codebuddyCliActive={a.id === cliCurrentAccountId}
                               codebuddyCliBusy={codebuddyCliSwitchingId !== null}
@@ -3766,6 +3779,12 @@ function RegionPanel({ region }: { region: Region }) {
         account={switchAccount}
         region={region}
         copySessionsByDefault={Boolean(switchConfig?.copy_sessions_by_default)}
+        switchProgress={switchProgress}
+        onClientStarted={() => {
+          /* 客户端进程被探测到已启动 ⇒ 顶栏的「运行中」要立刻跟上，
+             而不是等下一轮 60 秒轮询（那会让用户以为切换没生效）。 */
+          void refreshRegionStatus(region);
+        }}
         onDone={() => {
           // 切换完成后必须同时刷新账号库与状态：账号库决定卡片内容，
           // `status.current` 决定「当前账号」标记；只刷账号库会让标记留在旧账号上。

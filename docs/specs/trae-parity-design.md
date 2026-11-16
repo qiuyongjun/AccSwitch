@@ -223,7 +223,7 @@ WorkBuddy 的 `gateway/*` 五组件是 store + region 耦合的，不能直接�
 | G-T06/G-C03/G-C04 | 按项目分组 / 最贵会话 / 官方积分按模型 | `project_dimension` / `session_cost` / `official_credit_by_model` | `payload.rs:144-147` 的 `session_id`/`project_id` 是**每请求新生成的 `uuid_like()`**；Trae 积分只来自签到快照（`credits.rs:572-648`） | Token 统计「按项目」置灰；积分统计「官方积分消耗」不渲染 + 说明 |
 | G-A04 | 自动旅行（派猫猫） | `auto_travel` | `TraeAccountsPage.tsx:80` 明示不存在 | **不渲染**该开关 |
 | G-A05 / G-B-21 | CodeBuddy CLI / IDE 接入 | `codebuddy_cli` | CodeBuddy 属 WorkBuddy 生态（`lib.rs:157-162`） | **不渲染**该折叠卡 |
-| G-A08 / G-C-06 / G-B-10 / G-B-11 / G-B-09 | 会话列表 / 复制会话 / 记忆·连接器迁移 / 切换进度流 | `session_tree` / `account_data_migration` / `switch_progress_stream` | Trae 登录态是 `Cloud-IDE-JWT` 文件集，无会话树/记忆/连接器对象；切换为文件级快照替换（`switch-account-dialog.tsx` 不被 Trae 引用） | Trae 侧**不出现** `switch-account-dialog.tsx`；切换用行内 busy |
+| G-A08 / G-C-06 / G-B-10 / G-B-11 / G-B-09 | 会话列表 / 复制会话 / 记忆·连接器迁移 / 切换进度流 | `session_tree` / `account_data_migration` / `switch_progress_stream` | Trae 登录态是 `Cloud-IDE-JWT` 文件集，无会话树/记忆/连接器对象；切换为文件级快照替换（`switch-account-dialog.tsx` 不被 Trae 引用） | Trae 侧**不出现** `switch-account-dialog.tsx`；切换用行内 busy + 页头切换状态条（2026-11-16 起含客户端启动等待） |
 | G-T02 | 产品来源多 Tabs（CLI/IDE） | `multi_source_tabs` | Trae 只有本机网关一个数据源（`token_stats.rs:1-17`） | 单源即无 Tabs；保留数据源 Alert（`TraeTokenStatsPage.tsx:204-217`）**必须保留** |
 | G-B-16/17/19 | 定时任务 / 自动轮换 | `scheduler` | Trae 侧无调度器（`TraeAccountsPage.tsx:78-79`） | 不出现「自动」开关；用「跳过已签到」 |
 | G-B-20 | GitHub 配置 | `github_config`（非 Trae 差距） | 全局共用项 | 保持全局可用，**不计为 Trae 差距** |
