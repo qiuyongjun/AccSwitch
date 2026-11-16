@@ -6,7 +6,8 @@
  * - **只同步账号与凭据**：六个作用域，不含配置 / 网关；
  * - **手动触发**：上传 / 下载两个按钮，不做后台自动同步；
  * - **下载是写操作**：同 uid 覆盖、缺失新增，落盘前 core 会强制快照 ⇒ 前端先二次确认；
- * - **密码不回显**：只显示「已保存」，留空表示沿用；云端文件由「同步密码」加密。
+ * - **密码不回显**：已保存时占位符显示掩码符号（`●●●●●●●●`，完整文案在 hover tooltip），
+ *   留空表示沿用；云端文件由「同步密码」加密。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -224,9 +225,11 @@ export function CloudSyncSection() {
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  /* 已保存 ⇒ 占位符用掩码符号（比明文提示更像「有值」）；完整语义放 hover tooltip。 */
                   placeholder={
-                    view?.hasPassword ? t("sync.passwordSaved") : t("sync.passwordLabel")
+                    view?.hasPassword ? t("sync.passwordSavedMask") : t("sync.passwordLabel")
                   }
+                  title={view?.hasPassword ? t("sync.passwordSavedHint") : undefined}
                   autoComplete="new-password"
                 />
               </SettingsFieldRow>
@@ -245,9 +248,10 @@ export function CloudSyncSection() {
                   onChange={(event) => setSyncPassword(event.target.value)}
                   placeholder={
                     view?.hasSyncPassword
-                      ? t("sync.syncPasswordSaved")
+                      ? t("sync.syncPasswordSavedMask")
                       : t("sync.syncPasswordLabel")
                   }
+                  title={view?.hasSyncPassword ? t("sync.syncPasswordSavedHint") : undefined}
                   autoComplete="new-password"
                 />
               </SettingsFieldRow>

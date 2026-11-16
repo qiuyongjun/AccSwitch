@@ -110,11 +110,16 @@ export const zh = {
   "sync.usernamePlaceholder": "坚果云登录邮箱",
   "sync.passwordLabel": "WebDAV 应用密码",
   "sync.passwordDesc": "坚果云网页端「安全选项 → 添加应用」生成，不是登录密码。",
-  "sync.passwordSaved": "已保存，留空不修改",
+  // 已保存时的**占位符**用掩码符号（2026-11-16 用户反馈：明文提示效果不好，
+  // 密码字段显示「●●●●」比一行说明更像「这里已经存了值」）；完整语义
+  // （留空 = 沿用）挪到输入框的 hover tooltip（`sync.passwordSavedHint`）。
+  "sync.passwordSavedMask": "●●●●●●●●",
+  "sync.passwordSavedHint": "已保存，留空不修改",
   "sync.syncPasswordLabel": "同步密码",
   "sync.syncPasswordDesc":
     "用于加密云端文件；两台机器必须填写同一个，修改后需重新上传。",
-  "sync.syncPasswordSaved": "已保存，留空不修改",
+  "sync.syncPasswordSavedMask": "●●●●●●●●",
+  "sync.syncPasswordSavedHint": "已保存，留空不修改",
   "sync.securityNote":
     "WebDAV 密码与同步密码保存在本机配置文件中；云端只存加密后的账号数据。",
   "sync.save": "保存配置",

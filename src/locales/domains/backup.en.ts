@@ -112,11 +112,16 @@ export const en = {
   "sync.passwordLabel": "WebDAV app password",
   "sync.passwordDesc":
     "Generated in Nutstore under Security → Add app. This is not your sign-in password.",
-  "sync.passwordSaved": "Saved; leave blank to keep",
+  // Masked placeholder when a password is already saved (2026-11-16 user feedback:
+  // dots read better than a plain-text hint); the full "leave blank to keep"
+  // semantics moved to the input's hover tooltip.
+  "sync.passwordSavedMask": "●●●●●●●●",
+  "sync.passwordSavedHint": "Saved; leave blank to keep",
   "sync.syncPasswordLabel": "Sync password",
   "sync.syncPasswordDesc":
     "Used to encrypt the cloud file. Both machines must use the same password; changing it requires uploading again.",
-  "sync.syncPasswordSaved": "Saved; leave blank to keep",
+  "sync.syncPasswordSavedMask": "●●●●●●●●",
+  "sync.syncPasswordSavedHint": "Saved; leave blank to keep",
   "sync.securityNote":
     "The WebDAV password and sync password are stored in the local config file; only encrypted account data is uploaded.",
   "sync.save": "Save config",
