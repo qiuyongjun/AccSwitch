@@ -424,4 +424,50 @@ mod tests {
         assert!(launcher_dir_names(QoderRegion::Cn).contains(&"Qoder CN"));
         assert_eq!(launcher_dir_names(QoderRegion::Global), &["Qoder"]);
     }
+
+    /// ★ 缓存命中语义：**失败也算命中**（负缓存 5 分钟），`force` 一律绕过，过期后重探。
+    ///
+    /// 这三条是 `PROBE_LOCK`（单航班）存在的前提：组件跑一次约 3.7s，若失败不被记住，
+    /// N 个并发调用者会各拉一份；若失败被记住太久，用户新装客户端后 5 分钟内救不回来。
+    /// 「打开账号页没有签到状态、手点刷新才对」正是并发探测各写各结论的后果（spec §13）。
+    ///
+    /// 可证伪：把负缓存当未命中（`cached_value` 里对 `None` 直接 `return None`）⇒ 第二条
+    /// 断言变红；删掉开头的 `if force { return None }` ⇒ 第三条变红；TTL 判断恒真（永远命中）
+    /// ⇒ 第四条变红。
+    #[test]
+    fn cached_value_treats_failure_as_a_hit_and_respects_force() {
+        let region = QoderRegion::Cn;
+        clear_cache();
+        cache().lock().unwrap().insert(region, (Instant::now(), None));
+        assert!(
+            matches!(cached_value(region, false), Some(None)),
+            "失败负缓存必须算命中（否则并发调用者会各拉一份组件）"
+        );
+        assert!(
+            cached_value(region, true).is_none(),
+            "force 必须绕过缓存（服务端拒绝当前身份时的自愈路径）"
+        );
+        cache().lock().unwrap().insert(
+            region,
+            (
+                Instant::now(),
+                Some(NativeIdentity {
+                    machine_token: "tok".into(),
+                    machine_type: "typ".into(),
+                    machine_code: "cod".into(),
+                }),
+            ),
+        );
+        assert!(
+            matches!(cached_value(region, false), Some(Some(_))),
+            "成功结果必须命中"
+        );
+        /* 过期语义：把时刻挪到负缓存 TTL 之前。刚开机不足 5 分钟的机器上构造不出
+           这个时刻，跳过这一条（不影响上面三条主断言）。 */
+        if let Some(stale) = Instant::now().checked_sub(NEGATIVE_TTL + Duration::from_secs(1)) {
+            cache().lock().unwrap().insert(region, (stale, None));
+            assert!(cached_value(region, false).is_none(), "负缓存必须会过期");
+        }
+        clear_cache();
+    }
 }
