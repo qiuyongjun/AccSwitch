@@ -982,4 +982,20 @@ export const zh = {
      这一行小字就是那个「正在发生」的如实说明；完成后短暂补一句「已更新」。 */
   "shared.sync.syncing": "正在同步…",
   "shared.sync.done": "已更新",
+
+  // ---- 账号切换状态条（components/switch-progress-banner.tsx，三平台共用）----
+  /* 切换不是一次请求：关客户端 → 写登录态 → 启动客户端。接口返回时客户端往往**还没起来**，
+     此前界面已经「恢复正常」⇒ 用户以为没切成功或已经不在切了。
+     切换期间显示当前步骤；自动重开时一直显示到进程探测确认客户端在跑。 */
+  "shared.switchProgress.switchingTo": "正在切换到「{name}」",
+  "shared.switchProgress.preparing": "正在准备切换…",
+  "shared.switchProgress.launching": "正在启动 {client}…",
+  "shared.switchProgress.launchingDetail": "登录态已切换，等待客户端启动",
+  "shared.switchProgress.clientStarted": "{client} 已启动",
+  "shared.switchProgress.done": "已切换到「{name}」",
+  "shared.switchProgress.doneLaunched": "已切换到「{name}」，{client} 已启动",
+  /* 超时不是失败：登录态确实已经换好，只是客户端没在预期时间内出现。 */
+  "shared.switchProgress.launchTimeout": "{client} 在预期时间内没有启动。登录态已切换，可手动打开客户端。",
+  "shared.switchProgress.switchedNotLaunched": "已切换到「{name}」，但 {client} 未能启动",
+  "shared.switchProgress.failed": "切换失败",
 } as const;

@@ -73,6 +73,11 @@ import {
   type SessionTypeNode,
 } from "@/lib/session-tree";
 import type { AccountMeta, MigrateResult, Region, Session } from "@/lib/types";
+import {
+  waitForClientRunning,
+  type SwitchProgressController,
+  type SwitchProgressHandle,
+} from "@/lib/switch-progress";
 
 /** WorkBuddy 桌面客户端的显示名（商标，中英写法相同 ⇒ 不放进词表）。 */
 const WORKBUDDY_LABEL = "WorkBuddy";
@@ -93,6 +98,15 @@ interface Props {
    * 再读一次会出现两个页面各自缓存的配置互相打架。
    */
   copySessionsByDefault?: boolean;
+  /**
+   * 页面级切换状态条控制器（`useSwitchProgress`）。
+   *
+   * 抽屉内的遮罩只覆盖「切换正在抽屉里执行」这一段；切换成功后抽屉关闭、
+   * 客户端还在启动 —— 那段时间由页面状态条继续显示，见 `switch-progress-banner.tsx`。
+   */
+  switchProgress?: SwitchProgressController;
+  /** 轮询确认 WorkBuddy 进程已启动后调用（页面据此刷新顶栏运行态）。 */
+  onClientStarted?: () => void;
 }
 
 /**
@@ -117,6 +131,8 @@ export function SwitchAccountDialog({
   onDone,
   region,
   copySessionsByDefault = false,
+  switchProgress,
+  onClientStarted,
 }: Props) {
   const t = useT();
   const [step, setStep] = useState<WizardStep>(1);
@@ -152,6 +168,10 @@ export function SwitchAccountDialog({
      ⚠️ `permissionRetriedRef` 保证**只重试一次**：否则重试又失败 ⇒ 又触发轮询 ⇒ **无限循环**。 */
   const lastRestartRef = useRef<boolean | null>(null);
   const permissionRetriedRef = useRef(false);
+  /** 当前切换操作的句柄：进度事件（桌面）与轮询（webui）都写同一份页面状态条。 */
+  const opRef = useRef<SwitchProgressHandle | null>(null);
+  /** 已进入「等待客户端启动」：后端收尾事件不该再把状态条改回「切换中」。 */
+  const launchingRef = useRef(false);
   /** 降级 / 异常提示（索引库不可读、扫描结果不完整）。普通场景为 null。 */
   const [sessionWarning, setSessionWarning] = useState<string | null>(null);
   /**
@@ -189,14 +209,19 @@ export function SwitchAccountDialog({
     if (api.isWebui()) {
       const timer = setInterval(() => {
         void api.switchProgress().then((p) => {
-          if (p.progress) setProgress(p.progress);
+          if (p.progress && !launchingRef.current) {
+            setProgress(p.progress);
+            opRef.current?.update({ detail: p.progress });
+          }
         });
       }, 600);
       return () => clearInterval(timer);
     }
     let unlisten: (() => void) | undefined;
     listen<{ message: string }>("switch-progress", (e) => {
+      if (launchingRef.current) return;
       setProgress(e.payload.message);
+      opRef.current?.update({ detail: e.payload.message });
     }).then((fn) => {
       unlisten = fn;
     });
@@ -404,9 +429,23 @@ export function SwitchAccountDialog({
 
   async function doSwitch(restart: boolean) {
     if (!account) return;
+    const nickname = accountDisplayName(account);
+    launchingRef.current = false;
     setBusy(true);
     setProgress(t("wbAccounts.dialog.switchProgress"));
     setError("");
+    /**
+     * 页面级状态条：从「开始切换」一直跟到「客户端进程真的在跑」。
+     *
+     * 抽屉遮罩只覆盖切换本身；接口返回后客户端往往**还在启动**（后端只是 `spawn` 了进程），
+     * 此时抽屉关闭、遮罩消失 —— 没有状态条的话，用户会以为切换已经结束或根本没成功。
+     */
+    const op =
+      switchProgress?.begin(
+        t("shared.switchProgress.switchingTo", { name: nickname }),
+        t("shared.switchProgress.preparing"),
+      ) ?? null;
+    opRef.current = op;
     const parts: string[] = [];
     const warnings: string[] = [];
     try {
@@ -416,6 +455,7 @@ export function SwitchAccountDialog({
       // 两者都关时**完全不要调用**，否则用户会看到一个莫名其妙的错误。
       if (migrateMemory || migrateConnectors) {
         setProgress(t("wbAccounts.dialog.migrateProgress"));
+        op?.update({ detail: t("wbAccounts.dialog.migrateProgress") });
         // 只请求勾选的分区；未请求的分区不会出现在响应里（见 summarizeMigration）。
         const mig = await api.migrateAccountData(account.id, {
           region,
@@ -427,6 +467,10 @@ export function SwitchAccountDialog({
       }
 
       setProgress(t("wbAccounts.dialog.switchProgress"));
+      op?.update({
+        phase: "switching",
+        detail: t("wbAccounts.dialog.switchProgress"),
+      });
       const res = await api.switchAccount({
         accountId: account.id,
         region,
@@ -438,8 +482,6 @@ export function SwitchAccountDialog({
         sourceRegion: sourceRegion === region ? undefined : sourceRegion,
         copySessionIds: copySessions ? [...selected] : undefined,
       });
-      const nickname =
-        accountDisplayName(account);
       if (res.sessionCopy?.copied.length) {
         parts.push(t("wbAccounts.dialog.copiedSessions", { n: res.sessionCopy.copied.length }));
       }
@@ -455,16 +497,91 @@ export function SwitchAccountDialog({
       }
       if (res.backup) parts.push(t("wbAccounts.dialog.backup", { path: res.backup }));
 
+      const separator = t("wbAccounts.dialog.listSeparator");
+      if (restart) {
+        /* ★ 自动重开：接口返回只代表「已发起启动」，客户端窗口可能还要十几秒才出现。
+           抽屉先关 / 列表先刷新，状态条继续显示「正在启动」，直到进程探测确认真的在跑。 */
+        const launchText = t("shared.switchProgress.launching", { client: WORKBUDDY_LABEL });
+        const launchDetail = t("shared.switchProgress.launchingDetail");
+        launchingRef.current = true;
+        op?.update({ phase: "launching", title: launchText, detail: launchDetail });
+        setProgress(launchText);
+        const toastId = toast.loading(launchText, { description: launchDetail });
+        onOpenChange(false);
+        onDone?.();
+
+        const started = await waitForClientRunning(
+          async () => (await api.getStatus(targetRegion)).running,
+          { signal: op?.signal },
+        );
+        if (op?.signal.aborted) {
+          /* 页面已卸载 / 新一轮切换已开始：别把 loading toast 永远挂在屏幕上。 */
+          toast.dismiss(toastId);
+          return;
+        }
+
+        if (started) {
+          onClientStarted?.();
+          op?.settle({
+            phase: "done",
+            title: t("shared.switchProgress.doneLaunched", {
+              name: nickname,
+              client: WORKBUDDY_LABEL,
+            }),
+            detail: parts.join(separator) || undefined,
+          });
+          const restartNote = t("wbAccounts.dialog.switchedDefault");
+          const description = [restartNote, ...parts].join(separator);
+          if (warnings.length) {
+            toast.warning(t("wbAccounts.dialog.switchedWarn", { name: nickname }), {
+              id: toastId,
+              description: `${warnings.join(separator)}${t("shared.punct.period")}${description}`,
+            });
+          } else {
+            toast.success(t("wbAccounts.dialog.switchedOk", { name: nickname }), {
+              id: toastId,
+              description,
+            });
+          }
+        } else {
+          const timeoutText = t("shared.switchProgress.launchTimeout", {
+            client: WORKBUDDY_LABEL,
+          });
+          op?.settle({
+            phase: "warning",
+            title: t("shared.switchProgress.switchedNotLaunched", {
+              name: nickname,
+              client: WORKBUDDY_LABEL,
+            }),
+            detail: timeoutText,
+          });
+          toast.warning(
+            t("shared.switchProgress.switchedNotLaunched", {
+              name: nickname,
+              client: WORKBUDDY_LABEL,
+            }),
+            {
+              id: toastId,
+              description: [timeoutText, ...warnings, ...parts].join(separator),
+            },
+          );
+        }
+        return;
+      }
+
       // ★ 明确结果（§3.15.3）：把「是否重启」放在最前，再列迁移 / 复制细节 ——
       // 用户取消勾选时，绝不能沿用「已重启」的说法（那是假承诺）。
-      const restartNote = restart
-        ? t("wbAccounts.dialog.switchedDefault")
-        : t("sessions.restart.resultNotRestarted", { client: WORKBUDDY_LABEL });
-      const description = [restartNote, ...parts].join(t("wbAccounts.dialog.listSeparator"));
+      const restartNote = t("sessions.restart.resultNotRestarted", { client: WORKBUDDY_LABEL });
+      const description = [restartNote, ...parts].join(separator);
+      op?.settle({
+        phase: "done",
+        title: t("shared.switchProgress.done", { name: nickname }),
+        detail: description,
+      });
       if (warnings.length) {
         // 部分迁移失败但未阻断切换：明确降级为警告，避免用户误以为全部成功。
         toast.warning(t("wbAccounts.dialog.switchedWarn", { name: nickname }), {
-          description: `${warnings.join(t("wbAccounts.dialog.listSeparator"))}${t("shared.punct.period")}${description}`,
+          description: `${warnings.join(separator)}${t("shared.punct.period")}${description}`,
         });
       } else {
         toast.success(t("wbAccounts.dialog.switchedOk", { name: nickname }), { description });
@@ -472,8 +589,16 @@ export function SwitchAccountDialog({
       onOpenChange(false);
       onDone?.();
     } catch (e) {
-      setError(api.asError(e));
+      const description = api.asError(e);
+      op?.settle({
+        phase: "failed",
+        title: t("shared.switchProgress.failed"),
+        detail: description,
+      });
+      setError(description);
     } finally {
+      launchingRef.current = false;
+      opRef.current = null;
       setBusy(false);
       setProgress("");
     }

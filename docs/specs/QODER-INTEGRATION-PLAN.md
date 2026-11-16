@@ -302,3 +302,25 @@ demo 拦截为预期）/ Esc 关抽屉 / **添加抽屉**（本机导入 + PAT�
 **验证**：`cargo test -p buddy-switch-core --lib qoder` 166/0（新增 3 条：守卫给出下一步、
 `restart` 也先校验账号、进度回调阶段）；`cargo check --workspace --all-targets` 绿；
 `npm run build` 绿（`tsc` + api 契约 + scope 门禁 + vite）。
+
+## 9. 进度 · 第五轮（2026-11-16 · **切换 + 客户端启动的可见状态**）
+
+> 用户报障原话：「切换账号，开启软件的过程能不能有状态显示或者进度条，因为过程比较长，
+> 界面没有反馈，让我以为没有切换成功，或者没有在切换过程中了」。
+
+**根因**：换号接口的后端启动动作是 `spawn`，返回只代表「进程已拉起」；前端却在接口
+返回时就清掉忙态 / 弹成功。客户端窗口还要十几秒才出现，这段时间界面**看起来已经结束**。
+此前的进度只有右下角 toast，容易被忽略（切到客户端窗口后根本看不见）。
+
+**改了什么（三平台共用，不动换号后端协议）**：
+
+| 层 | 改动 | 落点 |
+|:--|:--|:--|
+| 新组件 | `SwitchProgressBanner`：页头下方吸顶状态条（当前步骤 + 不确定进度条；完成 / 超时 / 失败三态） | `components/switch-progress-banner.tsx` |
+| 新 hook | `useSwitchProgress`（操作代次 + 自动收尾）+ `waitForClientRunning`（进程探测轮询，可中止） | `lib/switch-progress.ts` |
+| `QoderAccountsPage` | 切换全程上报状态；自动重开后轮询 `qoder_program_status` 直到桌面版 `running`；超时如实提示 | 卡片 / 抽屉同一条 `doSwitch` |
+| `TraeAccountsPage` | 同上；`launch` 步骤 ok 后轮询 `get_trae_variants`；失败 / 跳过（没装）落警告态 | 卡片的 `doSwitchTo` |
+| `switch-account-dialog`（WB） | 向导进度同步到页面状态条；抽屉关闭后继续显示「正在启动 WorkBuddy」，轮询 `get_status` | 复用同一组件与 hook |
+
+**诚实边界**：进度条是**不确定**的（不编百分比）；启动等待超时（60s）落「警告」而不是
+「失败」——登录态确实已经切换，只是客户端没在预期时间内出现，文案明确写「可手动打开客户端」。

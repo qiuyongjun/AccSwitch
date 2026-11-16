@@ -201,6 +201,9 @@
      Tailwind 默认 `animate-spin` 是 **1s** ⇒ 全仓 70+ 处 loading 图标都比原型慢 43%，
      视觉上「转得不够快、像卡住了」。这里覆盖成 0.7s，一处改动全局生效。 */
   --animate-spin: spin 0.7s linear infinite;
+  /* ★ 切换账号状态条的不确定进度条（`components/switch-progress-banner.tsx`）。
+     后端步骤时长差异大、没有可靠百分比 ⇒ 只表达「还在动」，不冒充确定进度。 */
+  --animate-progress-indeterminate: progress-indeterminate 1.6s ease-in-out infinite;
 }
 
 @layer base {
@@ -304,6 +307,22 @@
   }
   to {
     background-position: -200% 0;
+  }
+}
+
+/**
+ * ★ 不确定进度条：一条 40% 宽的滑块从左外侧滑到右外侧。
+ *
+ * 百分比相对于**滑块自身宽度**换算：`translateX(-120%)` 时整体在容器左侧外，
+ * `translateX(350%)` 时左边缘越过容器右边缘（0.4 × 350% = 140% 容器宽）。
+ * 每次从左往右扫一遍，`infinite` 让它持续循环 —— 读起来是「仍在推进」而不是「已卡住」。
+ */
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(350%);
   }
 }
 

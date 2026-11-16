@@ -87,6 +87,7 @@ import {
 import { QoderLocalSourceRow } from "@/components/qoder/qoder-local-source-row";
 import { QoderOAuthDialog } from "@/components/qoder/qoder-oauth-dialog";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { SwitchProgressBanner } from "@/components/switch-progress-banner";
 import { SyncIndicator } from "@/components/sync-indicator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -157,6 +158,7 @@ import { mapWithConcurrency } from "@/lib/concurrency";
 import { useT } from "@/lib/i18n";
 import { platformDescriptor, platformOfPath, type Product } from "@/lib/platforms/registry";
 import { scopeOf, type Scope } from "@/lib/scope";
+import { useSwitchProgress, waitForClientRunning } from "@/lib/switch-progress";
 import type { Region } from "@/lib/types";
 import { useScope } from "@/lib/use-scope";
 import { useMediaQuery } from "@/lib/use-media-query";
@@ -352,6 +354,8 @@ function QoderAccountsPanel({
   /** 待确认的切换（账号 × 程序位）。 */
   const [switchTarget, setSwitchTarget] = useState<{ account: QoderAccountView; program: QoderProgramStatus } | null>(null);
   const [switchBusy, setSwitchBusy] = useState(false);
+  /** 切换 / 启动客户端的长任务状态（页头状态条，见 `switch-progress-banner.tsx`）。 */
+  const switchProgress = useSwitchProgress();
   const [pendingDelete, setPendingDelete] = useState<QoderAccountView | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
 
@@ -1078,6 +1082,18 @@ function QoderAccountsPanel({
     if (switchBusy) return;
     const name = qoderAccountName(account);
     setSwitchBusy(true);
+    /**
+     * 页头状态条：从「开始切换」一直跟到「客户端进程真的在跑」。
+     *
+     * 接口返回时客户端往往**还没起来**（后端只是 `spawn` 了进程），此前 busy 态
+     * 立刻清掉 ⇒ 卡片看起来已经恢复正常，用户以为没切成功或已经不在切了。
+     */
+    const op = switchProgress.begin(
+      t("qoder.page.accounts.switch.loading", { name }),
+      restart
+        ? t("qoder.page.accounts.switch.loadingAuto", { program: program.label })
+        : t("qoder.page.accounts.switch.loadingManual", { program: program.label }),
+    );
     const toastId = toast.loading(t("qoder.page.accounts.switch.loading", { name }), {
       description: restart
         ? t("qoder.page.accounts.switch.loadingAuto", { program: program.label })
@@ -1086,12 +1102,18 @@ function QoderAccountsPanel({
 
     /* 进度事件（桌面端）：失败不影响主流程，切换本身的返回才是事实来源。 */
     let unlisten: (() => void) | undefined;
+    /** 已进入「等待客户端启动」：后端收尾事件不该再把状态条改回「切换中」。 */
+    let awaitingLaunch = false;
     if (!api.isWebui()) {
       try {
         unlisten = await listen<{ message: string }>("qoder-switch-progress", (event) => {
+          if (awaitingLaunch) return;
+          const message = event.payload?.message;
+          if (!message) return;
+          op.update({ detail: message });
           toast.loading(t("qoder.page.accounts.switch.loading", { name }), {
             id: toastId,
-            description: event.payload.message,
+            description: message,
           });
         });
       } catch {
@@ -1101,21 +1123,110 @@ function QoderAccountsPanel({
 
     try {
       const result = await api.qoderSwitchAccount(scope, program.id, account.uid, restart);
-      const description = result.relaunchError
-        ? t("qoder.page.accounts.switch.relaunchFailed", { error: result.relaunchError })
-        : result.backupPath
-          ? t("qoder.page.accounts.switch.backup", { path: result.backupPath })
-          : undefined;
-      toast.success(t("qoder.page.accounts.switch.done", { name }), {
-        id: toastId,
-        description,
-      });
-      /* 切换改的是**客户端登录态**⇒ 必须重取程序位状态（「当前登录」徽章才会跟着动）。 */
-      await loadEnrichment();
+      const backupNote = result.backupPath
+        ? t("qoder.page.accounts.switch.backup", { path: result.backupPath })
+        : undefined;
+
+      if (result.relaunchError) {
+        /* 启动失败**不改变**「切换是否成功」：登录态已写好并通过校验，只是客户端没起来。 */
+        /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
+        await loadEnrichment();
+        const description = t("qoder.page.accounts.switch.relaunchFailed", {
+          error: result.relaunchError,
+        });
+        op.settle({
+          phase: "warning",
+          title: t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }),
+          detail: description,
+        });
+        toast.warning(t("qoder.page.accounts.switch.done", { name }), {
+          id: toastId,
+          description,
+        });
+      } else if (restart && program.id === "desktop") {
+        /* 自动重开：继续等客户端**真的跑起来**，而不是启动命令一发出去就报完成。
+           先把状态条切到「正在启动」，再回读程序位（回读可能还要一两秒）。 */
+        awaitingLaunch = true;
+        op.update({
+          phase: "launching",
+          title: t("shared.switchProgress.launching", { client: program.label }),
+          detail: t("shared.switchProgress.launchingDetail"),
+        });
+        toast.loading(t("shared.switchProgress.launching", { client: program.label }), {
+          id: toastId,
+          description: t("shared.switchProgress.launchingDetail"),
+        });
+        /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
+        await loadEnrichment();
+
+        const started = await waitForClientRunning(
+          async () => {
+            const view = await api.qoderProgramStatus(scope);
+            if (op.signal.aborted) return false;
+            const next = view.programs ?? [];
+            /* 顺手把程序位状态落地：客户端起来后胶囊上的「运行中」立刻跟着变。 */
+            setPrograms(next);
+            return next.some((item) => item.id === program.id && item.running);
+          },
+          { signal: op.signal },
+        );
+        if (op.signal.aborted) {
+          /* 页面已卸载 / 新一轮切换已开始：别把 loading toast 永远挂在屏幕上。 */
+          toast.dismiss(toastId);
+          return;
+        }
+
+        if (started) {
+          op.settle({
+            phase: "done",
+            title: t("shared.switchProgress.doneLaunched", { name, client: program.label }),
+            detail: backupNote,
+          });
+          toast.success(t("qoder.page.accounts.switch.done", { name }), {
+            id: toastId,
+            description: [t("shared.switchProgress.clientStarted", { client: program.label }), backupNote]
+              .filter(Boolean)
+              .join(t("shared.punct.semicolon")),
+          });
+        } else {
+          const description = t("shared.switchProgress.launchTimeout", {
+            client: program.label,
+          });
+          op.settle({
+            phase: "warning",
+            title: t("shared.switchProgress.switchedNotLaunched", { name, client: program.label }),
+            detail: description,
+          });
+          toast.warning(t("qoder.page.accounts.switch.done", { name }), {
+            id: toastId,
+            description: [description, backupNote].filter(Boolean).join(t("shared.punct.semicolon")),
+          });
+        }
+      } else {
+        /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
+        await loadEnrichment();
+        op.settle({
+          phase: "done",
+          title: t("shared.switchProgress.done", { name }),
+          detail: [backupNote, t("sessions.restart.resultNotRestarted", { client: program.label })]
+            .filter(Boolean)
+            .join(t("shared.punct.semicolon")),
+        });
+        toast.success(t("qoder.page.accounts.switch.done", { name }), {
+          id: toastId,
+          description: backupNote,
+        });
+      }
     } catch (e) {
+      const description = api.asError(e);
+      op.settle({
+        phase: "failed",
+        title: t("shared.switchProgress.failed"),
+        detail: description,
+      });
       toast.error(t("qoder.page.accounts.switch.failed"), {
         id: toastId,
-        description: api.asError(e),
+        description,
       });
     } finally {
       unlisten?.();
@@ -2572,6 +2683,9 @@ function QoderAccountsPanel({
           />
         </div>
       </header>
+
+      {/* 切换 / 启动客户端的长任务状态：接口返回 ≠ 客户端已经打开，状态条一直跟到进程真的在跑。 */}
+      <SwitchProgressBanner state={switchProgress.state} className="mt-4" />
 
       {/* ★ 账号工作台（**三平台共用容器**）—— 与 `AccountsPage` / `TraeAccountsPage`
           是**同一个组件**；差异只在数据（排序/分组选项、卡片渲染、列定义、空态）。 */}
