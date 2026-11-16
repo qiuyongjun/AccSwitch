@@ -818,6 +818,8 @@ function QoderAccountsPanel({
    * 边界：
    * - `checkinUnavailable`（本区域未开放签到）⇒ 整批跳过，不做 N 次必失败的请求；
    * - 台账已给出「今日已签」的账号**不再补取**（`entry.ok` 已成立，卡片画得出结论）；
+   * - 与抽屉补取**共用同一份在途记账**（`checkinAutoFetching`）：补齐的那几秒里用户点开
+   *   抽屉，抽屉那条 effect 会据此跳过，不会对同一账号再打一次上游；
    * - 在途期间用户手动刷新 / 签到成功 ⇒ 写入序号已前进，这份旧响应丢弃。
    */
   const checkinFillAttempted = useRef<Set<string>>(new Set());
@@ -829,10 +831,13 @@ function QoderAccountsPanel({
       return !checkinEntryOf(account.uid)?.ok;
     });
     if (missing.length === 0) return;
-    /* 先记账再发请求：这批 uid 本轮只试一次，效果失败也不会因为
+    /* 先记账再发请求：这批 uid 本轮只试一次，即使失败也不会因为
        `setCheckinMap` 引起的重渲染而反复重发。 */
     const uids = missing.map((account) => account.uid);
-    for (const uid of uids) checkinFillAttempted.current.add(uid);
+    for (const uid of uids) {
+      checkinFillAttempted.current.add(uid);
+      checkinAutoFetching.current.add(uid);
+    }
     const seqAtStart: Record<string, number> = Object.fromEntries(
       uids.map((uid) => [uid, checkinWriteSeq.current[uid] ?? 0]),
     );
@@ -846,12 +851,18 @@ function QoderAccountsPanel({
           if (!row?.ok) continue;
           if ((checkinWriteSeq.current[uid] ?? 0) !== seqAtStart[uid]) continue;
           accepted[uid] = row;
+          /* 与抽屉同一份「已得」记账：成功项以后不必再补。 */
+          checkinAutoFetched.current.add(uid);
         }
         if (Object.keys(accepted).length === 0) return;
         setCheckinMap((prev) => ({ ...prev, ...accepted }));
       })
       .catch(() => {
         /* 后台补齐失败不打扰：卡片保持「未知」并回落凭据徽章；手点刷新仍可重试。 */
+      })
+      .finally(() => {
+        /* 失败项**不**记 `checkinAutoFetched`：下次打开抽屉仍会单独试一次（与 §11 同口径）。 */
+        for (const uid of uids) checkinAutoFetching.current.delete(uid);
       });
   }, [accounts, checkinEntryOf, checkinLoaded, checkinUnavailable, scope]);
 

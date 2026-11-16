@@ -2217,6 +2217,16 @@ check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 �
   if (!/if \(!checkinLoaded \|\| checkinUnavailable\) return;/.test(qoder)) {
     throw new Error("首屏签到补取没排除「本区域未开放签到」—— 会白发 N 次必失败的请求（spec §13）");
   }
+  const fillBlock = qoder.slice(
+    qoder.indexOf("const checkinFillAttempted"),
+    qoder.indexOf("}, [accounts, checkinEntryOf"),
+  );
+  if (
+    !/checkinAutoFetching\.current\.add\(uid\)/.test(fillBlock) ||
+    !/checkinAutoFetching\.current\.delete\(uid\)/.test(fillBlock)
+  ) {
+    throw new Error("首屏签到补取没与抽屉共用「在途」记账 —— 补齐窗口里点开抽屉会对同一账号重复打上游（spec §13）");
+  }
   const nativeBridge = stripComments(readCode("crates/buddy-switch-core/src/modules/qoder/native.rs"));
   if (!/PROBE_LOCK/.test(nativeBridge)) {
     throw new Error("原生身份探测又回到「缓存未命中各自拉起组件」—— 冷启动并发会互相踩（spec §13）");
