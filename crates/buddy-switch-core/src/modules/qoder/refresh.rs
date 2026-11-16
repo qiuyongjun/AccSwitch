@@ -186,6 +186,84 @@ async fn refresh_for_inner(region: QoderRegion, uid: &str) -> Result<Value, Stri
     }))
 }
 
+/// 请求前判定 access token 是否「快过期」的余量：5 分钟。
+///
+/// 只用于**预检**。没有余量时，一个还剩几秒的令牌会在请求途中过期，
+/// 用户看到的是「刚才还能用、现在突然失效」。
+pub const ACCESS_EXPIRY_SKEW_MS: i64 = 5 * 60 * 1000;
+
+/// 当前 access token 是否**尚未过期**（到期未知按可用处理）。
+///
+/// 「临近过期」仍算可用 —— 刷新失败时它还能撑完最后几分钟。
+/// 是否**提前**刷新由 [`near_expiry`] 决定。
+pub fn usable_access(account: &RawAccount, now_ms: i64) -> Option<String> {
+    let token = account
+        .access_token
+        .as_deref()
+        .filter(|token| !token.is_empty())?;
+    match expiry_ms(account) {
+        Some(at) if at <= now_ms => None,
+        _ => Some(token.to_string()),
+    }
+}
+
+/// 是否「临近过期」（未过期，但剩余寿命 ≤ 刷新余量）。
+fn near_expiry(account: &RawAccount, now_ms: i64) -> bool {
+    matches!(expiry_ms(account), Some(at) if at > now_ms && at <= now_ms + ACCESS_EXPIRY_SKEW_MS)
+}
+
+/// 取一份**当前可用**的 access token；不可用时自动续期一次。
+///
+/// ## 为什么需要它
+///
+/// 本机导入的账号可能带着已过期的 access token，而签到 / 额度查询原先只检查
+/// 「token 非空」就直接发上游 ⇒ 必然 401。用户看到的是「本地导入的号签到失败，
+/// 网页登录的号却成功」。网页登录每次都是新令牌，所以看起来像「入口不同」。
+///
+/// ## 失败语义
+///
+/// - 没有任何可续期材料（无刷新令牌、无 PAT）⇒ 可读的「需要重新登录/重新导入」；
+/// - 有材料但刷新被拒 / 网络失败 ⇒ `自动续期失败：<上游原因>`；
+/// - **旧 token 只是临近过期（还没过期）时，刷新失败会回退旧 token** ——
+///   不让「续期材料坏了」连带把最后几分钟的可用性也丢掉；
+/// - 两者都**不**把账号写死：调用方仍可重试，用户也可以手动续期。
+///
+/// ⚠️ 同 `(region, uid)` 的并发续期仍由 [`refresh_for`] 的闸门串行化。
+pub async fn ensure_access_for(region: QoderRegion, uid: &str) -> Result<String, String> {
+    let now = chrono::Utc::now().timestamp_millis();
+    let account =
+        account::find_account_for(region, uid).ok_or_else(|| format!("账号不存在: {uid}"))?;
+    let current = usable_access(&account, now);
+    // 离到期还远 ⇒ 直接用；临近过期 / 已过期 / 没有 token ⇒ 尝试刷新。
+    if let Some(token) = &current {
+        if !near_expiry(&account, now) {
+            return Ok(token.clone());
+        }
+    }
+
+    let refresh_result = async {
+        // 先确认「能不能续期」，不能就给可读的重新登录提示。
+        plan_refresh(&account).map_err(|error| format!("无法自动续期：{error}"))?;
+        refresh_for(region, uid)
+            .await
+            .map_err(|error| format!("自动续期失败：{error}"))?;
+        let refreshed = account::find_account_for(region, uid)
+            .ok_or_else(|| "自动续期后账号已不存在".to_string())?;
+        usable_access(&refreshed, now)
+            .ok_or_else(|| "自动续期成功但没有取得可用的 access token，请重新登录或重新导入".to_string())
+    }
+    .await;
+
+    match refresh_result {
+        Ok(token) => Ok(token),
+        // 刷新失败但旧 token **尚未过期**（只是临近过期）⇒ 继续用它，别提前报死。
+        Err(error) => match current {
+            Some(token) => Ok(token),
+            None => Err(error),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 令牌保活（后台排程 `ScheduleTask::QoderKeepalive` 的唯一实现）
 // ---------------------------------------------------------------------------
@@ -397,6 +475,48 @@ mod tests {
         let unknown = account_with(Some("drt-abc"), None);
         assert_eq!(unknown.expires_at, None);
         assert!(needs_keepalive(&unknown, now));
+    }
+
+    /// ★ 预检两个判据：`usable_access` 只看「是否已过期」，
+    /// `near_expiry` 决定「要不要提前刷新」。临近过期的 token 仍可用 ——
+    /// 刷新失败时它还能撑完最后几分钟。
+    ///
+    /// 可证伪：把 `usable_access` 改回 `at <= now + skew` ⇒ 临近过期那条红；
+    /// 把 `near_expiry` 的 `at > now` 去掉 ⇒ 已过期账号也被当成「可回退」。
+    #[test]
+    fn usable_access_and_near_expiry_are_separate_predicates() {
+        let now = 1_800_000_000_000i64;
+        let mut account = account_with(Some("drt-abc"), None);
+
+        // 还有很久才过期 ⇒ 可用，且不在提前刷新窗口。
+        account.expires_at = Some(now + 60 * 60_000);
+        assert_eq!(usable_access(&account, now).as_deref(), Some("dt-old"));
+        assert!(!near_expiry(&account, now));
+
+        // 已过期 ⇒ 不可用，也不属于「临近过期」。
+        account.expires_at = Some(now - 1);
+        assert_eq!(usable_access(&account, now), None);
+        assert!(!near_expiry(&account, now));
+
+        // 剩余 5 分钟内 ⇒ **仍可用**，但需要提前刷新。
+        account.expires_at = Some(now + ACCESS_EXPIRY_SKEW_MS - 1);
+        assert!(usable_access(&account, now).is_some());
+        assert!(near_expiry(&account, now));
+
+        // 正好等于余量 ⇒ 仍在窗口（边界取「小于等于」）。
+        account.expires_at = Some(now + ACCESS_EXPIRY_SKEW_MS);
+        assert!(near_expiry(&account, now));
+        account.expires_at = Some(now + ACCESS_EXPIRY_SKEW_MS + 1);
+        assert!(!near_expiry(&account, now));
+
+        // 到期未知 ⇒ 可用、不提前刷新（交给 401 兜底）。
+        account.expires_at = None;
+        assert_eq!(usable_access(&account, now).as_deref(), Some("dt-old"));
+        assert!(!near_expiry(&account, now));
+
+        // 没有 access token ⇒ 不可用。
+        account.access_token = None;
+        assert_eq!(usable_access(&account, now), None);
     }
 
     /// 毫秒时间戳 → RFC3339（`store::now_iso` 写的也是这个形态）。

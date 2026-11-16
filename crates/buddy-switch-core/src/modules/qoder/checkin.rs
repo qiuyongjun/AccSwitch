@@ -5,7 +5,7 @@
 //! | 通道 | 端点 | 现状 |
 //! |:--|:--|:--|
 //! | **活动平台**（主力） | `GET /sash/api/v1/me/campaigns` + `POST …/{id}/claim` | 官方现行机制，「每日领取 100 Credits」在这里 |
-//! | 旧签到通道（兜底） | `/sash/api/v1/me/daily-check-in/*` | 实测**国内版 `DISABLED`、国际版 404**，只在仍开放时可用 |
+//! | 旧签到通道（兜底） | `/sash/api/v1/me/daily-check-in/…` | 实测**国内版 `DISABLED`、国际版 404**，只在仍开放时可用 |
 //!
 //! ⇒ 顺序固定：**先活动平台**；只有它**整区不可用**（404/405/410）时才回落旧通道。
 //! 旧通道返回 `DISABLED` 也**不**再回退（那是「活动关着」，不是「通道不存在」）。
@@ -112,14 +112,6 @@ pub fn disabled_claim_response(uid: &str, upstream_status: &str) -> Value {
         "uid": uid,
         "status": upstream_status,
     })
-}
-
-/// 一条账号的凭据是否够发起 openapi 调用（需要 `access`；PAT 不适用签到端点的 Bearer 头）。
-fn access_token_of(account: &RawAccount) -> Option<&str> {
-    account
-        .access_token
-        .as_deref()
-        .filter(|token| !token.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -254,23 +246,28 @@ async fn status_row_for(
     region: QoderRegion,
     uid: String,
     name: String,
-    access: Option<String>,
     stamped_today: bool,
 ) -> (Value, Option<String>) {
-    let Some(access) = access else {
-        return (
-            json!({
-                "uid": uid,
-                "name": name,
-                "ok": false,
-                "error": "没有可调用的 access token（PAT 不能用于签到端点）",
-                "unavailable": false,
-            }),
-            None,
-        );
+    // ★ 签到状态查询也走自动续期：本机导入的账号可能只有过期令牌 / 只有 PAT，
+    //   原先在这里直接报「没有可调用的 access token」—— 明明可以刷新，却要求用户手动点。
+    //   有可用令牌时本函数不发任何额外请求（`ensure_access_for` 先判有效期）。
+    let access = match super::refresh::ensure_access_for(region, &uid).await {
+        Ok(token) => token,
+        Err(error) => {
+            return (
+                json!({
+                    "uid": uid,
+                    "name": name,
+                    "ok": false,
+                    "error": error,
+                    "unavailable": false,
+                }),
+                None,
+            )
+        }
     };
-    // ── 活动平台优先 ──
-    let snapshot = campaign::fetch_campaigns(region, &uid, &access).await;
+    // ── 活动平台优先（只读状态路径吃 20 秒缓存；领取路径永远绕缓存）──
+    let snapshot = campaign::fetch_campaigns_cached(region, &uid, &access).await;
     if snapshot.ok {
         return (campaign_entry(&uid, &name, &snapshot, stamped_today), None);
     }
@@ -349,8 +346,10 @@ async fn status_row_for(
 ///
 /// ## 为什么这里可以并发
 ///
-/// 本函数**只读**（活动列表 / 旧通道状态查询），不领取任何东西；与
+/// 本函数**不领取**任何东西（活动列表 / 旧通道状态查询），与
 /// [`run_cycle_for`] 的「签到写操作逐个来，避免风控」是两条纪律。
+/// 但它会在令牌缺失 / 过期时**自动续期**（写账号库），这是用户明确要求的
+/// 「能续期就续期」；续期本身按 `(region, uid)` 串行，不会并发消耗刷新材料。
 /// 逐账号串行时，打开账号页要等 N 个 RTT；有界并发（上限与 `status_map_for`
 /// 相同）把等待压到「一批」——首开与「一键刷新」的签到查询从此同一节奏。
 /// 输出仍按账号库原序，调用方拿到的行序不变。
@@ -363,7 +362,6 @@ pub async fn status_for(region: QoderRegion) -> Value {
         let permit = semaphore.clone();
         let uid = account.uid.clone();
         let name = account::display_name(account);
-        let access = access_token_of(account).map(str::to_string);
         let stamped_today = account::checkin_stamp_day(account) == Some(store::today().as_str());
         tasks.push((
             uid.clone(),
@@ -381,7 +379,7 @@ pub async fn status_for(region: QoderRegion) -> Value {
                         None,
                     );
                 };
-                status_row_for(region, uid, name, access, stamped_today).await
+                status_row_for(region, uid, name, stamped_today).await
             }),
         ));
     }
@@ -468,23 +466,20 @@ fn normalize_campaign_claim(mut value: Value) -> Value {
 
 /// 旧 `/sash/daily-check-in` 通道的领取（**只在整区没有活动平台时**才走）。
 async fn legacy_claim_for(region: QoderRegion, uid: &str) -> Result<Value, String> {
-    let account =
-        account::find_account_for(region, uid).ok_or_else(|| format!("账号不存在: {uid}"))?;
-    let access = access_token_of(&account)
-        .ok_or_else(|| "这条账号没有可调用的 access token（PAT 不能用于签到端点）".to_string())?;
+    let access = super::refresh::ensure_access_for(region, uid).await?;
 
-    let status = api::checkin_status(region, uid, access).await?;
+    let status = api::checkin_status(region, uid, &access).await?;
     match claim_decision(&status) {
         ClaimDecision::Already => Ok(already_claim_response(uid, &status)),
         ClaimDecision::Disabled(upstream_status) => {
             Ok(disabled_claim_response(uid, &upstream_status))
         }
         ClaimDecision::ClaimNow => {
-            let result = api::checkin_claim(region, uid, access).await?;
+            let result = api::checkin_claim(region, uid, &access).await?;
             // 上游把失败放在 body 里（`success=false`）而不是 HTTP 状态。
             if result.get("success") == Some(&Value::Bool(false)) {
                 // 复查一次：上游可能已记账（先扣后报错等形态）。
-                if let Ok(recheck) = api::checkin_status(region, uid, access).await {
+                if let Ok(recheck) = api::checkin_status(region, uid, &access).await {
                     if recheck.today_checked_in {
                         return Ok(
                             json!({ "ok": true, "already": true, "uid": uid, "rechecked": true }),
@@ -570,7 +565,8 @@ fn failure_entry(error: String) -> Value {
 /// 3. 上游读失败 ⇒ `{ok:false, todayCheckedIn:false, error}`；
 /// 4. 区域接口不存在（`CHECKIN_REASON_NOT_FOUND`，国际版）⇒ 同样走 `ok:false`，
 ///    但**文案保留上游原因**，前端会把它显示成「本区域未开放」而不是「未签到」；
-/// 5. 只读：**绝不**在这里调 `checkin_claim`（签到是写操作，走 `claim_for`）。
+/// 5. **绝不**在这里调 `checkin_claim`（签到是写操作，走 `claim_for`）。允许在令牌
+///    缺失 / 过期时自动续期 —— 那是用户明确要求的「能续期就续期」，与领取是两件事。
 pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
     let file = account::load_accounts_for(region);
     let by_uid: std::collections::HashMap<&str, &RawAccount> = file
@@ -592,10 +588,6 @@ pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(STATUS_MAP_MAX_INFLIGHT));
     let mut tasks = Vec::with_capacity(wanted.len());
     for uid in wanted {
-        let access = by_uid
-            .get(uid.as_str())
-            .and_then(|account| access_token_of(account))
-            .map(str::to_string);
         let today = store::today();
         let stamped = by_uid
             .get(uid.as_str())
@@ -610,16 +602,16 @@ pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
             let Ok(_permit) = permit.acquire_owned().await else {
                 return (uid, failure_entry("并发闸门已关闭".to_string()));
             };
-            let Some(access) = access else {
-                return (
-                    uid,
-                    failure_entry("没有可调用的 access token（PAT 不能用于签到端点）".to_string()),
-                );
+            // 与 `status_row_for` 同源：没有可用 access 时先自动续期；
+            // 续期不了才把「需重新登录」作为账号自身结论返回。
+            let access = match super::refresh::ensure_access_for(region, &uid).await {
+                Ok(token) => token,
+                Err(error) => return (uid, failure_entry(error)),
             };
             // 活动平台优先；整区没有活动平台（404/405/410）才回落旧通道。
             // 判据与 `status_for` 完全同源 —— 两处各写一套会让「签到页」与
             // 「卡片上的今日状态」给出不同答案。
-            let snapshot = campaign::fetch_campaigns(region, &uid, &access).await;
+            let snapshot = campaign::fetch_campaigns_cached(region, &uid, &access).await;
             if snapshot.ok {
                 let entry = campaign_entry(&uid, &name, &snapshot, stamped);
                 return (uid, entry);
@@ -869,6 +861,7 @@ mod tests {
         campaign::CampaignsSnapshot {
             ok: true,
             available: true,
+            auth_failed: false,
             show_campaign: true,
             claimable: true,
             campaign_url: String::new(),

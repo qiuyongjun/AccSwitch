@@ -1,3 +1,4 @@
+import type { QoderCreditsRow } from "@/lib/api";
 import type { Translate } from "@/lib/i18n";
 import type { CreditExpiry } from "@/lib/types";
 
@@ -32,31 +33,54 @@ export interface CachedCredit {
   value: CreditExpiry;
 }
 
-type CacheStore = Record<string, Record<string, CachedCredit>>;
+/** Qoder 的额度缓存条目（与 WorkBuddy 同构，仅值类型不同）。 */
+export interface CachedQoderCredit {
+  at: number;
+  value: QoderCreditsRow;
+}
 
-function readStore(): CacheStore {
+interface CachedValue<T> {
+  at: number;
+  value: T;
+}
+
+type GenericStore<T> = Record<string, Record<string, CachedValue<T>>>;
+type CacheStore = GenericStore<CreditExpiry>;
+
+function readStoreFrom<T>(key: string): GenericStore<T> {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return {};
-    return parsed as CacheStore;
+    return parsed as GenericStore<T>;
   } catch {
     return {};
   }
 }
 
-function writeStore(store: CacheStore): void {
+function writeStoreTo<T>(key: string, store: GenericStore<T>): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    window.localStorage.setItem(key, JSON.stringify(store));
   } catch {
     /* 配额满 / 隐私模式：缓存只是加速，失败不影响功能。 */
   }
 }
 
-/** 去掉过期条目，并裁剪到上限（丢掉最旧的）。 */
-function prune(store: CacheStore, now: number): CacheStore {
-  const flat: { scope: string; id: string; at: number; value: CreditExpiry }[] = [];
+function readStore(): CacheStore {
+  return readStoreFrom<CreditExpiry>(STORAGE_KEY);
+}
+
+function writeStore(store: CacheStore): void {
+  writeStoreTo(STORAGE_KEY, store);
+}
+
+/** 去掉过期 / 失败条目，并裁剪到上限（丢掉最旧的）。 */
+function pruneStore<T extends { ok?: boolean }>(
+  store: GenericStore<T>,
+  now: number,
+): GenericStore<T> {
+  const flat: { scope: string; id: string; at: number; value: T }[] = [];
   for (const [scope, entries] of Object.entries(store)) {
     for (const [id, entry] of Object.entries(entries ?? {})) {
       if (!entry || typeof entry.at !== "number" || now - entry.at > MAX_AGE_MS) continue;
@@ -65,11 +89,15 @@ function prune(store: CacheStore, now: number): CacheStore {
     }
   }
   flat.sort((a, b) => b.at - a.at);
-  const next: CacheStore = {};
+  const next: GenericStore<T> = {};
   for (const item of flat.slice(0, MAX_ENTRIES)) {
     (next[item.scope] ??= {})[item.id] = { at: item.at, value: item.value };
   }
   return next;
+}
+
+function prune(store: CacheStore, now: number): CacheStore {
+  return pruneStore(store, now);
 }
 
 /**
@@ -107,6 +135,81 @@ export function writeCreditCacheEntry(scope: string, accountId: string, value: C
   (next[scope] ??= {})[accountId] = { at: now, value };
   writeStore(next);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Qoder 额度缓存（首屏展示占位；排序 / 优先级仍读实时 `credits`）            */
+/* ------------------------------------------------------------------------- */
+
+const QODER_STORAGE_KEY = "accswitch:qoder-credit-cache:v1";
+
+/**
+ * 读取 Qoder 某作用域下的上次成功额度。
+ *
+ * 与 WorkBuddy 同一纪律：只返回 `ok:true` 且未过期的条目，且**必须**把 `at`
+ * 交给展示层标注「上次读数 · N 分钟前」。Qoder 不把这份缓存用于排序 / 优先。
+ */
+export function readQoderCreditCache(
+  scope: string,
+  accountIds: readonly string[],
+): Record<string, CachedQoderCredit> {
+  if (accountIds.length === 0) return {};
+  const store = readStoreFrom<QoderCreditsRow>(QODER_STORAGE_KEY);
+  const entries = store[scope];
+  if (!entries) return {};
+  const now = Date.now();
+  const out: Record<string, CachedQoderCredit> = {};
+  for (const id of accountIds) {
+    const entry = entries[id];
+    if (!entry || typeof entry.at !== "number" || !entry.value?.ok) continue;
+    if (now - entry.at > MAX_AGE_MS) continue;
+    out[id] = { at: entry.at, value: entry.value };
+  }
+  return out;
+}
+
+/**
+ * 缓存只保留展示需要的字段。
+ *
+ * ⚠️ 必须剔除 `raw`：后端会把完整 quota 响应塞在行里，账号多时它会把
+ * localStorage 配额吃掉一大半，导致整个缓存写入失败（失败被吞 = 缓存静默失效）。
+ */
+function cacheableQoderCredit(value: QoderCreditsRow): QoderCreditsRow {
+  return {
+    uid: value.uid,
+    name: value.name,
+    ok: value.ok,
+    remaining: value.remaining,
+    used: value.used,
+    total: value.total,
+    isExceeded: value.isExceeded,
+    expiresAt: value.expiresAt,
+    expiresForever: value.expiresForever,
+    plan: value.plan,
+  };
+}
+
+/**
+ * 批量写入 Qoder 成功额度：**一次**读、prune、写。
+ *
+ * 逐行调用会让 N 个账号做 N 次全量 JSON 解析 / 字符串化，账号多时反而卡主线程；
+ * 刷新路径一次拿到的就是整批行，没有理由拆开写。
+ */
+export function writeQoderCreditCacheEntries(
+  scope: string,
+  rows: readonly QoderCreditsRow[],
+): void {
+  const successful = rows.filter((row) => row.ok);
+  if (successful.length === 0) return;
+  const store = pruneStore(readStoreFrom<QoderCreditsRow>(QODER_STORAGE_KEY), Date.now());
+  const now = Date.now();
+  const bucket = (store[scope] ??= {});
+  for (const row of successful) {
+    bucket[row.uid] = { at: now, value: cacheableQoderCredit(row) };
+  }
+  writeStoreTo(QODER_STORAGE_KEY, store);
+}
+
+
 
 /**
  * 「3 分钟前 / 5 小时前 / 2 天前」—— 相对时间，**只有三个量级**。

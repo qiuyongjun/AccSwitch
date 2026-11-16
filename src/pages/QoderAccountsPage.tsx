@@ -145,6 +145,12 @@ import {
   nextExpiryLabel,
 } from "@/components/account-card";
 import { Badge } from "@/components/ui/badge";
+import {
+  creditCacheNote,
+  readQoderCreditCache,
+  writeQoderCreditCacheEntries,
+  type CachedQoderCredit,
+} from "@/lib/credit-cache";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { REFRESH_DONE_LABEL, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
 import { mapWithConcurrency } from "@/lib/concurrency";
@@ -245,6 +251,13 @@ function QoderAccountsPanel({
   const [credits, setCredits] = useState<Record<string, QoderCreditsRow>>(
     () => cachedEnrichment?.credits ?? {},
   );
+  /**
+   * 跨重启的**展示层**额度缓存（`localStorage`）。
+   *
+   * 只用于卡片 / 表格首屏占位；排序、优先级、抽屉实时值仍读 `credits`。
+   * 每条都带写入时刻 ⇒ 展示时必须补「上次读数 · N 分钟前」。
+   */
+  const [cachedCredits, setCachedCredits] = useState<Record<string, CachedQoderCredit>>({});
   const [checkinRows, setCheckinRows] = useState<Record<string, QoderCheckinRow>>(
     () => cachedEnrichment?.checkinRows ?? {},
   );
@@ -404,6 +417,21 @@ function QoderAccountsPanel({
     return results.every((result) => result.ok);
   }, [refreshAccounts, refreshSources]);
 
+  /** 把成功读数写进跨重启展示缓存（失败行不落盘，避免把抖动固化成「上次读数」）。 */
+  const rememberCredits = useCallback(
+    (rows: readonly QoderCreditsRow[]) => {
+      if (rows.length === 0) return;
+      const now = Date.now();
+      setCachedCredits((prev) => {
+        const next = { ...prev };
+        for (const row of rows) if (row.ok) next[row.uid] = { at: now, value: row };
+        return next;
+      });
+      writeQoderCreditCacheEntries(scope, rows);
+    },
+    [scope],
+  );
+
   /**
    * 拉额度 / 签到 / 程序位（三路互不依赖）。
    *
@@ -446,6 +474,7 @@ function QoderAccountsPanel({
         if (!live()) return null;
         const next = Object.fromEntries(view.accounts.map((row) => [row.uid, row]));
         setCredits(next);
+        rememberCredits(view.accounts);
         return next;
       },
       () => null,
@@ -492,9 +521,25 @@ function QoderAccountsPanel({
         programs: nextPrograms ?? previous?.programs ?? null,
       });
     }
-  }, [scope]);
+  }, [rememberCredits, scope]);
 
   const hasAccounts = accounts !== null && accounts.length > 0;
+
+  /* 首屏从落盘缓存取上次成功读数（只补「实时值还没到」的账号）。 */
+  useEffect(() => {
+    if (!hasAccounts) {
+      setCachedCredits({});
+      return;
+    }
+    const ids = (accounts ?? []).map((account) => account.uid);
+    const cached = readQoderCreditCache(scope, ids);
+    setCachedCredits((prev) => {
+      const next = { ...prev };
+      for (const [uid, entry] of Object.entries(cached)) next[uid] = entry;
+      return next;
+    });
+  }, [accounts, hasAccounts, scope]);
+
   useEffect(() => {
     if (!hasAccounts) {
       // 空库时清掉旧快照：切到另一个区域后残留上一个区域的额度 = 撒谎。
@@ -1107,6 +1152,7 @@ function QoderAccountsPanel({
             if (!current) throw new Error(t("shared.refreshPart.fail"));
             if (!current.ok) throw new Error(current.error ?? t("shared.refreshPart.fail"));
             setCredits((prev) => ({ ...prev, [current.uid]: current }));
+            rememberCredits([current]);
           } else if (kind === "checkin") {
             /* 只问这一个账号（批量接口传 1 个 id 即可，不新增「单账号」变体）。 */
             const map = await api.qoderCheckinStatusMap(scope, [account.uid]);
@@ -1130,7 +1176,7 @@ function QoderAccountsPanel({
         }
       }
     },
-    [refreshPartBusy, scope, reload, t],
+    [refreshPartBusy, scope, reload, rememberCredits, t],
   );
 
   /**
@@ -1388,6 +1434,7 @@ function QoderAccountsPanel({
           for (const row of view.accounts) next[row.uid] = row;
           return next;
         });
+        rememberCredits(view.accounts);
         const failed = ids.filter((uid) => !view.accounts.some((row) => row.uid === uid && row.ok));
         if (!aliveRef.current) return;
         if (failed.length > 0) {
@@ -1433,6 +1480,7 @@ function QoderAccountsPanel({
       ]);
       if (creditsResult.status === "fulfilled") {
         setCredits(Object.fromEntries(creditsResult.value.accounts.map((row) => [row.uid, row])));
+        rememberCredits(creditsResult.value.accounts);
       }
       if (checkinResult.status === "fulfilled") {
         for (const uid of Object.keys(checkinResult.value)) markCheckinWrite(uid);
@@ -1510,6 +1558,7 @@ function QoderAccountsPanel({
       const rows = Object.fromEntries(view.accounts.map((row) => [row.uid, row]));
       if (Object.keys(rows).length > 0) {
         setCredits((prev) => ({ ...prev, ...rows }));
+        rememberCredits(view.accounts);
       }
     } catch {
       /* 聚合失败不打扰：逐包合计已可用于展示（见 `creditForDisplay`）。 */
@@ -1555,6 +1604,24 @@ function QoderAccountsPanel({
       };
     },
     [credits, webPacks],
+  );
+
+  /**
+   * 首屏展示行：实时值优先，缺席 / 失败时回落**上次成功读数**并带写入时刻。
+   *
+   * 与 `creditForDisplay` 分开：后者只做「聚合 / 逐包」兜底，本函数额外允许
+   * 跨重启缓存。排序 / 「优先」标记仍只读 `credits`，缓存不参与任何业务判定。
+   */
+  const displayCreditFor = useCallback(
+    (account: QoderAccountView): { row: QoderCreditsRow | undefined; cachedAt: number | null } => {
+      /* 实时值优先（并保持 `creditForDisplay(account.uid)` 这一展示兜底入口）。 */
+      const live = creditForDisplay(account.uid);
+      if (live?.ok) return { row: live, cachedAt: null };
+      const cached = cachedCredits[account.uid];
+      if (cached) return { row: cached.value, cachedAt: cached.at };
+      return { row: live, cachedAt: null };
+    },
+    [creditForDisplay, cachedCredits],
   );
 
   /**
@@ -2302,8 +2369,8 @@ function QoderAccountsPanel({
            取不到额度快照时也给 `—` 且**仍可点**（点进去正是「为什么没有」）；
            主行补「剩余 · 总额 · 已用」（`creditMetricTip`），副行补逐批明细（`expiryTooltipLines`），
            都用原生 `title` —— 表格里不用 Radix 浮层，与 WB 同一纪律。 */
-        /* 展示用：聚合额度优先，逐包合计兜底（见 `creditForDisplay`）。 */
-        const row = creditForDisplay(account.uid);
+        /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存（后者带「上次读数」）。 */
+        const { row, cachedAt } = displayCreditFor(account);
         const hasCredits = Boolean(row?.ok);
         const now = Date.now();
         const expiry =
@@ -2369,6 +2436,11 @@ function QoderAccountsPanel({
                 ) : null}
               </span>
             )}
+            {cachedAt ? (
+              <span className="text-[11px] text-muted-foreground">
+                {creditCacheNote(cachedAt, t, now)}
+              </span>
+            ) : null}
           </button>
         );
       },
@@ -2660,8 +2732,8 @@ function QoderAccountsPanel({
         rowSelectLabel={(account) => t("shared.table.selectRowAria", { name: qoderAccountName(account) })}
         rowOpenLabel={(account) => t("shared.table.openRowAria", { name: qoderAccountName(account) })}
         renderCard={(account) => {
-          /* 展示用：聚合额度优先，逐包合计兜底（见 `creditForDisplay`）。 */
-          const row = creditForDisplay(account.uid);
+          /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存（后者带「上次读数」）。 */
+          const { row, cachedAt } = displayCreditFor(account);
           return (
             <QoderAccountCard
               key={account.uid}
@@ -2690,6 +2762,7 @@ function QoderAccountsPanel({
                     }
                   : null
               }
+              creditCachedAt={cachedAt}
               checkin={checkinDisplayOf(account)}
               creditPriority={account.uid === priorityAccountId}
               programs={programs}

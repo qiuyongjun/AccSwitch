@@ -536,7 +536,41 @@ where
                 break;
             }
         }
-        let info = jwt::parse(&raw.jwt);
+        /* ★ 请求前自动续期：能续期就续期，不再要求用户先手动点「刷新 JWT」。
+           - 不可续期（无 refresh_token）⇒ 继续用旧 JWT，让 401 走原有的
+             SessionDead 标记（卡片据此提示重新登录）；
+           - 有材料但续期暂时失败 ⇒ 直接记失败，**不写永久 SessionDead**。 */
+        let mut jwt_value = match account::ensure_jwt_for(variant, uid).await {
+            Ok(jwt) => jwt,
+            Err(error) if error.is_unrecoverable() => raw.jwt.clone(),
+            Err(error) => {
+                let outcome = AccountOutcome {
+                    user_id: uid.clone(),
+                    name: raw.name.clone(),
+                    ok: false,
+                    code: None,
+                    message: error.to_string(),
+                    action: "fail",
+                    credits: None,
+                    delta: 0,
+                    error_type: None,
+                    cooldown_until: None,
+                };
+                emit(json!({
+                    "type": "account",
+                    "index": index + 1,
+                    "userId": uid,
+                    "name": raw.name,
+                    "status": "fail",
+                    "message": outcome.message,
+                }));
+                report.failed += 1;
+                log_record(variant, &outcome);
+                report.results.push(outcome);
+                continue;
+            }
+        };
+        let info = jwt::parse(&jwt_value);
 
         // JWT 临期/过期告警（不阻断：临期账号仍可尝试签到）。
         if let Some(remaining_hours) = info.exp_hours {
@@ -582,7 +616,7 @@ where
             }
         };
 
-        let probe = probe_status(&raw.jwt, &device_entry).await;
+        let probe = probe_status(&jwt_value, &device_entry).await;
 
         // 预检失败不阻断 claim，但必须留痕：预检失败往往先于签到失败出现，
         // 是排查「账号忽然签不上」的第一手线索（错误码在 claim 结果里看不到）。
@@ -636,7 +670,22 @@ where
             continue;
         }
 
-        let result = claim_with_retry(&raw.jwt, &device_entry, options.retry).await;
+        let mut result = claim_with_retry(&jwt_value, &device_entry, options.retry).await;
+        /* ★ 令牌被提前吊销（401 / 业务码 1001）⇒ 强制续期一次再试。
+           与 `ensure_jwt_for` 不同：这里不看 `exp` —— 上游可能因风控 / 会话作废，
+           让一个「还没到期」的 JWT 失效。续期失败才沿用原结果去分类（此时才提示重新登录）。 */
+        if !result.ok
+            && (result.http_status == 401 || result.code == Some(1001))
+            && account::find_for(variant, uid)
+                .and_then(|account| account.refresh_token)
+                .filter(|token| !token.is_empty())
+                .is_some()
+        {
+            if let Ok(fresh) = account::refresh_jwt_for(variant, uid).await {
+                jwt_value = fresh;
+                result = claim_with_retry(&jwt_value, &device_entry, options.retry).await;
+            }
+        }
 
         let mut outcome = AccountOutcome {
             user_id: uid.clone(),
@@ -670,7 +719,7 @@ where
             let (error_type, cooldown_seconds) =
                 credits::classify_error(result.http_status, result.code, &result.message);
             if error_type != "Unknown" {
-                let credential_exp = crate::modules::trae::jwt::parse(&raw.jwt).exp_timestamp;
+                let credential_exp = crate::modules::trae::jwt::parse(&jwt_value).exp_timestamp;
                 credits::save_cooldown_with_credential_for(
                     variant,
                     uid,
@@ -840,7 +889,6 @@ fn status_entry(
 async fn status_entry_for(
     variant: TraeVariant,
     uid: &str,
-    raw: &account::RawAccount,
     ledger_says_checked: bool,
 ) -> Value {
     let device_entry = match device::ensure_for_variant(variant, uid) {
@@ -855,7 +903,21 @@ async fn status_entry_for(
             )
         }
     };
-    let probe = probe_status(&raw.jwt, &device_entry).await;
+    /* 状态查询是只读的，但「查询前自动续期」是用户明确要求的能力：
+       否则本地导入 / 抓取得到的临期账号在卡片上只能显示「读不到」。 */
+    let jwt_value = match account::ensure_jwt_for(variant, uid).await {
+        Ok(jwt) => jwt,
+        Err(error) => {
+            return status_entry(
+                false,
+                None,
+                None,
+                ledger_says_checked,
+                &error.to_string(),
+            )
+        }
+    };
+    let probe = probe_status(&jwt_value, &device_entry).await;
     status_entry(
         probe.ok,
         probe.checked_in,
@@ -876,6 +938,9 @@ async fn status_entry_for(
 /// 手动签到时台账里没有 ⇒ 拿台账当答案会把「已签」报成「未签」。所以这里真去问上游
 /// 状态端点（只读 GET）——**绝不**在这里顺带 claim（Qoder/Trae 的签到都是写操作，
 /// 各有独立命令）。
+///
+/// 每次查询前会调用 [`account::ensure_jwt_for`]：临期且可续期时自动换新，
+/// 续期不了才如实返回错误。**不**在这里 claim（领取是独立写操作）。
 ///
 /// ## 边界（前端照此渲染）
 ///
@@ -902,10 +967,6 @@ pub async fn status_map_for(variant: TraeVariant, user_ids: Vec<String>) -> Valu
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(STATUS_MAP_MAX_INFLIGHT));
     let mut tasks = Vec::with_capacity(wanted.len());
     for uid in wanted {
-        let raw = accounts
-            .get(&uid)
-            .cloned()
-            .expect("wanted 已按账号库存在性过滤");
         let permit = semaphore.clone();
         let from_ledger = ledger.contains(&uid);
         tasks.push(tokio::spawn(async move {
@@ -916,7 +977,7 @@ pub async fn status_map_for(variant: TraeVariant, user_ids: Vec<String>) -> Valu
                     status_entry(false, None, None, from_ledger, "并发闸门已关闭"),
                 );
             };
-            let entry = status_entry_for(variant, &uid, &raw, from_ledger).await;
+            let entry = status_entry_for(variant, &uid, from_ledger).await;
             (uid, entry)
         }));
     }

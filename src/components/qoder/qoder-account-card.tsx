@@ -74,6 +74,7 @@ import type { AccountRefreshKind } from "@/lib/account-refresh";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
 import type { QoderAccountView, QoderProgramStatus, QoderWebCreditPacks } from "@/lib/api";
+import { creditCacheNote } from "@/lib/credit-cache";
 import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
@@ -362,6 +363,12 @@ export interface QoderAccountCardProps {
   onDelete?: (account: QoderAccountView) => void;
   /** 额度快照；`null` / 不传 ⇒ 不渲染积分指标（无数据不渲染，不摆「0 / 0」）。 */
   credits?: QoderCardCredits | null;
+  /**
+   * 额度来自**跨重启缓存**时的写入时刻（ms）。
+   *
+   * 传了就必须在卡面补「上次读数 · N 分钟前」：旧值不能伪装成当前态。
+   */
+  creditCachedAt?: number | null;
   /** 是否为积分优先级最高的账号（指标行「优先」，与 WorkBuddy 同一口径）。 */
   creditPriority?: boolean;
   /** 今日签到五态（`unknown` = 未知，落回凭据徽章）。 */
@@ -414,6 +421,7 @@ export function QoderAccountCard({
   onEditRemark,
   onDelete,
   credits = null,
+  creditCachedAt = null,
   creditPriority = false,
   checkin = "unknown",
   programs = null,
@@ -769,6 +777,11 @@ export function QoderAccountCard({
             onReadPacks={() => onReadPacks?.(account)}
           />
         </div>
+        {creditCachedAt ? (
+          <div className="text-[11px] text-muted-foreground">
+            {creditCacheNote(creditCachedAt, t)}
+          </div>
+        ) : null}
         {/* ★ 2026-10-27（T02 完成后与 WB / Trae 同批）：指标行下面单起一行给出**凭据到期**
             —— `expiresAt` 已由 core 的 `normalize_expiry_ms` 归一成 Unix 毫秒（无效 ⇒ null），
             因此可如实渲染；单元格复用 `CredentialExpiryMeta`（同一份日期格式与缺值分支）。

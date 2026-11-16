@@ -1991,16 +1991,79 @@ fn ensure_refreshed_uid_matches(expected: &str, actual: Option<&str>) -> Result<
 /// 后台续期任务（真的去换）。两处各写一遍判据必然漂移成
 /// **「卡片说可以自动续期，后台却一个账号都不动」**——那正是本轮修复的缺陷形态。
 pub fn needs_jwt_refresh(account: &RawAccount) -> bool {
-    let has_refresh_token = account
+    has_refresh_token(account) && jwt_in_refresh_window(account)
+}
+
+/// 账号是否有非空的 `refresh_token`（「能不能续期」的唯一判据）。
+fn has_refresh_token(account: &RawAccount) -> bool {
+    account
         .refresh_token
         .as_ref()
-        .map(|token| !token.is_empty())
-        .unwrap_or(false);
-    has_refresh_token
-        && jwt::parse(&account.jwt)
-            .exp_hours
-            .map(|hours| hours <= crate::modules::trae::TRAE_JWT_WARN_HOURS)
-            .unwrap_or(true)
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// JWT 是否已进入续期窗口（**不看能不能续期**）。
+///
+/// 与 [`needs_jwt_refresh`] 拆开的原因：`ensure_jwt_for` 需要先知道「要不要续期」，
+/// 再决定「能不能续期」。合在一起会让「无 refresh_token + 已过期」直接落进
+/// 「不需要续期」→ 永远返回 `NoRefreshToken` 分支不可达。
+fn jwt_in_refresh_window(account: &RawAccount) -> bool {
+    jwt::parse(&account.jwt)
+        .exp_hours
+        .map(|hours| hours <= crate::modules::trae::TRAE_JWT_WARN_HOURS)
+        .unwrap_or(true)
+}
+
+/// 自动续期失败的两类原因（调用方据此决定「继续用旧令牌」还是「直接报错」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnsureJwtError {
+    /// 没有 `refresh_token`：无法自动续期，只能重新登录 / 重新获取。
+    NoRefreshToken(String),
+    /// 有材料但续期失败（网络 / 上游拒绝）。**不得**据此写永久 `SessionDead`：
+    /// 这类失败可能只是暂时的，写死会让账号再也无法自愈。
+    RefreshFailed(String),
+}
+
+impl std::fmt::Display for EnsureJwtError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRefreshToken(message) | Self::RefreshFailed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl EnsureJwtError {
+    /// 是否属于「确定无法续期」（应提示用户重新登录）。
+    pub fn is_unrecoverable(&self) -> bool {
+        matches!(self, Self::NoRefreshToken(_))
+    }
+}
+
+/// 取一份**当前可用**的 Trae JWT；接近到期且可续期时自动换新。
+///
+/// 与后台 `run_jwt_refresh_cycle` 的分工：那个按排程批量续期，本函数服务
+/// **真实请求前的兜底** —— 用户点一次看积分 / 签到，不应该因为「后台还没跑到」
+/// 就拿到 401。
+pub async fn ensure_jwt_for(
+    variant: TraeVariant,
+    user_id: &str,
+) -> Result<String, EnsureJwtError> {
+    let account = find_for(variant, user_id)
+        .ok_or_else(|| EnsureJwtError::NoRefreshToken("账号不存在".to_string()))?;
+    // 还没进续期窗口 ⇒ 直接用它，不做无谓的 exchange。
+    if !jwt_in_refresh_window(&account) {
+        return Ok(account.jwt);
+    }
+    // 已进入窗口但**不能续期** ⇒ 明确告诉调用方「只能重新登录」。
+    if !has_refresh_token(&account) {
+        return Err(EnsureJwtError::NoRefreshToken(
+            "该账号没有 refresh_token，无法自动续期；请重新登录或重新获取 JWT".to_string(),
+        ));
+    }
+    refresh_jwt_for(variant, user_id)
+        .await
+        .map_err(EnsureJwtError::RefreshFailed)
 }
 
 /// 用 `refresh_token` 换新 JWT（ExchangeToken）；默认变体，兼容壳。
@@ -2900,6 +2963,47 @@ mod tests {
                 "卡片标记与 needs_jwt_refresh 漂移了: {why}"
             );
         }
+    }
+
+    /// 续期窗口与「能不能续期」必须拆开：无 refresh_token 的过期账号也要进入窗口，
+    /// 由 `ensure_jwt_for` 返回 `NoRefreshToken`，而不是被误判成「不需要续期」。
+    ///
+    /// 可证伪：把 `jwt_in_refresh_window` 并回 `needs_jwt_refresh` ⇒ 第一条断言红。
+    #[test]
+    fn jwt_window_is_independent_from_refresh_token() {
+        let expired_no_refresh = account_with(&jwt_expiring_in_hours("u", -1), None);
+        assert!(
+            jwt_in_refresh_window(&expired_no_refresh),
+            "过期账号必须在续期窗口内（与能不能续期无关）"
+        );
+        assert!(
+            !needs_jwt_refresh(&expired_no_refresh),
+            "没有 refresh_token 时 needs_jwt_refresh 仍为 false"
+        );
+
+        let future_no_refresh = account_with(&jwt_expiring_in_hours("u", 25), None);
+        assert!(
+            !jwt_in_refresh_window(&future_no_refresh),
+            "25 小时后才到期的 JWT 不在窗口内"
+        );
+    }
+
+    /// 「不可续期」与「续期暂时失败」必须分开：前者才提示重新登录，
+    /// 后者不能写永久 SessionDead（否则网络抖动会把账号写死）。
+    ///
+    /// 可证伪：把 `is_unrecoverable` 改成恒 `true` ⇒ 第二条断言红。
+    #[test]
+    fn ensure_jwt_error_separates_unrecoverable_from_transient() {
+        assert!(EnsureJwtError::NoRefreshToken("缺刷新令牌".into()).is_unrecoverable());
+        assert!(!EnsureJwtError::RefreshFailed("网络超时".into()).is_unrecoverable());
+        assert_eq!(
+            EnsureJwtError::NoRefreshToken("缺刷新令牌".into()).to_string(),
+            "缺刷新令牌"
+        );
+        assert_eq!(
+            EnsureJwtError::RefreshFailed("网络超时".into()).to_string(),
+            "网络超时"
+        );
     }
 
     #[test]

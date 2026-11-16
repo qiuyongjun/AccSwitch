@@ -983,8 +983,15 @@ pub async fn refresh_remaining_for_variant(
     user_id: &str,
 ) -> Result<f64, String> {
     let account = crate::modules::trae::account::find_for(variant, user_id).ok_or("账号不存在")?;
+    // 请求前先自动续期：能续期就续期，不能续期才让用户重新登录。
+    // 无法续期时仍用旧 JWT 请求一次，由 401 走原有的 SessionDead 标记（卡片据此提示）。
+    let jwt_value = match crate::modules::trae::account::ensure_jwt_for(variant, user_id).await {
+        Ok(jwt) => jwt,
+        Err(error) if error.is_unrecoverable() => account.jwt.clone(),
+        Err(error) => return Err(error.to_string()),
+    };
     let (credits, expire_at, _purchased, packages) =
-        match calc_remaining_credits(&account.jwt).await {
+        match calc_remaining_credits(&jwt_value).await {
             Ok(value) => value,
             Err(error) => {
                 /* 凭据被上游拒绝时要落**持久**状态：只弹一次 toast，用户关掉后
@@ -993,7 +1000,7 @@ pub async fn refresh_remaining_for_variant(
                 同时记下判定时的凭据指纹，换到新令牌后这条判定自动失效（#108 §P0-A）。 */
                 if error.is_credential_rejected() {
                     let credential_exp =
-                        crate::modules::trae::jwt::parse(&account.jwt).exp_timestamp;
+                        crate::modules::trae::jwt::parse(&jwt_value).exp_timestamp;
                     save_cooldown_with_credential_for(
                         variant,
                         user_id,
@@ -1094,11 +1101,27 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
         let mut tasks = tokio::task::JoinSet::new();
         loop {
             while tasks.len() < REFRESH_ALL_CONCURRENCY {
-                let Some((index, (_, account))) = queue.next() else {
+                let Some((index, (uid, account))) = queue.next() else {
                     break;
                 };
-                let jwt = account.jwt.clone();
+                let uid = uid.clone();
+                let fallback_jwt = account.jwt.clone();
                 tasks.spawn(async move {
+                    // 每个账号在查询前自动续期；不可续期才回退旧 JWT 让 401 去分类，
+                    // 暂时性续期失败则直接作为普通失败返回（不写永久 SessionDead）。
+                    let jwt = match crate::modules::trae::account::ensure_jwt_for(variant, &uid)
+                        .await
+                    {
+                        Ok(jwt) => jwt,
+                        Err(error) if error.is_unrecoverable() => fallback_jwt.clone(),
+                        Err(error) => {
+                            return (
+                                index,
+                                Err(CalcCreditsError::Other(error.to_string())),
+                                fallback_jwt,
+                            )
+                        }
+                    };
                     let result = calc_remaining_credits(&jwt).await;
                     (index, result, jwt)
                 });

@@ -3,7 +3,7 @@
 //! ## 为什么不能只用旧的 `daily-check-in` 通道
 //!
 //! 官方把「每日领取 100 Credits」这类限时活动**搬到了活动平台**。旧的
-//! `/sash/api/v1/me/daily-check-in/*` 只在仍开放时可用 —— 实测**国内版返回 `DISABLED`、
+//! `/sash/api/v1/me/daily-check-in/…` 只在仍开放时可用 —— 实测**国内版返回 `DISABLED`、
 //! 国际版全 404**。⇒ 只实现旧通道 = 用户点「签到」永远拿到「本区域未开放」。
 //! 旧通道因此降级为 [`super::checkin`] 的**兜底**，主力是本模块。
 //!
@@ -28,8 +28,9 @@
 //! `credits` 是**余额快照**（实时查询 `/api/v2/quota/usage`），本模块是**领取动作**。
 //! 两者口径不同、互不替代：签到成功不会立刻改余额读数，余额也不代表今天领没领。
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -553,6 +554,8 @@ pub struct CampaignsSnapshot {
     pub ok: bool,
     /// 该区域**是否有**活动平台（404/405/410 ⇒ 无）。
     pub available: bool,
+    /// 上游以 401/403 拒绝了当前凭据（⇒ 可尝试自动续期后重试一次）。
+    pub auth_failed: bool,
     pub show_campaign: bool,
     pub claimable: bool,
     pub campaign_url: String,
@@ -570,6 +573,7 @@ impl CampaignsSnapshot {
         Self {
             ok: false,
             available,
+            auth_failed: false,
             show_campaign: false,
             claimable: false,
             campaign_url: String::new(),
@@ -631,7 +635,73 @@ pub fn campaign_to_value(item: &CampaignItem) -> Value {
 // HTTP 执行
 // ---------------------------------------------------------------------------
 
+/// 活动列表的进程内短缓存（键 `region:uid`）。
+///
+/// 页面首屏、页头刷新、逐账号刷新会连续问同一个账号；20 秒内复用同一份快照，
+/// 可把「打开页面 + 点刷新」的上游请求数从 2N 降到 N（领取路径永远绕过缓存）。
+fn campaigns_cache() -> &'static Mutex<HashMap<String, (Instant, CampaignsSnapshot)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, CampaignsSnapshot)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn campaigns_cache_key(region: QoderRegion, uid: &str) -> String {
+    format!("{}:{uid}", region.as_str())
+}
+
+/// 取缓存（过期的顺手摘掉）。只缓存成功快照：失败/鉴权失败不缓存，
+/// 否则一次抖动会被复用到下一个请求，看起来像「坏了一整段时间」。
+fn cached_campaigns(region: QoderRegion, uid: &str) -> Option<CampaignsSnapshot> {
+    let key = campaigns_cache_key(region, uid);
+    let mut cache = campaigns_cache()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (at, snapshot) = cache.get(&key)?;
+    if at.elapsed() < CAMPAIGNS_TTL {
+        return Some(snapshot.clone());
+    }
+    cache.remove(&key);
+    None
+}
+
+fn store_campaigns(region: QoderRegion, uid: &str, snapshot: &CampaignsSnapshot) {
+    if !snapshot.ok {
+        return;
+    }
+    let key = campaigns_cache_key(region, uid);
+    let mut cache = campaigns_cache()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    // 顺手裁掉过期条目，避免表随「历史上出现过的每个账号」永久增长。
+    cache.retain(|_, (at, _)| at.elapsed() < CAMPAIGNS_TTL);
+    cache.insert(key, (Instant::now(), snapshot.clone()));
+}
+
+/// 让某账号的活动缓存立即失效（领取成功后调用）。
+pub fn invalidate_campaigns(region: QoderRegion, uid: &str) {
+    campaigns_cache()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&campaigns_cache_key(region, uid));
+}
+
+/// 只读路径用的活动列表：优先吃 20 秒缓存，未命中才打上游。
+pub async fn fetch_campaigns_cached(
+    region: QoderRegion,
+    uid: &str,
+    access_token: &str,
+) -> CampaignsSnapshot {
+    if let Some(snapshot) = cached_campaigns(region, uid) {
+        return snapshot;
+    }
+    let snapshot = fetch_campaigns(region, uid, access_token).await;
+    store_campaigns(region, uid, &snapshot);
+    snapshot
+}
+
 /// `GET /sash/api/v1/me/campaigns`（含一次身份被拒时的自愈重试）。
+///
+/// **不读缓存**：领取路径必须看到最新的 `claimStatus`，否则会把「刚领过」当成
+/// 「还能领」再打一次上游。只读路径请用 [`fetch_campaigns_cached`]。
 pub async fn fetch_campaigns(
     region: QoderRegion,
     uid: &str,
@@ -639,6 +709,24 @@ pub async fn fetch_campaigns(
 ) -> CampaignsSnapshot {
     let identity = native::cached_identity(region, uid, false);
     let mut snapshot = fetch_campaigns_once(region, uid, access_token, identity.as_ref()).await;
+    // ★ 401/403 ⇒ 先刷新令牌再重试一次：本机导入的账号可能带着已被上游吊销的令牌，
+    // 而网页登录的账号总是新令牌 —— 不自动续期就会表现成「导入的号签到失败」。
+    if snapshot.auth_failed {
+        match super::refresh::refresh_for(region, uid).await {
+            Ok(_) => {
+                if let Some(refreshed) = account::find_account_for(region, uid)
+                    .and_then(|account| account.access_token)
+                    .filter(|token| !token.is_empty())
+                {
+                    snapshot =
+                        fetch_campaigns_once(region, uid, &refreshed, identity.as_ref()).await;
+                }
+            }
+            Err(error) => {
+                snapshot.error = Some(format!("凭据已失效，且无法自动续期：{error}"));
+            }
+        }
+    }
     // 自愈：服务端明确 `showCampaign=false` 且我们用的是**原生**身份 ⇒ 换一套新身份重试一次。
     // （派生分支不重试：它本来就不发机器头，换身份没有意义。）
     if snapshot.ok
@@ -690,6 +778,7 @@ async fn fetch_campaigns_once(
         return CampaignsSnapshot {
             ok: false,
             available: false,
+            auth_failed: false,
             show_campaign: false,
             claimable: false,
             campaign_url: String::new(),
@@ -701,10 +790,12 @@ async fn fetch_campaigns_once(
         };
     }
     if !(200..300).contains(&status) {
-        return CampaignsSnapshot::failed(
+        let mut failed = CampaignsSnapshot::failed(
             true,
             format!("活动列表失败: HTTP {status} {}", truncate(&body, 160)),
         );
+        failed.auth_failed = matches!(status, 401 | 403);
+        return failed;
     }
     let Ok(payload) = serde_json::from_str::<Value>(&body) else {
         return CampaignsSnapshot::failed(true, "活动列表响应不是 JSON".to_string());
@@ -713,6 +804,7 @@ async fn fetch_campaigns_once(
     CampaignsSnapshot {
         ok: true,
         available: true,
+        auth_failed: false,
         show_campaign: parsed.show_campaign,
         claimable: parsed.claimable,
         campaign_url: parsed.campaign_url,
@@ -750,25 +842,47 @@ pub async fn claim_campaign(
 ) -> ClaimOutcome {
     let spec = realm_spec(region);
     let identity = native::cached_identity(region, uid, false);
-    let (headers, _) = desktop_headers(region, uid, access_token, identity.as_ref());
     let path = super::PATH_CAMPAIGN_CLAIM_TEMPLATE.replace("{id}", campaign_id);
     let client = match api::shared_client() {
         Ok(client) => client,
         Err(error) => return ClaimOutcome::failed(error),
     };
-    let response = client
-        .post(format!("{}{}", spec.openapi_base, path))
-        .timeout(Duration::from_secs(20))
-        .headers(header_map(&headers))
-        .json(&json!({}))
-        .send()
-        .await;
-    let response = match response {
-        Ok(response) => response,
-        Err(error) => return ClaimOutcome::failed(format!("领取请求失败: {error}")),
-    };
-    let status_code = response.status().as_u16();
-    let body = response.text().await.unwrap_or_default();
+    let mut access = access_token.to_string();
+    let mut status_code = 0u16;
+    let mut body = String::new();
+    // 领取途中令牌被吊销（401/403）⇒ 续期一次再发。领取本身按 `campaignId` 幂等，
+    // 上游对重复领取回 409 / ALREADY_CLAIMED，不会重复发奖。
+    for attempt in 0..2 {
+        let (headers, _) = desktop_headers(region, uid, &access, identity.as_ref());
+        let response = client
+            .post(format!("{}{}", spec.openapi_base, path))
+            .timeout(Duration::from_secs(20))
+            .headers(header_map(&headers))
+            .json(&json!({}))
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return ClaimOutcome::failed(format!("领取请求失败: {error}")),
+        };
+        status_code = response.status().as_u16();
+        body = response.text().await.unwrap_or_default();
+        if attempt == 0 && matches!(status_code, 401 | 403) {
+            match super::refresh::refresh_for(region, uid).await {
+                Ok(_) => {
+                    if let Some(refreshed) = account::find_account_for(region, uid)
+                        .and_then(|account| account.access_token)
+                        .filter(|token| !token.is_empty())
+                    {
+                        access = refreshed;
+                        continue;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        break;
+    }
     if status_code == 409 {
         return ClaimOutcome {
             ok: true,
@@ -979,17 +1093,22 @@ pub fn checkin_ok(errors: &[String], has_benefit: bool) -> bool {
 ///
 /// 返回的 JSON 形状与前端「签到结果条」直接对应（见 `campaign_checkin` 的字段名）。
 pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String> {
+    // 领取是写操作，续期放在这里最合适：没有可用 token 就先自动续期，
+    // 不能用「PAT 不能用于活动平台」把可续期的账号挡在门外。
+    let access = super::refresh::ensure_access_for(region, uid).await?;
+    // 续期可能已回写账号库 ⇒ 重新读一次，后面的冷却 / 兑换码才是最新值。
     let account =
         account::find_account_for(region, uid).ok_or_else(|| format!("账号不存在: {uid}"))?;
-    let access = account
-        .access_token
-        .as_deref()
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| "这条账号没有可调用的 access token（PAT 不能用于活动平台）".to_string())?
-        .to_string();
 
     let now = now_secs();
     let snapshot = fetch_campaigns(region, uid, &access).await;
+    // `fetch_campaigns` 可能在 401 后自己换过令牌；重新取一次当前可用 token，
+    // 后面逐个 claim 就不会再拿旧令牌白打一次 401。
+    let access = if snapshot.ok {
+        super::refresh::ensure_access_for(region, uid).await?
+    } else {
+        access
+    };
     if !snapshot.ok {
         let (next_at, next_note) = next_checkin_window(now);
         return Ok(json!({
@@ -1149,6 +1268,9 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
         // 落盘失败**不吞**：签到动作已经发生，必须让用户知道状态没记住。
         errors.push(format!("签到状态落盘失败: {error}"));
     }
+
+    // 领取改变了 claimStatus ⇒ 让该账号的只读缓存立即失效（下一次状态查询必须看到新事实）。
+    invalidate_campaigns(region, uid);
 
     let (next_at, next_note) = next_checkin_window(now);
     let message = checkin_message(
@@ -1389,6 +1511,52 @@ mod tests {
 
         // 未知失败码 ⇒ 原样透出，不编中文。
         assert_eq!(failure_reason("SOMETHING_NEW"), None);
+    }
+
+    /// 只读路径的活动列表缓存：成功快照命中、领取后失效、失败不缓存、过期自动摘除。
+    ///
+    /// 可证伪：把 `store_campaigns` 的 `if !snapshot.ok { return; }` 删掉 ⇒ 失败不缓存那条红；
+    /// 把 `cached_campaigns` 的 TTL 判断去掉 ⇒ 过期那条红。
+    #[test]
+    fn campaigns_cache_reuses_success_but_never_failures() {
+        let region = QoderRegion::Cn;
+        let uid = format!("cache-{}", uuid::Uuid::new_v4().simple());
+        invalidate_campaigns(region, &uid);
+        assert!(cached_campaigns(region, &uid).is_none());
+
+        let snapshot = CampaignsSnapshot {
+            ok: true,
+            available: true,
+            auth_failed: false,
+            show_campaign: true,
+            claimable: true,
+            campaign_url: String::new(),
+            items: vec![item("daily", "CLAIM_BENEFIT", "CLAIMABLE", 100)],
+            identity: "derived",
+            machine_headers: "omitted",
+            hint: String::new(),
+            error: None,
+        };
+        store_campaigns(region, &uid, &snapshot);
+        let hit = cached_campaigns(region, &uid).expect("成功快照必须命中");
+        assert_eq!(hit.items.len(), 1);
+        invalidate_campaigns(region, &uid);
+        assert!(cached_campaigns(region, &uid).is_none(), "领取后必须失效");
+
+        // 失败快照不缓存：否则一次抖动会被复用 20 秒。
+        let failed = CampaignsSnapshot::failed(true, "HTTP 500".to_string());
+        store_campaigns(region, &uid, &failed);
+        assert!(cached_campaigns(region, &uid).is_none());
+
+        // 过期条目必须被摘掉（直接改时刻，不依赖 sleep）。
+        let stale_at = Instant::now()
+            .checked_sub(CAMPAIGNS_TTL + Duration::from_secs(1))
+            .expect("测试机运行时间足够");
+        campaigns_cache()
+            .lock()
+            .unwrap()
+            .insert(campaigns_cache_key(region, &uid), (stale_at, snapshot));
+        assert!(cached_campaigns(region, &uid).is_none(), "过期必须不命中");
     }
 
     /// ★ 桌面端头：无原生身份时**一个 `cosy-machine*` 都不发**（issue #10）。

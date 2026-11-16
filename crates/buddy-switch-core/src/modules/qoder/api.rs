@@ -3,7 +3,7 @@
 //! | 通道 | 端点族 | 认证 |
 //! |:--|:--|:--|
 //! | **COSY 推理通道** | `/algo/api/v2/service/pro/sse/agent_chat_generation`（SSE）、`/algo/api/v2/model/list` | COSY 签名头（见 [`cosy`]） |
-//! | **openapi 账号通道** | `/api/v1/deviceToken/refresh`、`/api/v1/jobToken/*`、`/sash/api/v1/me/daily-check-in/*`、`/api/v2/quota/usage`、`/api/v2/user/plan` | `Authorization: Bearer <access_token>` |
+//! | **openapi 账号通道** | `/api/v1/deviceToken/refresh`、`/api/v1/jobToken/…`、`/sash/api/v1/me/daily-check-in/…`、`/api/v2/quota/usage`、`/api/v2/user/plan` | `Authorization: Bearer <access_token>` |
 //!
 //! ## 协议要点（都是实测形态，别凭直觉改）
 //!
@@ -1572,6 +1572,20 @@ fn apply_headers(
     request.headers(merged)
 }
 
+/// 上游错误是否属于「凭据被拒」（可尝试自动续期后重试）。
+///
+/// 本模块的 openapi 错误都带 `HTTP <status>` 前缀（见 `quota_usage` / `user_plan`
+/// / `checkin_*`），因此按状态码判定是稳定的；同时兼容少数上游把原因写成
+/// `unauthorized` 的形态。**不认 `403` 之外的业务码** —— 那些是权限/额度问题，
+/// 刷新令牌不会让它们变好。
+pub fn is_auth_error(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("http 401")
+        || lowered.contains("http 403")
+        || lowered.contains("unauthorized")
+        || lowered.contains("unauthenticated")
+}
+
 /// 刷新令牌：按 `kind` 路由到 device / job 刷新端点（普通 JSON POST，不签名）。
 pub async fn refresh_token(
     region: QoderRegion,
@@ -2544,6 +2558,30 @@ mod tests {
             .unwrap()
             .starts_with(&super::super::device::derive_id("q1", "req")));
         assert!(lookup("Origin").unwrap().contains("qoder"));
+    }
+
+    /// 鉴权失败识别只认 401/403 / 明确的未认证词，**不**把 400/500 当可续期。
+    ///
+    /// 可证伪：把 `http 403` 去掉 ⇒ 第二条断言红；把函数改成「任何错误都算」⇒
+    /// 最后两条断言红（会拿续期去重试业务错误）。
+    #[test]
+    fn auth_error_detection_is_narrow_and_stable() {
+        for message in [
+            "额度查询失败: HTTP 401 {\"message\":\"invalid token\"}",
+            "活动列表失败: HTTP 403 Forbidden",
+            "unauthenticated",
+            "Unauthorized",
+        ] {
+            assert!(is_auth_error(message), "应判为鉴权失败: {message}");
+        }
+        for message in [
+            "额度查询失败: HTTP 400 bad request",
+            "额度查询失败: HTTP 429 too many requests",
+            "活动列表响应不是 JSON",
+            "network timeout",
+        ] {
+            assert!(!is_auth_error(message), "不得判为鉴权失败: {message}");
+        }
     }
 
     #[test]

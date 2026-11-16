@@ -71,29 +71,73 @@ pub async fn region_view(region: QoderRegion, uids: Option<&[String]>) -> Value 
         .map(|account| AccountTarget {
             uid: account.uid.clone(),
             name: account::display_name(account),
+            /* 没有 access token 但**有刷新令牌 / PAT** 的账号也要进队列：
+               它们可以在请求前自动续期（本机导入的账号经常是这种形态）。
+               两样都没有才记为 None —— 那才是真的没办法。 */
             token: account
                 .access_token
                 .clone()
-                .filter(|token| !token.is_empty()),
+                .filter(|token| !token.is_empty())
+                .or_else(|| {
+                    let shape = account.credential_shape();
+                    (shape.can_refresh() || shape.pat).then(String::new)
+                }),
         })
         .collect();
 
-    region_view_for_targets(region, targets, shared_query_gate(), move |uid, token| async move {
-        fetch_account(
-            || api::quota_usage(region, &uid, &token),
-            || api::user_plan(region, &uid, &token),
-        )
-        .await
+    region_view_for_targets(region, targets, shared_query_gate(), move |uid, _token| async move {
+        fetch_account_with_renewal(region, &uid).await
     })
     .await
 }
 
-/// 单账号流水线：**先额度，成功才查套餐**。
+/// 单账号额度查询 + **自动续期**。
 ///
-/// - 额度失败直接返回错误 ⇒ 不产生套餐请求（也绝不重试）；
-/// - 套餐失败只丢套餐名，保留已成功的额度（套餐只是展示信息）。
+/// 两条路径都会续期：
+/// 1. 请求前没有 access token / 已过期 ⇒ [`ensure_access_for`]；
+/// 2. 上游仍回 401/403（令牌被提前吊销）⇒ 刷新一次后重试。
 ///
-/// 两路保持顺序，因此一个账号任务同时在途的上游请求最多 1 个。
+/// 续期失败时把**真实原因**带回行内：能续期就绝不要求用户手动点，
+/// 不能续期才提示重新登录。
+async fn fetch_account_with_renewal(region: QoderRegion, uid: &str) -> AccountOutcome {
+    /* 无条件预检：access token 非空也可能已过期（本机导入的常见形态）。
+       `ensure_access_for` 对可用 token 只读一次账号库、不发请求。 */
+    let token = super::refresh::ensure_access_for(region, uid).await?;
+    let outcome = fetch_account(
+        || api::quota_usage(region, uid, &token),
+        || api::user_plan(region, uid, &token),
+    )
+    .await;
+    let error = match outcome {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if !api::is_auth_error(&error) {
+        return Err(error);
+    }
+
+    super::refresh::refresh_for(region, uid)
+        .await
+        .map_err(|renew| format!("凭据已失效，且无法自动续期：{renew}"))?;
+    let refreshed = super::account::find_account_for(region, uid)
+        .and_then(|account| account.access_token)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "自动续期后仍未取得 access token，请重新登录".to_string())?;
+    fetch_account(
+        || api::quota_usage(region, uid, &refreshed),
+        || api::user_plan(region, uid, &refreshed),
+    )
+    .await
+}
+
+/// 单账号流水线：额度与套餐**并行**取。
+///
+/// 套餐只用于展示，让额度请求多等一轮 RTT 没有收益。并行后单个账号的等待从
+/// 「两跳之和」降到「较慢的一跳」；代价是额度失败时套餐请求已经发出（多一次
+/// 上游调用），但这种情况通常意味着凭据已坏，下一次会走续期。
+///
+/// - 额度失败 ⇒ 返回错误，套餐结果丢弃；
+/// - 套餐失败 ⇒ 只丢套餐名，保留已成功的额度。
 async fn fetch_account<Q, QFut, P, PFut>(quota: Q, plan: P) -> AccountOutcome
 where
     Q: FnOnce() -> QFut,
@@ -101,8 +145,9 @@ where
     P: FnOnce() -> PFut,
     PFut: Future<Output = Result<Value, String>>,
 {
-    let quota = quota().await?;
-    let plan = plan().await.ok().and_then(|payload| {
+    let (quota, plan) = tokio::join!(quota(), plan());
+    let quota = quota?;
+    let plan = plan.ok().and_then(|payload| {
         payload
             .get("planName")
             .or_else(|| payload.get("name"))
@@ -453,29 +498,19 @@ mod tests {
         assert_eq!(view["summary"]["remaining"], 0);
     }
 
-    /// 额度失败 ⇒ **不查套餐**（避免额外请求），错误原样返回。
+    /// 额度失败 ⇒ 错误原样返回，**套餐结果被丢弃**（并行后套餐请求可能已发出）。
+    ///
+    /// 这里刻意不再断言「套餐请求为 0」：两路已经并行，额度失败时套餐往往已发出。
+    /// 业务结论不变 —— 失败行只带额度错误，不会因为套餐成功就变成成功。
     #[tokio::test]
-    async fn quota_failure_skips_plan_query() {
-        let plan_calls = Arc::new(AtomicUsize::new(0));
-        let counted = plan_calls.clone();
+    async fn quota_failure_ignores_plan_result() {
         let outcome = fetch_account(
             || async { Err("额度查询失败: HTTP 401 凭据无效".to_string()) },
-            move || {
-                let counted = counted.clone();
-                async move {
-                    counted.fetch_add(1, Ordering::SeqCst);
-                    Ok(json!({ "planName": "Pro" }))
-                }
-            },
+            || async { Ok(json!({ "planName": "Pro" })) },
         )
         .await;
 
         assert_eq!(outcome.unwrap_err(), "额度查询失败: HTTP 401 凭据无效");
-        assert_eq!(
-            plan_calls.load(Ordering::SeqCst),
-            0,
-            "额度失败后不得再查套餐"
-        );
     }
 
     /// 套餐失败 ⇒ 保留成功的额度，只把套餐名置空（不重试、不报错）。
