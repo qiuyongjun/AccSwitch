@@ -976,4 +976,10 @@ export const zh = {
   // ---- 积分视图（自动刷新节奏 / 上次刷新）----
   "shared.credit.autoEvery": "每 {n} 分钟自动刷新",
   "shared.credit.lastRefresh": "上次刷新 {time}",
+
+  // ---- 页头「后台同步中」指示（components/sync-indicator.tsx，三平台共用）----
+  /* 有旧值时的后台刷新此前完全不可见：界面不动 → 几秒后突然跳变。
+     这一行小字就是那个「正在发生」的如实说明；完成后短暂补一句「已更新」。 */
+  "shared.sync.syncing": "正在同步…",
+  "shared.sync.done": "已更新",
 } as const;

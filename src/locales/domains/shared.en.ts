@@ -837,4 +837,8 @@ export const en = {
   // ---- Credit views (auto-refresh cadence / last refresh) ----
   "shared.credit.autoEvery": "Auto-refreshes every {n} min",
   "shared.credit.lastRefresh": "Last refreshed {time}",
+
+  // ---- Page-head "background sync" indicator (components/sync-indicator.tsx, all platforms) ----
+  "shared.sync.syncing": "Syncing…",
+  "shared.sync.done": "Up to date",
 };

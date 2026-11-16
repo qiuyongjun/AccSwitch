@@ -87,6 +87,7 @@ import {
 import { QoderLocalSourceRow } from "@/components/qoder/qoder-local-source-row";
 import { QoderOAuthDialog } from "@/components/qoder/qoder-oauth-dialog";
 import { ScopeChip, scopeLabel } from "@/components/scope-chip";
+import { SyncIndicator } from "@/components/sync-indicator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -265,6 +266,20 @@ function QoderAccountsPanel({
   const [programs, setPrograms] = useState<QoderProgramStatus[] | null>(
     () => cachedEnrichment?.programs ?? null,
   );
+  /**
+   * 额度 / 签到 / 程序位这一轮是否在飞 —— 页头「正在同步…」判据之一。
+   *
+   * 不需要「哪一路」的粒度：页头只回答「在同步吗」，逐值反馈归卡片自己。
+   */
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  /**
+   * 页头同步指示的总判据。
+   *
+   * ⚠️ 账号列表 / 本机来源用资源缓存的 `pending`（`loading` 只是骨架屏判据，
+   * 有旧值时恒为 false）；额度那一路是页面自己的 state（见 `loadEnrichment`）。
+   * 三者任一在飞都算「正在同步」，否则用户看到的仍是「几秒后突然刷新」。
+   */
+  const syncing = accountResource.pending || sourceResource.pending || enrichmentLoading;
 
   /* ── 视图参数（页内 state，不进 URL、不进全局 store —— `account-list-view.ts` 的纪律） ── */
   const [query, setQuery] = useState("");
@@ -399,6 +414,15 @@ function QoderAccountsPanel({
   const loadEnrichment = useCallback(async () => {
     const request = ++enrichmentSeq.current;
     const live = () => request === enrichmentSeq.current;
+    /**
+     * 页头「正在同步…」的额度 / 签到 / 程序位这一路。
+     *
+     * 账号列表有自己的资源缓存（`pending`），但额度与签到是**上游请求**（实测 ~4s），
+     * 它们的落地此前完全静默 —— 卡片上的数字就是「几秒后突然变」。
+     * 收尾放在 `finally` 且**只有本轮仍是最新**才清（见下），避免被取代的一轮
+     * 把新请求的提示一起关掉。
+     */
+    setEnrichmentLoading(true);
 
     /**
      * ★ 分层落地，不再等 `Promise.allSettled` 齐活。
@@ -449,7 +473,11 @@ function QoderAccountsPanel({
       programTask,
       creditTask,
       checkinTask,
-    ]);
+    ]).finally(() => {
+      /* 只有「仍是本轮最新」时才收尾：被取代的那一轮若清标志，
+         会把接替它的新请求的「正在同步」一起关掉。 */
+      if (live()) setEnrichmentLoading(false);
+    });
 
     /* 被更新的读取取代 ⇒ 不再写快照（已落地的 state 由新请求覆盖）。 */
     if (!live()) return;
@@ -474,6 +502,7 @@ function QoderAccountsPanel({
       setCheckinRows({});
       setCheckinUnavailable(false);
       setPrograms(null);
+      setEnrichmentLoading(false);
       return;
     }
     void loadEnrichment();
@@ -2375,6 +2404,8 @@ function QoderAccountsPanel({
                 ? t("pageHead.accounts.pending", { n: rows.length, m: attentionCount })
                 : t("pageHead.accounts", { n: rows.length })}
             </span>
+            {/* 额度 / 签到 / 程序位与账号列表的后台读取，此前对用户完全静默（「突然刷新」根因）。 */}
+            <SyncIndicator syncing={syncing} />
           </p>
         </div>
         <div className="grow" />

@@ -59,6 +59,7 @@ import { OAuthLoginDialog } from "@/components/oauth-login-dialog";
 import { RecycleBinSheet } from "@/components/recycle-bin-sheet";
 import { RestartConfirmDialog } from "@/components/restart-confirm-dialog";
 import { SwitchAccountDialog } from "@/components/switch-account-dialog";
+import { SyncIndicator } from "@/components/sync-indicator";
 import { ExtSessionDrawer } from "@/components/sessions/ext-session-drawer";
 import * as api from "@/lib/api";
 // ★ B5：`checkinCreditsOf` 是**值**（从条目/raw 里取积分字段），`CheckinStatusEntry` 是**类型**。
@@ -329,6 +330,15 @@ function RegionPanel({ region }: { region: Region }) {
   const error = useAccountsStore((s) => (region === "cn" ? s.error : s.global.error));
   const creditMap = useAccountsStore((s) => (region === "cn" ? s.creditMap : s.global.creditMap));
   const creditLoadingMap = useAccountsStore((s) => (region === "cn" ? s.creditLoadingMap : s.global.creditLoadingMap));
+  /**
+   * 全区积分刷新在飞（`refreshCredits` 的批量档）。
+   *
+   * 只用作页头的「正在同步…」判据：单账号刷新的可见反馈在卡片自己身上
+   * （`creditLoadingMap` → 指标行下方那行小字），不该再叠一层页头提示。
+   */
+  const refreshingCredits = useAccountsStore((s) =>
+    region === "cn" ? s.refreshingCredits : s.global.refreshingCredits,
+  );
   const reconcileAccounts = useAccountsStore((s) => s.reconcileAccounts);
   const refreshRegionStatus = useAccountsStore((s) => s.refreshRegionStatus);
   const deleteAccountStore = useAccountsStore((s) => s.deleteAccount);
@@ -3271,6 +3281,13 @@ function RegionPanel({ region }: { region: Region }) {
                 ? t("wbAccounts.page.accountsCountPending", { n: accounts.length, m: pendingCount })
                 : t("wbAccounts.page.accountsCount", { n: accounts.length })}
             </span>
+            {/*
+             * ★ 后台同步指示：`loadRegion` 有旧数据时不会出骨架（也不该出），
+             * 此前那几秒的重新读取完全不可见 —— 用户读到的是「打开页面没反应，
+             * 几秒后突然刷新」。这里把 store 的 `loading`（账号 + 状态整轮读取）
+             * 与批量积分刷新如实说出来，见 `components/sync-indicator.tsx` 文件头。
+             */}
+            <SyncIndicator syncing={loading || refreshingCredits} />
           </p>
         </div>
         <div className="grow" />

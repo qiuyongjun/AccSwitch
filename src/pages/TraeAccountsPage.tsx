@@ -38,6 +38,7 @@ import {
   type AccountCheckinState,
 } from "@/components/account-more-menu";
 import { AccountWorkbench } from "@/components/account-workbench";
+import { SyncIndicator } from "@/components/sync-indicator";
 import { type AccountColumn } from "@/components/account-table";
 import { type ToolbarOption } from "@/components/account-toolbar";
 import {
@@ -280,6 +281,16 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const snapshot = snapshotResource.data;
   const loading = accountResource.loading ||
     ((accountResource.data?.accounts.length ?? 0) === 0 && snapshotResource.loading);
+  /**
+   * 页头「正在同步…」判据：两份快照**任一**在飞。
+   *
+   * ⚠️ 不能只绑 `loading` —— 它是**骨架屏判据**（没有可用值才为 true）。
+   * 切回本页 / 重进作用域时 store 里有上次的快照 ⇒ `loading` 恒为 false，
+   * 而 `loadSnapshot`（env + 积分 + 签到 + 程序位，实测数秒）正在后台跑，
+   * 期间界面完全静默，回来时整页跳变。`pending` 才是「有请求在飞」。
+   * 分工见 `use-cached-resource.ts` 的 `pending` 注释。
+   */
+  const syncing = accountResource.pending || snapshotResource.pending;
   const error = accountResource.error ?? snapshotResource.error;
   const refreshAccounts = accountResource.refreshWithResult;
   const refreshSnapshot = snapshotResource.refreshWithResult;
@@ -2973,6 +2984,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
                 ? t("pageHead.accounts.pending", { n: accounts.length, m: pendingCount })
                 : t("pageHead.accounts", { n: accounts.length })}
             </span>
+            {/* 后台再校验的如实说明（此前「打开页面没反应、几秒后突然刷新」的根因）。 */}
+            <SyncIndicator syncing={syncing} />
           </p>
         </div>
         <div className="grow" />
