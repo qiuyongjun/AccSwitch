@@ -133,6 +133,21 @@ pub fn cached_identity(region: QoderRegion, uid: &str, force: bool) -> Option<Na
     value
 }
 
+/// [`cached_identity`] 的**异步入口**：组件探测是同步阻塞调用（正常约 3.7s），
+/// 直接在 async 任务里跑会占住一个 runtime worker，并拖慢同页并行的额度请求。
+/// 签到 / 活动链路一律走这里；同步版留给已经处在阻塞上下文的调用方。
+pub async fn cached_identity_async(
+    region: QoderRegion,
+    uid: &str,
+    force: bool,
+) -> Option<NativeIdentity> {
+    let uid = uid.to_string();
+    tokio::task::spawn_blocking(move || cached_identity(region, uid.as_str(), force))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// 清掉缓存（诊断 / 自愈路径用）。
 pub fn clear_cache() {
     if let Ok(mut guard) = cache().lock() {

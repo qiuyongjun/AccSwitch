@@ -358,6 +358,17 @@ pub fn run() {
             // README 截图模式只渲染前端虚构数据，禁止读取账号后执行签到、轮换或保活。
             if !is_screenshot_demo() {
                 spawn_background_loops();
+                // ★ Qoder 首开预热：签到链路要先跑本机 `runtime-info` 组件取机器身份
+                //   （冷启动约 3.7s，结果按区域缓存 30 分钟）。启动时先在后台跑一次，
+                //   把这段等待从账号页首屏挪走；没有账号 / 没装客户端时立即返回。
+                tauri::async_runtime::spawn_blocking(|| {
+                    for region in modules::qoder::region::QoderRegion::all() {
+                        let file = modules::qoder::account::load_accounts_for(region);
+                        if let Some(uid) = file.accounts.first().map(|account| account.uid.clone()) {
+                            let _ = modules::qoder::native::cached_identity(region, &uid, false);
+                        }
+                    }
+                });
                 // P15 · 外部 Agent hook 的本地接收端：只绑 `127.0.0.1`。
                 //
                 // ★ **它不是后台任务**：`serve()` 是事件驱动的常驻 accept，没有周期动作

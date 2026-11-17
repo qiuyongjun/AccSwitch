@@ -147,7 +147,6 @@ import {
 } from "@/components/account-card";
 import { Badge } from "@/components/ui/badge";
 import {
-  creditCacheNote,
   readQoderCreditCache,
   writeQoderCreditCacheEntries,
   type CachedQoderCredit,
@@ -207,6 +206,16 @@ interface QoderEnrichmentSnapshot {
   programs: QoderProgramStatus[] | null;
 }
 const enrichmentCache = new Map<string, QoderEnrichmentSnapshot>();
+
+/**
+ * 三路快照的**短新鲜窗口**：窗口内重挂载不重复打上游。
+ *
+ * 额度与签到都是真上游请求（签到链路的身份探测还可能跑本机组件），
+ * 切到别的页再切回来就再等一轮没有意义。写操作 / 用户主动刷新必须传
+ * `force` 绕开窗口，保证变更后立刻拿到新值。
+ */
+const ENRICHMENT_FRESH_MS = 30_000;
+const enrichmentFetchedAt = new Map<string, number>();
 
 /**
  * Qoder 账号页 —— 作用域外壳。
@@ -446,7 +455,19 @@ function QoderAccountsPanel({
    * （区域未开放签到 ≠ 额度也拿不到；本机程序位更不能等上游）。失败时
    * **保持上一份快照**（不清空）—— 清空会把「暂时取不到」显示成「没有额度」。
    */
-  const loadEnrichment = useCallback(async () => {
+  const loadEnrichment = useCallback(async (options?: { force?: boolean }) => {
+    /* ★ 新鲜窗口：本轮快照刚成功落地过，重挂载/切回作用域直接用内存值，
+       不再打一轮上游（签到链路的身份探测冷启动要数秒）。
+       `checkinLoaded` 同步置位，抽屉的按需补取不会被这个「跳过」永久挂起。 */
+    if (
+      !options?.force &&
+      enrichmentCache.has(scope) &&
+      Date.now() - (enrichmentFetchedAt.get(scope) ?? 0) < ENRICHMENT_FRESH_MS
+    ) {
+      setCheckinLoaded(true);
+      return;
+    }
+
     const request = ++enrichmentSeq.current;
     const live = () => request === enrichmentSeq.current;
     /**
@@ -527,10 +548,18 @@ function QoderAccountsPanel({
         checkinUnavailable: nextCheckin?.unavailable ?? previous?.checkinUnavailable ?? false,
         programs: nextPrograms ?? previous?.programs ?? null,
       });
+      /* 额度与签到两路都完成（对象非空）才开新鲜窗口：
+         任一失败时保持旧语义 —— 下次重挂载仍会重试，不让失败被缓存 30 秒。 */
+      if (nextCredits && nextCheckin) enrichmentFetchedAt.set(scope, Date.now());
     }
   }, [rememberCredits, scope]);
 
   const hasAccounts = accounts !== null && accounts.length > 0;
+
+  /** 手动刷新写入了更新的读数 ⇒ 作废新鲜窗口，避免重进页面被窗口挡成旧值。 */
+  function invalidateEnrichmentFreshness() {
+    enrichmentFetchedAt.delete(scope);
+  }
 
   /* 首屏从落盘缓存取上次成功读数（只补「实时值还没到」的账号）。 */
   useEffect(() => {
@@ -1133,7 +1162,7 @@ function QoderAccountsPanel({
       if (result.relaunchError) {
         /* 启动失败**不改变**「切换是否成功」：登录态已写好并通过校验，只是客户端没起来。 */
         /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
-        await loadEnrichment();
+        await loadEnrichment({ force: true });
         const description = t("qoder.page.accounts.switch.relaunchFailed", {
           error: result.relaunchError,
         });
@@ -1162,7 +1191,7 @@ function QoderAccountsPanel({
           description: t("shared.switchProgress.launchingDetail"),
         });
         /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
-        await loadEnrichment();
+        await loadEnrichment({ force: true });
 
         const started = await waitForClientRunning(
           async () => {
@@ -1209,7 +1238,7 @@ function QoderAccountsPanel({
         }
       } else {
         /* 切换改的是**客户端登录态**⇒ 重取程序位状态（「当前登录」徽章才会跟着动）。 */
-        await loadEnrichment();
+        await loadEnrichment({ force: true });
         op.settle({
           phase: "done",
           title: t("shared.switchProgress.done", { name }),
@@ -1269,6 +1298,7 @@ function QoderAccountsPanel({
             if (!current.ok) throw new Error(current.error ?? t("shared.refreshPart.fail"));
             setCredits((prev) => ({ ...prev, [current.uid]: current }));
             rememberCredits([current]);
+            invalidateEnrichmentFreshness();
           } else if (kind === "checkin") {
             /* 只问这一个账号（批量接口传 1 个 id 即可，不新增「单账号」变体）。 */
             const map = await api.qoderCheckinStatusMap(scope, [account.uid]);
@@ -1277,6 +1307,7 @@ function QoderAccountsPanel({
             if (!current.ok) throw new Error(current.error ?? t("shared.refreshPart.fail"));
             markCheckinWrite(account.uid);
             setCheckinMap((prev) => ({ ...prev, ...map }));
+            invalidateEnrichmentFreshness();
           } else if (!(await reload())) {
             throw new Error(t("shared.refreshPart.fail"));
           }
@@ -1316,7 +1347,7 @@ function QoderAccountsPanel({
       return false;
     }
     const synced = await reload();
-    if (synced) await loadEnrichment();
+    if (synced) await loadEnrichment({ force: true });
     if (!aliveRef.current) return synced;
     if (synced) toast.success(t("qoder.page.accounts.refresh.done", { name }));
     else
@@ -1484,7 +1515,7 @@ function QoderAccountsPanel({
       /* 回读账号库：`lastCheckinToday` 是签到状态的**落盘初值**（重开页面时唯一的依据），
          签到成功后必须让它跟上，否则下次打开又变回「未知」。 */
       await reload();
-      await loadEnrichment();
+      await loadEnrichment({ force: true });
     } finally {
       setBusy(false);
     }
@@ -1524,7 +1555,7 @@ function QoderAccountsPanel({
       }
       /* 续期是写操作 ⇒ 必须回读账号元数据（新令牌的到期时刻在列表载荷里）。 */
       await reload();
-      await loadEnrichment();
+      await loadEnrichment({ force: true });
     } finally {
       setBusy(false);
       setRenewBusy(false);
@@ -1551,6 +1582,7 @@ function QoderAccountsPanel({
           return next;
         });
         rememberCredits(view.accounts);
+        invalidateEnrichmentFreshness();
         const failed = ids.filter((uid) => !view.accounts.some((row) => row.uid === uid && row.ok));
         if (!aliveRef.current) return;
         if (failed.length > 0) {
@@ -1562,6 +1594,7 @@ function QoderAccountsPanel({
         const map = await api.qoderCheckinStatusMap(scope, ids);
         for (const uid of Object.keys(map)) markCheckinWrite(uid);
         setCheckinMap((prev) => ({ ...prev, ...map }));
+        invalidateEnrichmentFreshness();
         const failed = ids.filter((uid) => !map[uid]?.ok);
         if (!aliveRef.current) return;
         if (failed.length > 0) {
@@ -1601,6 +1634,9 @@ function QoderAccountsPanel({
       if (checkinResult.status === "fulfilled") {
         for (const uid of Object.keys(checkinResult.value)) markCheckinWrite(uid);
         setCheckinMap((prev) => ({ ...prev, ...checkinResult.value }));
+      }
+      if (creditsResult.status === "fulfilled" || checkinResult.status === "fulfilled") {
+        invalidateEnrichmentFreshness();
       }
       const failed =
         Number(creditsResult.status === "rejected") +
@@ -1723,19 +1759,17 @@ function QoderAccountsPanel({
   );
 
   /**
-   * 首屏展示行：实时值优先，缺席 / 失败时回落**上次成功读数**并带写入时刻。
+   * 首屏展示行：实时值优先，缺席 / 失败时回落**上次成功读数**。
    *
    * 与 `creditForDisplay` 分开：后者只做「聚合 / 逐包」兜底，本函数额外允许
    * 跨重启缓存。排序 / 「优先」标记仍只读 `credits`，缓存不参与任何业务判定。
    */
   const displayCreditFor = useCallback(
-    (account: QoderAccountView): { row: QoderCreditsRow | undefined; cachedAt: number | null } => {
+    (account: QoderAccountView): QoderCreditsRow | undefined => {
       /* 实时值优先（并保持 `creditForDisplay(account.uid)` 这一展示兜底入口）。 */
       const live = creditForDisplay(account.uid);
-      if (live?.ok) return { row: live, cachedAt: null };
-      const cached = cachedCredits[account.uid];
-      if (cached) return { row: cached.value, cachedAt: cached.at };
-      return { row: live, cachedAt: null };
+      if (live?.ok) return live;
+      return cachedCredits[account.uid]?.value ?? live;
     },
     [creditForDisplay, cachedCredits],
   );
@@ -2485,8 +2519,8 @@ function QoderAccountsPanel({
            取不到额度快照时也给 `—` 且**仍可点**（点进去正是「为什么没有」）；
            主行补「剩余 · 总额 · 已用」（`creditMetricTip`），副行补逐批明细（`expiryTooltipLines`），
            都用原生 `title` —— 表格里不用 Radix 浮层，与 WB 同一纪律。 */
-        /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存（后者带「上次读数」）。 */
-        const { row, cachedAt } = displayCreditFor(account);
+        /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存。 */
+        const row = displayCreditFor(account);
         const hasCredits = Boolean(row?.ok);
         const now = Date.now();
         const expiry =
@@ -2552,11 +2586,6 @@ function QoderAccountsPanel({
                 ) : null}
               </span>
             )}
-            {cachedAt ? (
-              <span className="text-[11px] text-muted-foreground">
-                {creditCacheNote(cachedAt, t, now)}
-              </span>
-            ) : null}
           </button>
         );
       },
@@ -2851,8 +2880,8 @@ function QoderAccountsPanel({
         rowSelectLabel={(account) => t("shared.table.selectRowAria", { name: qoderAccountName(account) })}
         rowOpenLabel={(account) => t("shared.table.openRowAria", { name: qoderAccountName(account) })}
         renderCard={(account) => {
-          /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存（后者带「上次读数」）。 */
-          const { row, cachedAt } = displayCreditFor(account);
+          /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存。 */
+          const row = displayCreditFor(account);
           return (
             <QoderAccountCard
               key={account.uid}
@@ -2881,7 +2910,6 @@ function QoderAccountsPanel({
                     }
                   : null
               }
-              creditCachedAt={cachedAt}
               checkin={checkinDisplayOf(account)}
               creditPriority={account.uid === priorityAccountId}
               programs={programs}
@@ -2949,7 +2977,7 @@ function QoderAccountsPanel({
         onOpenChange={setOauthOpen}
         scope={scope}
         onCollected={() => {
-          void reload().then(() => loadEnrichment());
+          void reload().then(() => loadEnrichment({ force: true }));
         }}
       />
 

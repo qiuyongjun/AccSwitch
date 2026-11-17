@@ -1,5 +1,4 @@
 import type { QoderCreditsRow } from "@/lib/api";
-import type { Translate } from "@/lib/i18n";
 import type { CreditExpiry } from "@/lib/types";
 
 /**
@@ -18,9 +17,8 @@ import type { CreditExpiry } from "@/lib/types";
  * - 按作用域分家（`wb-cn` / `wb-global`），账号 id 不带区域命名空间，混存会串区。
  * - 超过 {@link MAX_AGE_MS} 的条目不再展示：过期读数比「—」更容易误导。
  * - 读写全部 best-effort：隐私模式 / 配额满 / 坏 JSON 一律当空缓存，绝不让页面报错。
- * - **写入时刻必须交出去**（{@link CachedCredit.at}）：展示层要如实标注「上次读数」，
- *   一个不能回答「这是什么时候的值」的占位比直接留空更误导 —— 到期文案
- *   （`nextExpiryLabel`）会把 7 天前的批次读成「明天到期」。
+ * - **写入时刻仍要记**（{@link CachedCredit.at}）：它只是 {@link MAX_AGE_MS} 的过期判据，
+ *   界面**不再**标注「上次读数 · N 分钟前」（切页 / 后台 / 一键刷新都会重取，标时间只剩噪声）。
  */
 const STORAGE_KEY = "accswitch:credit-cache:v1";
 const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
@@ -207,26 +205,4 @@ export function writeQoderCreditCacheEntries(
     bucket[row.uid] = { at: now, value: cacheableQoderCredit(row) };
   }
   writeStoreTo(QODER_STORAGE_KEY, store);
-}
-
-
-
-/**
- * 「3 分钟前 / 5 小时前 / 2 天前」—— 相对时间，**只有三个量级**。
- *
- * 复用 `shared.gateway.sourceBar.*` 的既有键：同一句中文在仓里只应有一份，
- * 三处（卡片 / 表格 / 抽屉）用的是同一个函数，口径不可能漂移。
- * 不足 1 分钟按「1 分钟前」写 —— 显示「0 分钟前」既怪又像是实时值。
- */
-export function formatCreditCacheAge(at: number, t: Translate, now = Date.now()): string {
-  const minutes = Math.max(1, Math.round((now - at) / 60_000));
-  if (minutes < 60) return t("shared.gateway.sourceBar.minutesAgo", { n: minutes });
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t("shared.gateway.sourceBar.hoursAgo", { n: hours });
-  return t("shared.gateway.sourceBar.daysAgo", { n: Math.round(hours / 24) });
-}
-
-/** 一处措辞，三处复用：`上次读数 · 12 分钟前`。 */
-export function creditCacheNote(at: number, t: Translate, now = Date.now()): string {
-  return t("wbAccounts.card.creditCacheAge", { age: formatCreditCacheAge(at, t, now) });
 }

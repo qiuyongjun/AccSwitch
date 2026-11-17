@@ -147,7 +147,7 @@ interface AccountsState {
   deleteAccount: (id: string, region?: Region) => Promise<void>;
   /** Fetch credits only for ids not already cached（失败项按窗口自动重试）。 */
   ensureCredits: (accountIds: string[], region?: Region) => Promise<CreditRefreshResult>;
-  /** Force-refresh credits（刷新中卡片显示「积分查询中…」，刷新必须可见）。 */
+  /** Force-refresh credits（卡片不再逐账号转圈；可见反馈在页头同步指示与操作回执）。 */
   refreshCredits: (accountIds: string[], opts?: { region?: Region }) => Promise<CreditRefreshResult>;
   importLocal: (region?: Region) => Promise<AccountMeta>;
   reconcileAccounts: (region?: Region) => Promise<void>;

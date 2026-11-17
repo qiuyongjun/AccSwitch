@@ -71,7 +71,7 @@ import { accountSearchText } from "@/lib/account-search";
 /** 批量动作的并发口径（与积分刷新同一档削峰）：串行会让 20 个账号的批处理变成 20 次 RTT。 */
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { useSwitchProgress } from "@/lib/switch-progress";
-import { readCreditCache, creditCacheNote } from "@/lib/credit-cache";
+import { readCreditCache } from "@/lib/credit-cache";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
 import {
@@ -333,10 +333,10 @@ function RegionPanel({ region }: { region: Region }) {
   const creditMap = useAccountsStore((s) => (region === "cn" ? s.creditMap : s.global.creditMap));
   const creditLoadingMap = useAccountsStore((s) => (region === "cn" ? s.creditLoadingMap : s.global.creditLoadingMap));
   /**
-   * 全区积分刷新在飞（`refreshCredits` 的批量档）。
+   * 积分强制刷新在飞（`refreshCredits`，含单账号与批量）。
    *
-   * 只用作页头的「正在同步…」判据：单账号刷新的可见反馈在卡片自己身上
-   * （`creditLoadingMap` → 指标行下方那行小字），不该再叠一层页头提示。
+   * 只用作页头的「正在同步…」判据：卡片**不再**渲染逐账号 loading
+   * （与 Trae / Qoder 同口径；单账号刷新的反馈在菜单转圈与「已更新」toast）。
    */
   const refreshingCredits = useAccountsStore((s) =>
     region === "cn" ? s.refreshingCredits : s.global.refreshingCredits,
@@ -585,8 +585,8 @@ function RegionPanel({ region }: { region: Region }) {
    * 上次成功读数（**带写入时刻**）—— 只做首屏占位。
    *
    * ⚠️ 边界：不参与排序 / `attentionOf` / 优先级判定（那些必须读实时 `creditMap`，
-   * 否则 7 天前的读数会重排列表并误报状态）。展示时**必须**由 `cachedCreditAt`
-   * 补「上次读数 · N 分钟前」，三处（卡片 / 表格 / 抽屉）共用同一判据。
+   * 否则 7 天前的读数会重排列表并误报状态）；也**不再**在界面上标注读数时刻
+   * （切页 / 后台 / 一键刷新都会重取，标注时间只剩噪声）。
    */
   const cachedCredits = useMemo(
     () => (demoMode ? {} : readCreditCache(scope, accountIds)),
@@ -602,11 +602,6 @@ function RegionPanel({ region }: { region: Region }) {
         ? creditMap
         : { ...cachedCreditValues, ...creditMap },
     [cachedCreditValues, creditMap],
-  );
-  /** 该账号当前展示的是缓存值 ⇒ 返回写入时刻；已有实时值 ⇒ `undefined`。 */
-  const cachedCreditAt = useCallback(
-    (id: string): number | undefined => (creditMap[id] ? undefined : cachedCredits[id]?.at),
-    [creditMap, cachedCredits],
   );
   const selectionKey = (id: string) => `${scope}:${id}`;
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
@@ -2685,8 +2680,6 @@ function RegionPanel({ region }: { region: Region }) {
       align: "right",
       render: (account) => {
         const creditMetric = creditMetricValues(displayCreditMap[account.id]);
-        /* 展示值来自落盘缓存时，必须自报时间（缓存最长 7 天，到期文案仍是当前态口径）。 */
-        const cachedAt = cachedCreditAt(account.id);
         const { current: currentCredit, total: totalCredit, expiry } = creditMetric;
         const creditTip = creditMetricTip(creditMetric, t);
         const priority = account.id === priorityAccountId;
@@ -2735,11 +2728,6 @@ function RegionPanel({ region }: { region: Region }) {
                 )}
               </span>
             )}
-            {cachedAt ? (
-              <span className="whitespace-nowrap text-[11px] text-muted-foreground">
-                {creditCacheNote(cachedAt, t)}
-              </span>
-            ) : null}
           </button>
         );
       },
@@ -2866,8 +2854,6 @@ function RegionPanel({ region }: { region: Region }) {
   const detailStats = useMemo<DetailStat[]>(() => {
     if (!detail) return [];
     const credit = displayCreditMap[detail.id];
-    /* 展示值来自落盘缓存 ⇒ 副行补「上次读数 · N 分钟前」，不把旧值说成当前态。 */
-    const cachedAt = cachedCreditAt(detail.id);
     const checkedIn = checkinMap[detail.id];
     const expired = detail.expiresAt != null && detail.expiresAt < Date.now();
     const credBad = expired || Boolean(detail.needsRelogin);
@@ -2885,7 +2871,6 @@ function RegionPanel({ region }: { region: Region }) {
             : "—",
         subText: [
           nextBatch ? nextExpiryLabel(expiry, t, now) : t("shared.stat.noExpiring"),
-          cachedAt ? creditCacheNote(cachedAt, t, now) : null,
         ]
           .filter(Boolean)
           .join(" · "),
@@ -2946,7 +2931,7 @@ function RegionPanel({ region }: { region: Region }) {
       },
     ];
     return stats;
-  }, [detail, displayCreditMap, cachedCreditAt, checkinMap, growthHints, growthRefreshBusyId, scope, t, now]);
+  }, [detail, displayCreditMap, checkinMap, growthHints, growthRefreshBusyId, scope, t, now]);
 
   /**
    * 「凭据」页签的凭据信息 —— 状态徽标 + 三行明细（凭据到期 / 刷新令牌到期 / 最近续期）。
@@ -3620,8 +3605,6 @@ function RegionPanel({ region }: { region: Region }) {
                               travelStatus={travelMap[a.id]}
                               growthHint={growthHints[a.id]}
                               credit={displayCreditMap[a.id]}
-                              creditLoading={creditLoadingMap[a.id]}
-                              creditCachedAt={cachedCreditAt(a.id)}
                               creditPriority={a.id === priorityAccountId}
                               workbuddyActive={isWorkbuddyCurrent(a, current)}
                               /* ★ 卡片页脚的 WB 程序位按钮 = **直接打开切换向导**。

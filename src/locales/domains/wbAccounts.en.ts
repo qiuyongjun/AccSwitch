@@ -177,12 +177,8 @@ export const en = {
   "wbAccounts.card.openCheckin": "View check-in details for {name}",
   "wbAccounts.card.openCredential": "View credential details for {name}",
   "wbAccounts.card.openCredits": "View credit details for {name}",
-  "wbAccounts.card.loadingCredits": "Loading credits…",
   "wbAccounts.card.waitingCredits": "Waiting for credit data…",
   "wbAccounts.card.creditFailed": "Failed to load credits",
-  /* Cached first-paint values must state their age — the cache lives up to 7 days,
-     while the metrics row renders old batches as "expires tomorrow". */
-  "wbAccounts.card.creditCacheAge": "Last read · {age}",
   "wbAccounts.card.addPlaintextAccount": "Add via OAuth QR scan",
   "wbAccounts.card.creditPackFallback": "credit pack",
   "wbAccounts.card.setCurrent": "Set as current",

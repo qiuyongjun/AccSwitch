@@ -707,7 +707,7 @@ pub async fn fetch_campaigns(
     uid: &str,
     access_token: &str,
 ) -> CampaignsSnapshot {
-    let identity = native::cached_identity(region, uid, false);
+    let identity = native::cached_identity_async(region, uid, false).await;
     let mut snapshot = fetch_campaigns_once(region, uid, access_token, identity.as_ref()).await;
     // ★ 401/403 ⇒ 先刷新令牌再重试一次：本机导入的账号可能带着已被上游吊销的令牌，
     // 而网页登录的账号总是新令牌 —— 不自动续期就会表现成「导入的号签到失败」。
@@ -734,7 +734,7 @@ pub async fn fetch_campaigns(
         && snapshot.identity == native::IDENTITY_NATIVE
         && !native::disabled()
     {
-        if let Some(fresh) = native::cached_identity(region, uid, true) {
+        if let Some(fresh) = native::cached_identity_async(region, uid, true).await {
             let retry = fetch_campaigns_once(region, uid, access_token, Some(&fresh)).await;
             if retry.ok && retry.show_campaign {
                 snapshot = retry;
@@ -841,7 +841,7 @@ pub async fn claim_campaign(
     campaign_id: &str,
 ) -> ClaimOutcome {
     let spec = realm_spec(region);
-    let identity = native::cached_identity(region, uid, false);
+    let identity = native::cached_identity_async(region, uid, false).await;
     let path = super::PATH_CAMPAIGN_CLAIM_TEMPLATE.replace("{id}", campaign_id);
     let client = match api::shared_client() {
         Ok(client) => client,

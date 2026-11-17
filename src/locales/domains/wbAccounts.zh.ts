@@ -226,12 +226,8 @@ export const zh = {
   "wbAccounts.card.openCheckin": "查看 {name} 的签到详情",
   "wbAccounts.card.openCredential": "查看 {name} 的凭据详情",
   "wbAccounts.card.openCredits": "查看 {name} 的积分详情",
-  "wbAccounts.card.loadingCredits": "积分查询中…",
   "wbAccounts.card.waitingCredits": "等待积分数据…",
   "wbAccounts.card.creditFailed": "积分查询失败",
-  // ★ 2026-11-10：首屏用落盘缓存占位时必须自报时间 —— 缓存最长 7 天，
-  // 而指标行会把旧批次说成「明天到期」。{age} 由 `formatCreditCacheAge` 生成。
-  "wbAccounts.card.creditCacheAge": "上次读数 · {age}",
   "wbAccounts.card.addPlaintextAccount": "用 OAuth 扫码添加",
   "wbAccounts.card.creditPackFallback": "积分包",
   "wbAccounts.card.setCurrent": "设为当前",

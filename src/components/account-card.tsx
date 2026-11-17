@@ -12,7 +12,6 @@ import type { AccountRefreshKind } from "@/lib/account-refresh";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
-import { creditCacheNote } from "@/lib/credit-cache";
 import { ENCRYPTED_CREDENTIAL_REASON } from "@/lib/api";
 import { compactTokens, exactTokens } from "@/components/usage/format";
 import { demoModeEnabled } from "@/lib/demo-mode";
@@ -967,15 +966,6 @@ interface Props {
   /** 本账号正在续期凭据（菜单里的「续期凭据」转圈并禁止重复点击）。 */
   refreshingToken?: boolean;
   credit?: CreditExpiry;
-  creditLoading?: boolean;
-  /**
-   * 该读数来自**上次成功读数的落盘缓存**（`lib/credit-cache.ts`）时，这里给写入时刻（ms）。
-   *
-   * 传了就必须在卡面上如实标注「上次读数 · N 分钟前」：缓存最长 7 天，
-   * 而指标行会把它渲染成「最近到期 / 明天」这类**当前态结论**。
-   * 不传 ⇒ 读数来自本轮请求，正常渲染。
-   */
-  creditCachedAt?: number;
   creditPriority?: boolean;
   workbuddyActive?: boolean;
   codebuddyCliConfigured?: boolean;
@@ -1072,7 +1062,7 @@ function ProductCurrentState({
   );
 }
 
-export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshingToken, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, onOpenTab, onCompleteTasks, onRefreshTasks, refreshingTasks, credit, creditLoading, creditCachedAt, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true, menu }: Props) {
+export function AccountCard({ account, onDelete, onCheckin, onRefresh, refreshingToken, onRefreshPart, refreshingKinds, doneKinds, refreshKinds, onExport, onSwitch, todayCheckedIn, travelStatus, growthHint, onOpenTab, onCompleteTasks, onRefreshTasks, refreshingTasks, credit, creditPriority, workbuddyActive, codebuddyCliConfigured, codebuddyCliActive, codebuddyCliBusy, onSwitchCodebuddyCli, codebuddyCliLoading, codebuddyCnIdeAvailable, codebuddyCnIdeActive, codebuddyCnIdeBusy, codebuddyCnIdeLoading, onSwitchCodebuddyCnIde, vscodePluginAvailable, vscodePluginActive, vscodePluginBusy, vscodePluginLoading, onSwitchVscodePlugin, jetbrainsPluginAvailable, jetbrainsPluginActive, jetbrainsPluginBusy, jetbrainsPluginLoading, onSwitchJetbrainsPlugin, onGuidePlugin, onAddPlaintextAccount, onGuideToSetting, selected = false, onToggleSelect, onOpenDetail, featuresDisabled = true, menu }: Props) {
   const t = useT();
   /**
    * 兜底归一（第三道闸）。
@@ -1763,19 +1753,12 @@ const workbuddyControl = workbuddyActive ? (
             用的是同一个组件，两处的日期格式与三分支缺值口径只可能有一份。 */}
         <CredentialExpiryMeta account={account} className="text-[11.5px]" />
         {/*
-         * ★ 2026-11-10：**有读数就不再让 loading 顶掉内容**。
-         *
-         * 旧顺序是 `creditLoading ? 转圈 : !credit ? 等待 : …`。页面挂载时
-         * `ensureCredits` 把每个账号的 `creditLoadingMap` 置 true，于是「上次成功读数」
-         * 的占位永远被一个转圈盖住 —— §12.1 的目标（首屏不转圈）等于没达成。
-         * 现在读数优先：真没有读数才转圈；刷新中只在下方补一行小字，不闪、不看高度跳。
+         * ★ 2026-11-17：逐卡「积分查询中…」已移除 —— 页头已有统一的「正在同步…」，
+         * 卡片再转一份是同一轮请求的第二遍表达（三端里只有 WB 有）。
+         * 现在：没有读数只给静态占位；有读数直接渲染，是否在刷新由页头说明。
          */}
         {!credit ? (
-          creditLoading ? (
-            <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t("wbAccounts.card.loadingCredits")}</div>
-          ) : (
-            <div className="py-3 text-sm text-muted-foreground">{t("wbAccounts.card.waitingCredits")}</div>
-          )
+          <div className="py-3 text-sm text-muted-foreground">{t("wbAccounts.card.waitingCredits")}</div>
         ) : !credit.ok ? (
           /*
            * ★ 凭据是加密信封（客户端 5.6 起）时**不能**走下面那条 `truncate` 单行：
@@ -1808,14 +1791,6 @@ const workbuddyControl = workbuddyActive ? (
               <span className="min-w-0 truncate">{credit.error || t("wbAccounts.card.creditFailed")}</span>
             </div>
           )
-        ) : creditLoading ? (
-          <div className="flex items-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" />
-            {t("wbAccounts.card.loadingCredits")}
-          </div>
-        ) : creditCachedAt ? (
-          /* 缓存最长 7 天，指标行却把旧批次说成「明天到期」⇒ 必须自带时间戳。 */
-          <div className="pt-1 text-[11px] text-muted-foreground">{creditCacheNote(creditCachedAt, t)}</div>
         ) : null}
       </section>
 
