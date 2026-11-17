@@ -280,7 +280,7 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
       const next = slice.accounts.map((prev) => {
         const fresh = byId.get(prev.id);
         if (!fresh) return prev;
-        // 60 秒轮询：字段没变就必须保持原引用并整体跳过 set，否则每轮都触发一次全列表重渲染。
+        // 周期轮询：字段没变就必须保持原引用并整体跳过 set，否则每轮都触发一次全列表重渲染。
         const unchanged =
           prev.expiresAt === fresh.expiresAt &&
           prev.refreshExpiresAt === fresh.refreshExpiresAt &&

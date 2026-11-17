@@ -2,8 +2,15 @@ import { useEffect, useRef } from "react";
 
 import { useDocumentVisible } from "@/lib/use-document-visible";
 
-/** 可见期轮询间隔：与 WorkBuddy 的账号状态轮询同一档（60 秒）。 */
-export const VISIBLE_REVALIDATE_INTERVAL_MS = 60 * 1000;
+/**
+ * 可见期轮询间隔：**3 分钟**。
+ *
+ * 刻意不与 WorkBuddy 的 60 秒状态轮询同档：那边轮的是**外部客户端运行态**（进程 /
+ * 当前登录账号），没有事件来源，慢一拍用户立刻能看见；这里重读的是**账号库元数据**，
+ * 只被后台排程改写（Trae JWT 续期默认 9:00 / 21:00、保活按天），变化低频。
+ * 窗口重新可见 / 聚焦本来就会立即补一次（见下方 10 秒闸门），不必靠高频定时器兜底。
+ */
+export const VISIBLE_REVALIDATE_INTERVAL_MS = 3 * 60 * 1000;
 
 /** 焦点 / 可见性触发的重取节流：alt-tab 抖动不该放大成请求风暴。 */
 const FOCUS_MIN_INTERVAL_MS = 10 * 1000;

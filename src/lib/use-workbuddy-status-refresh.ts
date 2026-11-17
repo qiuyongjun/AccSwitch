@@ -8,6 +8,14 @@ import { useAccountsStore } from "@/stores/accounts";
 export const WORKBUDDY_STATUS_REFRESH_INTERVAL_MS = 60 * 1000;
 
 /**
+ * 账号库凭据回填的节流：**3 分钟**。
+ *
+ * 与 60 秒的状态轮询解耦 —— 状态（进程 / 当前登录账号）变化必须及时看见，而凭据元数据
+ * 只被后台排程改写（保活按天、积分刷新按需），每分钟重读两次本地账号库没有收益。
+ */
+export const WORKBUDDY_CREDENTIAL_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+
+/**
  * 焦点 / 可见性事件触发的最小间隔。
  *
  * 窗口每次获得焦点都会走 `syncActiveState → refreshStatusOnEvent`；alt-tab 来回几次就会
@@ -29,6 +37,8 @@ export function useWorkbuddyStatusRefresh() {
   const activeRef = useRef(false);
   const timerRef = useRef<number | undefined>(undefined);
   const abortControllerRef = useRef<AbortController | undefined>(undefined);
+  /** 上次凭据回填时刻（单调时钟）；跨激活保留，避免重新聚焦就多打一轮本地读。 */
+  const credentialRefreshAtRef = useRef(Number.NEGATIVE_INFINITY);
 
   useEffect(() => {
     let disposed = false;
@@ -60,10 +70,15 @@ export function useWorkbuddyStatusRefresh() {
       void useAccountsStore.getState().refreshAllStatus(abortControllerRef.current?.signal);
       /* 后台保活 / 积分刷新会直接改写账号库，卡片上的过期与需重登标记只能靠重读发现。
          只回填凭据类字段（`refreshCredentialState`），整组 reconcile 会冲掉备注编辑；
-         两次 `get_accounts` 都是本地文件读，无上游请求。 */
-      const state = useAccountsStore.getState();
-      void state.refreshCredentialState("cn").catch(() => {});
-      void state.refreshCredentialState("global").catch(() => {});
+         两次 `get_accounts` 都是本地文件读，无上游请求。
+         与状态轮询解耦：凭据元数据低频变化，按 3 分钟节流，不跟着每分钟的空转重读。 */
+      const at = performance.now();
+      if (at - credentialRefreshAtRef.current >= WORKBUDDY_CREDENTIAL_REFRESH_INTERVAL_MS) {
+        credentialRefreshAtRef.current = at;
+        const state = useAccountsStore.getState();
+        void state.refreshCredentialState("cn").catch(() => {});
+        void state.refreshCredentialState("global").catch(() => {});
+      }
     }
 
     /** 焦点 / 可见性触发的刷新：10 秒闸门，挡住 alt-tab 抖动。 */
