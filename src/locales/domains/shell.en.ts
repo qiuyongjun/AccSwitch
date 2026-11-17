@@ -175,9 +175,9 @@ export const en = {
     "Invalid proxy address. Enter an HTTP/HTTPS URL, e.g. http://127.0.0.1:7897",
   "appSettings.update.check": "Check for updates",
   "appSettings.update.checkFailed": "Update check failed",
-  "appSettings.update.foundTitle": "New version available",
+  "appSettings.update.foundTitle": "New version v{latest} available",
   "appSettings.update.doneTitle": "Update check complete",
-  "appSettings.update.foundDetail": "Version v{latest} is available (current v{current})",
+  "appSettings.update.foundDetail": "Current version v{current}",
   "appSettings.update.upToDate": "You are on the latest version v{current}",
   "appSettings.update.installNow": "Update now",
   /* The settings entry opens the notes dialog first instead of downloading (see UPDATE-NOTES-ARCH.md). */

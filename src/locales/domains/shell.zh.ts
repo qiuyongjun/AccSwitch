@@ -160,9 +160,9 @@ export const zh = {
   "appSettings.update.proxy.invalid": "代理地址格式不正确，请填写 HTTP/HTTPS 地址，例如 http://127.0.0.1:7897",
   "appSettings.update.check": "检查更新",
   "appSettings.update.checkFailed": "检查失败",
-  "appSettings.update.foundTitle": "发现新版本",
+  "appSettings.update.foundTitle": "发现新版本 v{latest}",
   "appSettings.update.doneTitle": "更新检查完成",
-  "appSettings.update.foundDetail": "发现新版本 v{latest}（当前 v{current}）",
+  "appSettings.update.foundDetail": "当前版本 v{current}",
   "appSettings.update.upToDate": "已是最新版本 v{current}",
   "appSettings.update.installNow": "立即升级",
   /* 设置页的入口改成「先看说明」：点开的是说明弹窗，不是直接下载（见 UPDATE-NOTES-ARCH.md）。 */

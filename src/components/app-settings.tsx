@@ -5,7 +5,7 @@ import { ArrowUpCircle, ExternalLink, Loader2, RefreshCw, Save } from "lucide-re
 import { toast } from "sonner";
 
 import { DemoAction } from "@/components/demo-action";
-import { SettingsFieldRow, SettingsGroup } from "@/components/settings-primitives";
+import { SettingsFieldRow, SettingsGroup, SettingsRow } from "@/components/settings-primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { CardContent } from "@/components/ui/card";
@@ -189,10 +189,17 @@ function UpdateCard({ variant }: { variant: AppSettingsVariant }) {
           />
         </SettingsFieldRow>
 
-        <div className="border-b border-border px-4 py-3 text-sm">
-          {t("appSettings.update.current")}
-          <span className="font-mono">v{version || "?"}</span>
-        </div>
+        <SettingsRow>
+          <div className="min-w-0 text-[12.5px] font-[550] leading-4">
+            {t("appSettings.update.current")}
+            <span className="font-mono font-normal">v{version || "?"}</span>
+          </div>
+          {/* 手动检查是「当前版本」这一行的动作：按钮贴着它要更新的对象，不再单独占一条只有按钮的行。 */}
+          <DemoAction><Button size="sm" variant="outline" onClick={check} disabled={checking}>
+            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            {t("appSettings.update.check")}
+          </Button></DemoAction>
+        </SettingsRow>
 
         <div className={cn("flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3 text-sm", tint)}>
           <div className="min-w-0 flex-1">
@@ -214,68 +221,70 @@ function UpdateCard({ variant }: { variant: AppSettingsVariant }) {
           description={t("appSettings.update.proxy.description")}
           htmlFor="update-proxy"
           className={tint}
-          operational
-          /* 抽屉形态（460px）必须纵向堆叠：`sm:` 是视口断点，在抽屉里会误判成够宽。 */
-          stacked={variant === "plain"}
+          /* 输入框 + 保存按钮合成一条控件行：标签走上、控件走下的堆叠版式，
+             既避免抽屉与弹框两种宽度下互相挤压，也不会再多出一条孤零零的按钮行。 */
+          stacked
         >
-          <Input
-            id="update-proxy"
-            className={cn("w-full", variant === "card" && "sm:w-80")}
-            value={proxyUrl}
-            onChange={(event) => setProxyUrl(event.target.value)}
-            placeholder={t("appSettings.update.proxy.placeholder")}
-            spellCheck={false}
-            autoComplete="off"
-          />
+          <div className="flex w-full items-center gap-2">
+            <Input
+              id="update-proxy"
+              className="min-w-0 flex-1"
+              value={proxyUrl}
+              onChange={(event) => setProxyUrl(event.target.value)}
+              placeholder={t("appSettings.update.proxy.placeholder")}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <DemoAction className="shrink-0"><Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
+              {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
+              {t("appSettings.update.proxy.save")}
+            </Button></DemoAction>
+          </div>
         </SettingsFieldRow>
 
-        <div className={cn("flex flex-wrap gap-2 border-b border-border px-4 py-3", tint)}>
-          <DemoAction><Button size="sm" variant="outline" onClick={() => void saveProxy()} disabled={proxySaving}>
-            {proxySaving ? <Loader2 className="animate-spin" /> : <Save />}
-            {t("appSettings.update.proxy.save")}
-          </Button></DemoAction>
-        </div>
-
-        <div className="flex flex-wrap gap-2 border-b border-border px-4 py-3">
-          <DemoAction><Button size="sm" variant="outline" onClick={check} disabled={checking}>
-            {checking ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            {t("appSettings.update.check")}
-          </Button></DemoAction>
-        </div>
-
         {info?.ok && (
-          <Alert variant="default" className={cn("!w-auto mx-4 my-4 sm:mx-5", info.hasUpdate && "border-primary/35 bg-primary/[0.06]")}>
+          /* 标题、版本行、动作各自独立成行（`AlertTitle` / `AlertDescription` 必须是 `Alert`
+             的直接子级）：此前 `AlertTitle` 嵌在 `AlertDescription` 的 grid 里，会被
+             二次 `col-start-2` 顶到右侧空列，正文与按钮也随之错位。 */
+          <Alert
+            variant="default"
+            className={cn("!w-auto m-4", info.hasUpdate && "border-primary/35 bg-primary/[0.06]")}
+          >
             {info.hasUpdate && <ArrowUpCircle className="text-primary" />}
-            <AlertDescription className="space-y-2">
-              <AlertTitle className={cn(info.hasUpdate && "text-primary")}>
-                {info.hasUpdate ? t("appSettings.update.foundTitle") : t("appSettings.update.doneTitle")}
-              </AlertTitle>
-              <div className="text-sm">
+            <AlertTitle className={cn(info.hasUpdate && "text-primary")}>
+              {info.hasUpdate
+                ? t("appSettings.update.foundTitle", { latest: info.latest ?? "?" })
+                : t("appSettings.update.doneTitle")}
+            </AlertTitle>
+            <AlertDescription>
+              <p className="text-xs">
                 {info.hasUpdate
-                  ? t("appSettings.update.foundDetail", {
-                      latest: info.latest ?? "?",
-                      current: info.current ?? "?",
-                    })
+                  ? t("appSettings.update.foundDetail", { current: info.current ?? "?" })
                   : t("appSettings.update.upToDate", { current: info.current ?? "?" })}
-                {info.releaseName && <span className="text-muted-foreground"> · {info.releaseName}</span>}
-              </div>
+                {/* releaseName 在无自定义标题时等于 `v{latest}`，此时不再重复一遍版本号。 */}
+                {info.releaseName && info.releaseName.replace(/^v/, "") !== info.latest && (
+                  <span> · {info.releaseName}</span>
+                )}
+              </p>
               {info.hasUpdate && (
                 /* 入口文案从「立即升级」改成「查看更新内容」：点开的先是**说明**弹窗，
                    下载要用户在里面再点一次（见 UPDATE-NOTES-ARCH.md）。 */
-                <DemoAction><Button size="sm" onClick={() => setInstallOpen(true)}>
-                  <ArrowUpCircle />
-                  {t("appSettings.update.viewNotes")}
-                </Button></DemoAction>
-              )}
-              {info.releaseUrl && (
-                <DemoAction><Button
-                  variant="link"
-                  size="sm"
-                  className="h-auto p-0"
-                  onClick={() => void openReleaseUrl(info.releaseUrl!)}
-                >
-                  {t("appSettings.update.openRelease")}
-                </Button></DemoAction>
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <DemoAction><Button size="sm" onClick={() => setInstallOpen(true)}>
+                    <ArrowUpCircle />
+                    {t("appSettings.update.viewNotes")}
+                  </Button></DemoAction>
+                  {info.releaseUrl && (
+                    <DemoAction><Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void openReleaseUrl(info.releaseUrl!)}
+                    >
+                      <ExternalLink />
+                      {t("appSettings.update.openRelease")}
+                    </Button></DemoAction>
+                  )}
+                </div>
               )}
             </AlertDescription>
           </Alert>
@@ -283,7 +292,7 @@ function UpdateCard({ variant }: { variant: AppSettingsVariant }) {
         {msg && (
           <Alert
             variant={msg.type === "err" ? "destructive" : "default"}
-            className="!w-auto mx-4 my-4 sm:mx-5"
+            className="!w-auto m-4"
           >
             <AlertDescription>{msg.text}</AlertDescription>
           </Alert>
