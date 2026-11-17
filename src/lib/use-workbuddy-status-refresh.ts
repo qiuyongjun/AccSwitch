@@ -58,6 +58,12 @@ export function useWorkbuddyStatusRefresh() {
       // 必须同时刷新国内版与国际版：`status.current` 是卡片「当前账号」标记的唯一来源，
       // 只轮询国内版会让国际版的状态永远停在首屏快照上——切换国际账号后标记不跟着走。
       void useAccountsStore.getState().refreshAllStatus(abortControllerRef.current?.signal);
+      /* 后台保活 / 积分刷新会直接改写账号库，卡片上的过期与需重登标记只能靠重读发现。
+         只回填凭据类字段（`refreshCredentialState`），整组 reconcile 会冲掉备注编辑；
+         两次 `get_accounts` 都是本地文件读，无上游请求。 */
+      const state = useAccountsStore.getState();
+      void state.refreshCredentialState("cn").catch(() => {});
+      void state.refreshCredentialState("global").catch(() => {});
     }
 
     /** 焦点 / 可见性触发的刷新：10 秒闸门，挡住 alt-tab 抖动。 */

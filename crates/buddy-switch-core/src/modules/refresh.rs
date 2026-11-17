@@ -9,11 +9,13 @@ use serde_json::{json, Value};
 use std::sync::atomic::AtomicBool;
 
 use crate::modules::account::{
-    build_auth_headers, envelope_refresh_error, load_accounts_for, upsert_account_for,
+    build_auth_headers, envelope_refresh_error, find_account_for, load_accounts_for,
+    upsert_account_for,
 };
 use crate::modules::config::{
     http_request, load_checkin_config, norm_ts, now_ms, RunFlagGuard, WORKBUDDY_API_PREFIX,
 };
+use crate::modules::refresh_gate::with_refresh_lock;
 use crate::modules::region::{region_spec, Region};
 
 // 保活运行标志按 region 独立：CN / Global 都会真正执行保活，若共用一个全局标志，
@@ -55,6 +57,76 @@ fn sane_relative_seconds(value: Option<&Value>) -> Option<i64> {
     (0 < seconds && seconds < MAX_RELATIVE_EXPIRY_SECONDS).then_some(seconds)
 }
 
+/// 刷新失败的归类。
+///
+/// 只有「凭据本身不可用」才写 `needs_relogin`；网络 / 限流 / 上游 5xx 属瞬时故障，
+/// 写死标记会让卡片一直挂着「需重新登录」，而下一轮重试往往就能成功。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshFailureClass {
+    /// 凭据失效：必须重新登录（refresh token 被吊销 / 过期 / 缺失）。
+    Auth,
+    /// 瞬时故障：网络错误、限流、上游网关错误 —— 只记录，不改凭据状态。
+    Transient,
+}
+
+fn classify_refresh_failure(code: i64) -> RefreshFailureClass {
+    // `code` 取自刷新响应：网络层失败恒为 `-1`（`config::http_request`），
+    // 非 2xx 时是 HTTP 状态码或上游业务码。
+    let transient =
+        code == -1 || code == 408 || code == 425 || code == 429 || (500..=599).contains(&code);
+    if transient {
+        RefreshFailureClass::Transient
+    } else {
+        RefreshFailureClass::Auth
+    }
+}
+
+/// 账号稳定标识（`id` 优先，旧数据回落 `uid`）：闸门键与闸门内重读都用它。
+fn account_identity(account: &Value) -> Option<String> {
+    ["id", "uid"]
+        .iter()
+        .filter_map(|key| account.get(*key).and_then(Value::as_str))
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn refresh_lock_key(region: Region, identity: &str) -> String {
+    format!("wb:{}:{identity}", region.as_str())
+}
+
+fn mark_transient_failure(account: &mut Value, reason: String) {
+    account["last_refresh_error"] = json!(reason);
+    account["last_refresh_error_at"] = json!(now_ms());
+}
+
+fn mark_auth_failure(account: &mut Value, reason: String) {
+    account["needs_relogin"] = json!(true);
+    account["needs_relogin_reason"] = json!(reason);
+}
+
+/// 成功刷新后清掉所有失败标记，卡片才会从红标回到正常。
+fn clear_refresh_failure(account: &mut Value) {
+    let map = account.as_object_mut().unwrap();
+    map.remove("needs_relogin");
+    map.remove("needs_relogin_reason");
+    map.remove("last_refresh_error");
+    map.remove("last_refresh_error_at");
+}
+
+/// 惰性刷新的判据：到期时间缺失 / 已过期 / 剩余不足 `lazy_hours`，且有 refresh token。
+fn is_refresh_due(account: &Value, lazy_hours: i64) -> bool {
+    let stale = match account.get("expiresAt").and_then(Value::as_i64) {
+        Some(expires_at) => now_ms() >= expires_at || expires_at - now_ms() < lazy_hours * 3_600_000,
+        None => true,
+    };
+    let has_refresh_token = !account
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty();
+    stale && has_refresh_token
+}
+
 /// 刷新单账号 token（CN）。
 pub async fn refresh_account_token(account: Value) -> Value {
     refresh_account_token_for(Region::Cn, account).await
@@ -80,8 +152,24 @@ fn try_unlock(region: Region, account: Value) -> Value {
 
 /// 刷新单账号 token（POST `{billing_base}/v2/plugin/auth/token/refresh`），成功则落盘并返回新账号。
 ///
-/// 刷新失败（refresh token 失效等）时给账号标记 needs_relogin，避免无限重试。
-pub async fn refresh_account_token_for(region: Region, mut account: Value) -> Value {
+/// 同一 `(region, 账号)` 的并发调用在这里**串行化**：refresh token 是轮换凭证，
+/// 并发刷新会让后到的请求拿到 invalid_grant，账号被误标成「需重新登录」。
+pub async fn refresh_account_token_for(region: Region, account: Value) -> Value {
+    let Some(identity) = account_identity(&account) else {
+        return refresh_account_token_inner(region, account).await;
+    };
+    let key = refresh_lock_key(region, &identity);
+    with_refresh_lock(&key, move || async move {
+        // 闸门内以账号库为准：并发方可能刚轮换过 refresh token，拿调用方手里的
+        // 旧快照再刷一次会换回 invalid_grant，把正常的账号误标成「需重登」。
+        let current = find_account_for(region, &identity).unwrap_or(account);
+        refresh_account_token_inner(region, current).await
+    })
+    .await
+}
+
+/// 刷新实现本体。**不得**再获取闸门（公共入口已持有），否则自锁。
+async fn refresh_account_token_inner(region: Region, mut account: Value) -> Value {
     // ★ 先解锁再判空：信封是**对象**，`as_str()` 取不到值。不先解锁就会把
     //   「已加密」当成「缺少 refresh token」——用户照着「去补导入」查也查不出东西
     //   （东西一直都在，只是解不开）。
@@ -100,13 +188,13 @@ pub async fn refresh_account_token_for(region: Region, mut account: Value) -> Va
         .map(|s| s.to_string())
         .unwrap_or_default();
     if rt.is_empty() {
-        account["needs_relogin"] = json!(true);
         // ★ 先问「是不是加密信封」，再问「是不是真的没有」：信封是**对象**，
         //   `as_str()` 取不到值，不先判就会把「已加密」报成「**缺少** refresh token」
         //   （2026-09-24 用户截图）。两类原因的可读文案与修法都不同，
         //   见 `account::envelope_refresh_error`。
-        account["needs_relogin_reason"] = json!(envelope_refresh_error(&account)
-            .unwrap_or_else(|| "缺少 refresh token，无法刷新，需重新登录".to_string()));
+        let reason = envelope_refresh_error(&account)
+            .unwrap_or_else(|| "缺少 refresh token，无法刷新，需重新登录".to_string());
+        mark_auth_failure(&mut account, reason);
         let _ = upsert_account_for(region, &account);
         return account;
     }
@@ -127,14 +215,18 @@ pub async fn refresh_account_token_for(region: Region, mut account: Value) -> Va
     let resp = http_request(&url, "POST", Some(json!({})), Some(&headers)).await;
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code != 0 && code != 200 {
-        account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!(format!(
+        let reason = format!(
             "刷新失败(code={code}): {}",
             resp.get("message")
                 .or_else(|| resp.get("msg"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("未知错误")
-        ));
+        );
+        match classify_refresh_failure(code) {
+            // 网络 / 限流 / 上游 5xx：保留旧凭据状态，下一轮自动重试。
+            RefreshFailureClass::Transient => mark_transient_failure(&mut account, reason),
+            RefreshFailureClass::Auth => mark_auth_failure(&mut account, reason),
+        }
         let _ = upsert_account_for(region, &account);
         return account;
     }
@@ -146,8 +238,7 @@ pub async fn refresh_account_token_for(region: Region, mut account: Value) -> Va
         .or_else(|| data.get("access_token").and_then(|v| v.as_str()))
         .map(|s| s.to_string());
     let Some(new_at) = new_at else {
-        account["needs_relogin"] = json!(true);
-        account["needs_relogin_reason"] = json!("刷新响应缺少 accessToken");
+        mark_auth_failure(&mut account, "刷新响应缺少 accessToken".to_string());
         let _ = upsert_account_for(region, &account);
         return account;
     };
@@ -190,9 +281,7 @@ pub async fn refresh_account_token_for(region: Region, mut account: Value) -> Va
         account["refreshExpiresAt"] = json!(v);
     }
     account["refreshedAt"] = json!(now_ms());
-    let map = account.as_object_mut().unwrap();
-    map.remove("needs_relogin");
-    map.remove("needs_relogin_reason");
+    clear_refresh_failure(&mut account);
     let _ = upsert_account_for(region, &account);
     // Windows 不执行 apiKeyHelper；当前 CLI 账号刷新后同步 settings env。
     // 同步失败不阻断 WorkBuddy 保活；状态接口会根据 settings 与账号库是否
@@ -212,25 +301,29 @@ pub async fn ensure_fresh_token(account: Value, cfg: &Value) -> Value {
 }
 
 /// 按 region 惰性刷新：expiresAt 缺失或剩余 < lazy_refresh_hours 则刷新。
-pub async fn ensure_fresh_token_for(region: Region, mut account: Value, cfg: &Value) -> Value {
+///
+/// 进入闸门后**重读账号库再判一次**：并发调用方可能刚刷完，用新令牌即可，
+/// 不能拿手里这份旧 refresh token 再打一次上游（会拿到 invalid_grant）。
+pub async fn ensure_fresh_token_for(region: Region, account: Value, cfg: &Value) -> Value {
     let lazy_h = cfg
         .get("lazy_refresh_hours")
         .and_then(|v| v.as_i64())
         .unwrap_or(24);
-    let exp = account.get("expiresAt").and_then(|v| v.as_i64());
-    let stale = match exp {
-        Some(e) => now_ms() >= e || e - now_ms() < lazy_h * 3600 * 1000,
-        None => true,
-    };
-    let has_rt = !account
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .is_empty();
-    if stale && has_rt {
-        account = refresh_account_token_for(region, account).await;
+    if !is_refresh_due(&account, lazy_h) {
+        return account;
     }
-    account
+    let Some(identity) = account_identity(&account) else {
+        return refresh_account_token_inner(region, account).await;
+    };
+    let key = refresh_lock_key(region, &identity);
+    with_refresh_lock(&key, move || async move {
+        let current = find_account_for(region, &identity).unwrap_or(account);
+        if !is_refresh_due(&current, lazy_h) {
+            return current;
+        }
+        refresh_account_token_inner(region, current).await
+    })
+    .await
 }
 
 /// 保活检查（CN）：每天由后台循环调用一次。
@@ -281,8 +374,7 @@ pub async fn run_keepalive_cycle_for(region: Region) -> Value {
             let reason = envelope
                 .clone()
                 .unwrap_or_else(|| "缺少 refresh token，无法保活，需重新登录".to_string());
-            acc["needs_relogin"] = json!(true);
-            acc["needs_relogin_reason"] = json!(reason.clone());
+            mark_auth_failure(&mut acc, reason.clone());
             let _ = upsert_account_for(region, &acc);
             results.push(json!({
                 "email": crate::modules::account::account_display_name(&acc),
@@ -294,15 +386,29 @@ pub async fn run_keepalive_cycle_for(region: Region) -> Value {
             continue;
         }
         let fresh = refresh_account_token_for(region, acc).await;
-        let failed = fresh.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true);
+        let needs_relogin = fresh.get("needs_relogin").and_then(|v| v.as_bool()) == Some(true);
+        // 瞬时失败不改凭据状态，但排程日志仍要如实记下本轮没刷新成功。
+        let transient_error = fresh
+            .get("last_refresh_error")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let (status, error) = if needs_relogin {
+            (
+                "failed",
+                fresh
+                    .get("needs_relogin_reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            )
+        } else if transient_error.is_some() {
+            ("transient", transient_error)
+        } else {
+            ("ok", None)
+        };
         results.push(json!({
             "email": crate::modules::account::account_display_name(&fresh),
-            "status": if failed { "failed" } else { "ok" },
-            "error": if failed {
-                fresh.get("needs_relogin_reason").and_then(|v| v.as_str()).map(|s| s.to_string())
-            } else {
-                None
-            },
+            "status": status,
+            "error": error,
         }));
     }
     json!({"checked": total, "refreshed": results})
@@ -543,5 +649,63 @@ mod tests {
 
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 失败分类口径：网络 / 限流 / 上游 5xx 属瞬时故障，不得把账号钉成「需重新登录」；
+    /// 认证类业务码仍要标红。
+    #[test]
+    fn refresh_failure_classification() {
+        for code in [-1, 408, 425, 429, 500, 502, 599] {
+            assert_eq!(
+                classify_refresh_failure(code),
+                RefreshFailureClass::Transient,
+                "code={code} 应为瞬时"
+            );
+        }
+        for code in [0, 200, 400, 401, 403, 404, 12153] {
+            assert_eq!(
+                classify_refresh_failure(code),
+                RefreshFailureClass::Auth,
+                "code={code} 应为凭据失效"
+            );
+        }
+    }
+
+    /// 瞬时失败只记录错误、不改凭据状态；成功刷新要清掉两类标记。
+    #[test]
+    fn transient_failure_keeps_credential_state() {
+        let mut account = json!({"id": "a1", "needs_relogin": true});
+        mark_transient_failure(&mut account, "刷新失败(code=-1): connection reset".to_string());
+        assert_eq!(
+            account["needs_relogin"],
+            json!(true),
+            "瞬时失败不得清掉既有的需重登标记"
+        );
+        assert!(account["last_refresh_error_at"].is_number());
+
+        mark_auth_failure(&mut account, "刷新失败(code=12153)".to_string());
+        clear_refresh_failure(&mut account);
+        assert!(account.get("needs_relogin").is_none());
+        assert!(account.get("needs_relogin_reason").is_none());
+        assert!(account.get("last_refresh_error").is_none());
+        assert!(account.get("last_refresh_error_at").is_none());
+    }
+
+    /// 惰性刷新判据：必须同时满足「已到期 / 临近到期」与「有 refresh token」。
+    #[test]
+    fn refresh_due_requires_stale_token_and_refresh_token() {
+        let now = now_ms();
+        assert!(is_refresh_due(
+            &json!({"refresh_token": "rt", "expiresAt": now - 1_000}),
+            24
+        ));
+        assert!(!is_refresh_due(
+            &json!({"refresh_token": "rt", "expiresAt": now + 48 * 3_600_000}),
+            24
+        ));
+        // 没有 refresh token ⇒ 刷不动，保持原样（与旧实现一致）。
+        assert!(!is_refresh_due(&json!({"expiresAt": now - 1_000}), 24));
+        // 到期时间缺失 ⇒ 视作待刷新。
+        assert!(is_refresh_due(&json!({"refresh_token": "rt"}), 24));
     }
 }

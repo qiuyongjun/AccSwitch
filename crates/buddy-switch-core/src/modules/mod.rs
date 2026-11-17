@@ -71,6 +71,7 @@ pub mod proxy;
 // Qoder（第三个产品线）：双区账号管理。与 WorkBuddy / Trae 平行，**不复用**彼此的区域表。
 pub mod qoder;
 pub mod refresh;
+pub mod refresh_gate;
 pub mod region;
 // 统一网关的**模型命名空间**（`wb-cn:` / `trae-global:` 前缀）——
 // 派生层由 `Scope::all()` 生成 ⇒ 新增平台时命名空间自动出现；详见模块头。

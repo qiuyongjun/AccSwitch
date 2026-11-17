@@ -151,6 +151,13 @@ interface AccountsState {
   refreshCredits: (accountIds: string[], opts?: { region?: Region }) => Promise<CreditRefreshResult>;
   importLocal: (region?: Region) => Promise<AccountMeta>;
   reconcileAccounts: (region?: Region) => Promise<void>;
+  /**
+   * 只把**凭据类字段**从账号库同步回内存（到期时间 / 需重登标记）。
+   *
+   * 后台保活、积分刷新、签到都会直接改写账号库；整组 `reconcileAccounts` 虽然也能同步，
+   * 但会覆盖并发中的备注 / 分组编辑，还可能把刚删除的账号加回来。
+   */
+  refreshCredentialState: (region?: Region) => Promise<void>;
 }
 
 /**
@@ -262,6 +269,27 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
   async reconcileAccounts(region = "cn") {
     const { accounts } = await api.getAccounts(region);
     set((s) => regionPatch(s, region, { accounts }));
+  },
+
+  async refreshCredentialState(region = "cn") {
+    const { accounts } = await api.getAccounts(region);
+    const byId = new Map(accounts.map((account) => [account.id, account]));
+    set((s) => {
+      const slice = selectRegionSlice(s, region);
+      const next = slice.accounts.map((prev) => {
+        const fresh = byId.get(prev.id);
+        if (!fresh) return prev;
+        return {
+          ...prev,
+          expiresAt: fresh.expiresAt,
+          refreshExpiresAt: fresh.refreshExpiresAt,
+          refreshedAt: fresh.refreshedAt,
+          needsRelogin: fresh.needsRelogin,
+          needsReloginReason: fresh.needsReloginReason,
+        };
+      });
+      return regionPatch(s, region, { accounts: next });
+    });
   },
 }));
 
