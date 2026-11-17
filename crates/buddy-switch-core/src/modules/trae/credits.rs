@@ -527,7 +527,8 @@ pub struct CheckinLedger {
     /// 台账归属日（本地时区 `YYYY-MM-DD`）。
     #[serde(default)]
     pub date: String,
-    /// 该日已签到的 `userId`（`claim_ok` 与 `skip_already` 都计入）。
+    /// 该日已签到的 `userId`（本工具 `claim_ok` / `skip_already`，以及上游状态查询
+    /// 明确确认「今日已签」的账号都计入）。
     #[serde(default)]
     pub checked_in: Vec<String>,
 }
@@ -633,16 +634,46 @@ pub fn mark_checked_in(user_id: &str) -> Result<(), String> {
     mark_checked_in_for(TraeVariant::default(), user_id)
 }
 
+/// 台账读改写的进程内互斥。
+///
+/// 页头一键刷新、批量刷新、单账号刷新可能同时问上游，确认「今日已签」后各自落账；
+/// [`mark_checked_in_for`] 是「读整份 → 改 → 写回」，并发调用会互相覆盖 ——
+/// 症状正是「已签到又变未签到」。桌面端单实例，进程级互斥足够，临界区只有一次本地读写。
+static CHECKIN_LEDGER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 记一笔「今日已签到」（按变体分家）。
 ///
 /// 幂等（同账号重复标记不产生重复项）。**每次调用都重读整份台账**，而不是由调用方
 /// 持一份集合在收尾时统一落盘：这样「一轮签了 3 个账号」与「分 3 次调用」落盘结果
 /// 一致，中途失败时已成功的那几笔不会一起丢。
 pub fn mark_checked_in_for(variant: TraeVariant, user_id: &str) -> Result<(), String> {
+    mark_checked_in_many_for(variant, &[user_id.to_string()])
+}
+
+/// 批量记「今日已签到」：一次读、一次写，幂等。
+///
+/// 上游状态查询一次能确认一批账号（最多 [`super::checkin::STATUS_MAP_MAX_ACCOUNTS`] 个），
+/// 逐账号落账会产生 N 次全文件读写，中间还可能被并发刷新插入。这里合并成一次读改写，
+/// 并在无新增时不写盘（空跑不产生 mtime 变化）。
+pub fn mark_checked_in_many_for(variant: TraeVariant, user_ids: &[String]) -> Result<(), String> {
+    if user_ids.is_empty() {
+        return Ok(());
+    }
+    let _guard = CHECKIN_LEDGER_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let mut ledger = load_ledger_for(variant);
     ledger.date = store::today();
-    if !ledger.checked_in.iter().any(|uid| uid == user_id) {
-        ledger.checked_in.push(user_id.to_string());
+    let mut changed = false;
+    for user_id in user_ids {
+        if user_id.is_empty() || ledger.checked_in.iter().any(|uid| uid == user_id) {
+            continue;
+        }
+        ledger.checked_in.push(user_id.clone());
+        changed = true;
+    }
+    if !changed {
+        return Ok(());
     }
     store::write_json(&paths::checkin_ledger_file_for(variant), &ledger)
 }
@@ -1975,6 +2006,53 @@ mod tests {
         let rebuilt = load_ledger_for(variant);
         assert_eq!(rebuilt.date, store::today());
         assert_eq!(rebuilt.checked_in, vec!["u3".to_string()]);
+    }
+
+    /// 批量落账：多笔合并成一次读写、跨批累积且幂等；空批次不写盘。
+    #[test]
+    fn batch_mark_checked_in_merges_and_stays_idempotent() {
+        let _env = crate::modules::trae::test_support::TempEnv::with_device_fixture();
+        let variant = TraeVariant::default();
+
+        mark_checked_in_many_for(variant, &["u1".into(), "u2".into()]).unwrap();
+        mark_checked_in_many_for(variant, &["u2".into(), "u3".into(), "".into()]).unwrap();
+        assert_eq!(
+            load_ledger_for(variant).checked_in,
+            vec!["u1".to_string(), "u2".to_string(), "u3".to_string()],
+            "批量落账必须累积、去重，并忽略空 uid"
+        );
+
+        // 空批次 / 全部已存在 ⇒ 不产生新的写盘（mtime 不变）。
+        let path = paths::checkin_ledger_file_for(variant);
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        mark_checked_in_many_for(variant, &[]).unwrap();
+        mark_checked_in_many_for(variant, &["u1".into(), "u3".into()]).unwrap();
+        let after = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(before, after, "无新增时不得写盘");
+    }
+
+    /// 并发落账不得互相覆盖：台账是「读整份 → 改 → 写回」，必须靠互斥串行。
+    /// 页头一键刷新与单账号刷新确实会同时确认不同账号。
+    #[test]
+    fn concurrent_marks_do_not_lose_entries() {
+        let _env = crate::modules::trae::test_support::TempEnv::with_device_fixture();
+        let variant = TraeVariant::default();
+
+        let handles: Vec<_> = (0..8)
+            .map(|index| {
+                std::thread::spawn(move || {
+                    mark_checked_in_many_for(variant, &[format!("u{index}")]).unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("落账线程不应 panic");
+        }
+
+        let mut checked = load_ledger_for(variant).checked_in;
+        checked.sort();
+        let expected: Vec<String> = (0..8).map(|index| format!("u{index}")).collect();
+        assert_eq!(checked, expected, "并发落账不得丢账号");
     }
 
     /// `checked_in_today_for` 必须把**当日积分明细**并进来 —— 升级当天台账还是空的，

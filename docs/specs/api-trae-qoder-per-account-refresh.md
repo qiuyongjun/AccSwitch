@@ -23,7 +23,7 @@ WorkBuddy 前端策略补充，已落地；§12.9 为 2026-11-11 的冷启动 / 
 卡片「更多」的刷新组为 `积分` / `签到状态` / `凭据状态`（+ WB·CN 的 `任务`）；
 `今日 Token` 自 2026-10-26 起不再是菜单项；★ 2026-10-29 起抽屉概览的同名行也已移除 ⇒
 账号页不再展示 / 刷新它，今天用量只看用量统计页（接口本身保留）。
-WorkBuddy 全部可刷；**Trae / Qoder 曾缺「这个账号、今天」这一粒度的只读数据**，因此补了下面两条命令。
+WorkBuddy 全部可刷；**Trae / Qoder 曾缺「这个账号、今天」这一粒度的查询数据**，因此补了下面两条命令。
 
 现有的三个批量接口都**不能**直接当单账号今日口径用：
 
@@ -33,8 +33,8 @@ WorkBuddy 全部可刷；**Trae / Qoder 曾缺「这个账号、今天」这一�
 | `get_trae_checkin_status`（`GET /api/trae/checkin/status`） | 区域批量，**最近一次签到运行**的 `results` | `summaryIsToday` 为假时是旧结果；且没有逐账号的「今天签没签」布尔 |
 | `qoder_checkin_status`（`GET /api/qoder/checkin/status`） | 区域批量 | 同上，且 Qoder 的签到是**写操作**（`qoder_checkin_claim`），读侧只有列表快照 |
 
-> 结论：需要两条**按账号、今日口径、只读**的命令。字段名**照抄 WorkBuddy 的同类命令**
-> （`get_account_token_today` / `get_checkin_status_map`），前端三平台就能共用同一套渲染。
+> 结论：需要两条**按账号、今日口径**的查询命令（对上游只读、不 claim）。字段名**照抄 WorkBuddy
+> 的同类命令**（`get_account_token_today` / `get_checkin_status_map`），前端三平台就能共用同一套渲染。
 
 ---
 
@@ -79,7 +79,10 @@ interface AccountTokenTodayResponse {
 1. **未知不进 map**（不要用 `false` 表示「不知道」）—— 前端对缺失项显示「—」。
 2. **读失败 ≠ 未签到**：读失败回 `{ ok: false, todayCheckedIn: false, error: "…" }`，
    前端据 `ok` 区分「没签到」与「读不到」；`ok: true` 时 `todayCheckedIn` 才是事实。
-3. 只读：绝不能在这里顺带触发签到（Qoder 的签到是一次写操作，走 `qoder_checkin_claim`）。
+3. **不得触发上游写操作**：绝不能在这里顺带签到（Qoder 的签到是一次写操作，走 `qoder_checkin_claim`）。
+   ★ 2026-11-17：Trae 侧在「上游**明确**回答今日已签」时会把该事实**幂等写入本地签到台账**
+   （供重启后的账号卡初值与自动签到的 `skip_checked_in`；不是 claim，不产生积分）。
+   读失败、明确未签、台账兜底都**不写**；Qoder 侧保持纯只读。
 4. 若上游能给签到积分（`dailyCredit` / `streakDays` / `checkinDates`），**原样透传** ——
    抽屉的「签到」页已经在用这些字段（`CheckinStatusEntry` 的注释写了来源）。
 
@@ -97,8 +100,9 @@ interface AccountTokenTodayResponse {
 4. **性能**：批量签到状态一次调用返回全部账号（前端**禁止**逐账号循环调，见 `AccountsPage.tsx:143` 的注释）；
    单账号刷新时前端传长度为 1 的列表即可，不新增「单账号」变体。
    后端并发上限 4（串行问 50 个账号要十几秒，全并发又会把 50 个请求一次性打到上游）。
-5. **幂等**：两条命令都是只读，可安全重试；不要因为 `force=true` 触发任何写操作。
-   `force` 在 Trae 侧**恒等**（读的是本地文件，无 TTL 缓存）—— 参数仅为契约保留。
+5. **幂等**：两条命令可安全重试，重试不得触发任何**上游写操作**。Trae 侧的台账落账同样幂等
+   （同账号重复确认不产生重复项，无新增时不写盘）；`force` 在 Trae 侧**恒等**
+   （读的是本地文件，无 TTL 缓存）—— 参数仅为契约保留。
 6. **进页面时不要全量拉签到状态**（那要逐账号打上游）。账号视图自带的 `checkedToday`
    （本地台账）足够画初值；用户点「刷新签到状态」才去问上游，那一次是真值。
    ★ 2026-10-29：Qoder 侧补齐同一契约 —— `account_view` 下发 `lastCheckin` /

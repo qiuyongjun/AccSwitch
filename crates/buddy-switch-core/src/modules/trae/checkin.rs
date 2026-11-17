@@ -927,7 +927,7 @@ async fn status_entry_for(
     )
 }
 
-/// 逐账号「今日签到状态」（`get_trae_checkin_status_map`；**只读**，issue #47）。
+/// 逐账号「今日签到状态」（`get_trae_checkin_status_map`；**不 claim**，issue #47）。
 ///
 /// 返回 `Record<uid, { ok, todayCheckedIn, dailyCredit?, source?, error? }>`，与 WorkBuddy
 /// 的 `get_checkin_status_map` **同构** ⇒ 前端三平台共用同一套渲染。
@@ -939,6 +939,10 @@ async fn status_entry_for(
 /// 状态端点（只读 GET）——**绝不**在这里顺带 claim（Qoder/Trae 的签到都是写操作，
 /// 各有独立命令）。
 ///
+/// 但上游明确回答「今日已签」时，会把这个**事实**幂等写入本地台账（见函数末尾）：
+/// 重启后的账号卡初值与自动签到的 `skip_checked_in` 都读台账，不落账就会表现成
+/// 「刷新时已签到、重开又变未签到」。这不是 claim，不产生积分，也不改上游状态。
+///
 /// 每次查询前会调用 [`account::ensure_jwt_for`]：临期且可续期时自动换新，
 /// 续期不了才如实返回错误。**不**在这里 claim（领取是独立写操作）。
 ///
@@ -948,7 +952,10 @@ async fn status_entry_for(
 ///    而不是「未签到」（用 `false` 表示「不知道」是本仓明令禁止的）；
 /// 2. 上游读失败 / 设备标识生成失败 ⇒ `{ok:false, todayCheckedIn:false, error}`；
 /// 3. 上游回 `ok` 却没给 `checked_in` ⇒ 回落台账，`source` 标明来源（见 [`status_entry`]）；
-/// 4. 空数组 ⇒ `{}`（一次上游请求都不发）。
+/// 4. 空数组 ⇒ `{}`（一次上游请求都不发）；
+/// 5. 只有 `source == "upstream"` 且 `todayCheckedIn == true` 的条目会写台账 ——
+///    读失败、明确未签、台账兜底都不得被固化。写入在全部探测结束后**合并一次**，
+///    避免逐账号读改写互相覆盖。
 pub async fn status_map_for(variant: TraeVariant, user_ids: Vec<String>) -> Value {
     let ledger = credits::checked_in_today_for(variant);
     let accounts: std::collections::HashMap<String, account::RawAccount> =
@@ -989,7 +996,30 @@ pub async fn status_map_for(variant: TraeVariant, user_ids: Vec<String>) -> Valu
             map.insert(uid, entry);
         }
     }
+
+    // 全部探测结束后一次性落账：上游明确「今日已签」是更新的事实，值得跨运行保留。
+    // 逐账号边查边写会让并发的读改写互相覆盖，也可能让失败条目混进来。
+    let confirmed = upstream_confirmed_checked(&map);
+    if !confirmed.is_empty() {
+        // 落账失败不影响本次状态结果：返回的仍是上游原话，下一轮刷新会再试。
+        let _ = credits::mark_checked_in_many_for(variant, &confirmed);
+    }
     Value::Object(map)
+}
+
+/// 状态 map 中「上游**明确**回答今日已签」的 uid。
+///
+/// 只认 `source == "upstream"`：`ok:false`（读不到）、`source == "ledger"`（台账兜底）
+/// 以及明确未签，都不是可直接落盘的事实。
+fn upstream_confirmed_checked(map: &serde_json::Map<String, Value>) -> Vec<String> {
+    map.iter()
+        .filter(|(_, entry)| {
+            entry.get("ok").and_then(Value::as_bool) == Some(true)
+                && entry.get("todayCheckedIn").and_then(Value::as_bool) == Some(true)
+                && entry.get("source").and_then(Value::as_str) == Some("upstream")
+        })
+        .map(|(uid, _)| uid.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1072,6 +1102,37 @@ mod tests {
         assert_eq!(fallback["ok"], true);
         assert_eq!(fallback["todayCheckedIn"], true);
         assert_eq!(fallback["source"], "ledger");
+    }
+
+    /// 只有「上游明确已签」才允许落账：读失败、明确未签、台账兜底都不得写成事实。
+    #[test]
+    fn only_upstream_confirmed_checkins_are_persisted() {
+        let map: serde_json::Map<String, Value> = [
+            (
+                "u-upstream".to_string(),
+                status_entry(true, Some(true), Some(100), false, ""),
+            ),
+            (
+                "u-not-checked".to_string(),
+                status_entry(true, Some(false), None, true, ""),
+            ),
+            (
+                "u-ledger-fallback".to_string(),
+                status_entry(true, None, None, true, ""),
+            ),
+            (
+                "u-read-failed".to_string(),
+                status_entry(false, None, None, true, "HTTP 500"),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            upstream_confirmed_checked(&map),
+            vec!["u-upstream".to_string()],
+            "落账只能来自上游明确回答「已签」"
+        );
     }
 
     /// 空数组 / 全是不存在的 uid ⇒ 一条上游请求都不发，直接回 `{}`（前端显示「—」）。

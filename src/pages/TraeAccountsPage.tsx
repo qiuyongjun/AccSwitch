@@ -1269,8 +1269,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 页面不再有该 kind 的取数分支（见下方说明）。
    *
    * 其余两项的诚实边界：
-   * - `checkin` → `get_trae_checkin_status_map`（**只读**上游状态端点）。本地台账只记
-   *   「本工具签过谁」，用户在 IDE 里手动签时台账里没有 ⇒ 必须真去问上游。
+   * - `checkin` → `get_trae_checkin_status_map`（问上游、**不 claim**）。台账只记「本工具
+   *   签过谁」，用户在 IDE 里手动签时必须真去问上游；后端会把「上游明确已签」的事实幂等
+   *   写入本地台账，重启后的初值因此不再依赖这份内存快照。
    *   **绝不**借刷新之名触发 claim（那是写操作，走独立的「签到」入口）。
    */
   const TRAE_REFRESH_KINDS = ["credits", "checkin", "credential"] as const;
