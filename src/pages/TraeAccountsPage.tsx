@@ -13,6 +13,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
+import { create } from "zustand";
 
 import { AddAccountDrawer, type AddAccountWay } from "@/components/add-account-drawer";
 import { AccountsTableAvatar } from "@/components/account-list-parts";
@@ -95,7 +96,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import * as api from "@/lib/api";
 import type { CheckinStatusEntry } from "@/lib/api";
 import { accountSearchText } from "@/lib/account-search";
-import { lastSevenDays } from "@/lib/checkin-history";
+import { lastSevenDays, localDateKey } from "@/lib/checkin-history";
 import {
   filterAccounts,
   groupAccounts,
@@ -142,6 +143,45 @@ import { useCachedResource } from "@/lib/use-cached-resource";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import { showUndoToast } from "@/lib/undo-toast";
 import { useTraeVariant } from "@/lib/use-trae-variant";
+
+const EMPTY_CHECKIN_ENTRIES: Record<string, CheckinStatusEntry> = {};
+
+/**
+ * 逐账号签到状态的上游读数（`get_trae_checkin_status_map` 的结果）。
+ *
+ * ## 为什么放在模块级 store 而不是页面 `useState`
+ *
+ * 侧栏切到 WorkBuddy 再切回 Trae 时，页面组件会**卸载重建**。读数若挂组件内，
+ * 卸载即丢 ⇒ 用户刚「刷新」出的「已签到」会在切回来后退回本地台账的「未签到」：
+ * 台账只记「本工具签过谁」，在 Trae IDE 里手动签的账号不在其中 —— 这正是
+ * 「刷新后显示已签到、切走再切回又变未签到」的成因。
+ *
+ * 键带**本地日期**：跨日后旧读数不再被读取（组件里 key 变化即回落台账），
+ * 不把「昨天签过」当成今天已签。
+ */
+const useTraeCheckinStatusStore = create<{
+  /** `区域:本地日期` → `uid → 上游条目`。 */
+  maps: Record<string, Record<string, CheckinStatusEntry>>;
+  merge: (key: string, entries: Record<string, CheckinStatusEntry>) => void;
+  update: (
+    key: string,
+    updater: (prev: Record<string, CheckinStatusEntry>) => Record<string, CheckinStatusEntry>,
+  ) => void;
+}>((set) => ({
+  maps: {},
+  merge: (key, entries) =>
+    set((state) => {
+      if (Object.keys(entries).length === 0) return state;
+      return { maps: { ...state.maps, [key]: { ...(state.maps[key] ?? EMPTY_CHECKIN_ENTRIES), ...entries } } };
+    }),
+  update: (key, updater) =>
+    set((state) => {
+      const prev = state.maps[key] ?? EMPTY_CHECKIN_ENTRIES;
+      const next = updater(prev);
+      // 无变化时不写：避免同引用重建 map 触发无意义的重渲染。
+      return next === prev ? state : { maps: { ...state.maps, [key]: next } };
+    }),
+}));
 
 /**
  * 一次动作的**结果判定**（由调用方按后端报告如实给出）。
@@ -1242,8 +1282,14 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 刻意不在进页面时全量拉：这要逐账号打上游（N 个账号 = N 次请求），
    * 而账号视图自带的 `checkedToday`（本地台账）足够画初值。用户点「刷新签到状态」
    * 才去问上游 —— 那一次是真值。
+   *
+   * 读数存在模块级 store（`useTraeCheckinStatusStore`）：页面卸载重建时不能丢，
+   * 否则「刷新出已签到 → 切到 WorkBuddy 再切回」会退回台账的「未签到」。
    */
-  const [checkinMap, setCheckinMap] = useState<Record<string, CheckinStatusEntry>>({});
+  const checkinMapKey = `${variant}:${localDateKey(Date.now())}`;
+  const checkinMap = useTraeCheckinStatusStore((state) => state.maps[checkinMapKey]) ?? EMPTY_CHECKIN_ENTRIES;
+  const mergeCheckinMap = useTraeCheckinStatusStore((state) => state.merge);
+  const updateCheckinMap = useTraeCheckinStatusStore((state) => state.update);
 
   /**
    * 把「本轮签到**确实成功**」的账号在 `checkinMap` 里就地置为已签到。
@@ -1266,7 +1312,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    */
   function markCheckinMapChecked(userIds: string[]) {
     if (userIds.length === 0) return;
-    setCheckinMap((prev) => {
+    updateCheckinMap(checkinMapKey, (prev) => {
       let changed = false;
       const next = { ...prev };
       for (const userId of userIds) {
@@ -1306,7 +1352,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
           } else if (kind === "checkin") {
             /* 只问这一个账号（批量接口传 1 个 id 即可，不新增「单账号」变体）。 */
             const map = await api.getTraeCheckinStatusMap(variant, [account.userId]);
-            setCheckinMap((prev) => ({ ...prev, ...map }));
+            mergeCheckinMap(checkinMapKey, map);
             const current = map[account.userId];
             /* ★ 缺条目 = 没取得数据（账号已删 / 后端未回）⇒ 读取失败，不亮「已更新」。 */
             if (!current || !current.ok) throw new Error(current?.error ?? t("shared.refreshPart.fail"));
@@ -1326,7 +1372,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         toast.error(t("shared.refreshPart.fail"), { description: api.asError(e) });
       }
     },
-    [refreshBusy, variant, loadAllWithResult, t],
+    [refreshBusy, variant, loadAllWithResult, mergeCheckinMap, checkinMapKey, t],
   );
 
   function refreshCreditsOne(account: TraeAccount) {
@@ -1556,7 +1602,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     setBatchBusy(true);
     try {
       const map = await api.getTraeCheckinStatusMap(variant, targets.map((account) => account.userId));
-      setCheckinMap((prev) => ({ ...prev, ...map }));
+      mergeCheckinMap(checkinMapKey, map);
       const failed = targets.filter((account) => !map[account.userId]?.ok).length;
       if (!aliveRef.current) return;
       if (failed === 0) toast.success(t("trae.page.accounts.quickRefreshDone", { n: targets.length }));
@@ -1726,7 +1772,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         api.getTraeCheckinStatusMap(variant, ids),
       ]);
       if (checkin.status === "fulfilled") {
-        setCheckinMap((prev) => ({ ...prev, ...checkin.value }));
+        mergeCheckinMap(checkinMapKey, checkin.value);
       }
       /* 必须在积分落盘**之后**读快照；积分请求失败也要回读（部分成功的账号已更新）。 */
       const snapshotResult = await loadAllWithResult();
