@@ -143,6 +143,7 @@ import { useCachedResource } from "@/lib/use-cached-resource";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import { showUndoToast } from "@/lib/undo-toast";
 import { useTraeVariant } from "@/lib/use-trae-variant";
+import { useVisibleRevalidate } from "@/lib/use-visible-revalidate";
 
 const EMPTY_CHECKIN_ENTRIES: Record<string, CheckinStatusEntry> = {};
 
@@ -283,6 +284,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     `trae:account-list:${variant}`,
     () => api.getTraeAccounts(variant),
   );
+  /* 后台 JWT 自动续期直接写账号库；不重读的话卡片会一直停在「已过期」。
+     只重取账号列表（轻），不连带整份辅助快照（含进程探测）。 */
+  useVisibleRevalidate(accountResource.revalidate);
 
   /** 登录态仅依赖程序清单，立即接续读取，与积分和环境读取并行。 */
   const loadSnapshot = useCallback(async (): Promise<AccountsSnapshot> => {

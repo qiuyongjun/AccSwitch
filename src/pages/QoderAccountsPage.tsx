@@ -164,6 +164,7 @@ import { useScope } from "@/lib/use-scope";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import { useCachedResource } from "@/lib/use-cached-resource";
+import { useVisibleRevalidate } from "@/lib/use-visible-revalidate";
 
 /** ISO-8601 → 毫秒时间戳（解析不了给 `null` ⇒ 调用方**省掉那一行**，不显示 1970）。 */
 const stampToMs = (iso: string | null | undefined): number | null => {
@@ -237,6 +238,8 @@ function QoderAccountsPanel({
 
   // 来源探测不阻塞本地列表；缓存按完整作用域隔离，返回页面时直接复用快照。
   const accountResource = useCachedResource(`qoder:accounts:${scope}`, () => api.getQoderAccounts(scope));
+  /* 后台保活会直接改写账号库；定时重取账号列表，让「已过期 / 需重新登录」自愈。 */
+  useVisibleRevalidate(accountResource.revalidate);
   const sourceResource = useCachedResource(`qoder:local-sources:${scope}`, () => api.getQoderLocalSources(scope));
   const accounts = useMemo(
     () => accountResource.data?.accounts ?? (accountResource.loading ? null : []),

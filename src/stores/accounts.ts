@@ -276,9 +276,19 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
     const byId = new Map(accounts.map((account) => [account.id, account]));
     set((s) => {
       const slice = selectRegionSlice(s, region);
+      let changed = false;
       const next = slice.accounts.map((prev) => {
         const fresh = byId.get(prev.id);
         if (!fresh) return prev;
+        // 60 秒轮询：字段没变就必须保持原引用并整体跳过 set，否则每轮都触发一次全列表重渲染。
+        const unchanged =
+          prev.expiresAt === fresh.expiresAt &&
+          prev.refreshExpiresAt === fresh.refreshExpiresAt &&
+          prev.refreshedAt === fresh.refreshedAt &&
+          prev.needsRelogin === fresh.needsRelogin &&
+          prev.needsReloginReason === fresh.needsReloginReason;
+        if (unchanged) return prev;
+        changed = true;
         return {
           ...prev,
           expiresAt: fresh.expiresAt,
@@ -288,7 +298,7 @@ export const useAccountsStore = create<AccountsState>((set, get) => ({
           needsReloginReason: fresh.needsReloginReason,
         };
       });
-      return regionPatch(s, region, { accounts: next });
+      return changed ? regionPatch(s, region, { accounts: next }) : s;
     });
   },
 }));
