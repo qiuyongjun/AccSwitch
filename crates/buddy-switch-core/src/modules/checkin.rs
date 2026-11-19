@@ -11,6 +11,7 @@
 use chrono::Local;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -139,12 +140,20 @@ pub async fn get_checkin_status_for(region: Region, account: &Value) -> Value {
     let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code == 0 || code == 200 {
         let data = resp.get("data").cloned().unwrap_or_else(|| json!({}));
+        /* ★ 2026-11-19：字段缺失 = **上游没回答**，必须给 `null` 而不是 `false`。
+           当 `false` 展示层会把「不知道」画成「今日未签到」（与「在客户端签过」冲突）。
+           写入判定不受影响：`decide_from_status` 只认 `Some(true)` 为「已签到」，
+           `null` 仍会尝试提交（上游会以 already 去重）。 */
+        let checked = data
+            .get("today_checked_in")
+            .or_else(|| data.get("todayCheckedIn"))
+            .and_then(Value::as_bool);
+        /* 上游明确「今天已签」是**可跨重启保留的事实** ⇒ 幂等落账，
+           让下次打开页面的第一帧就画得出「已签」（不必再等这一轮请求）。 */
+        mark_ledger_if_checked(region, account, checked);
         return json!({
             "ok": true,
-            "todayCheckedIn": data.get("today_checked_in")
-                .or_else(|| data.get("todayCheckedIn"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            "todayCheckedIn": checked,
             // ★ B5：把上游的**积分数据显式提取** —— 此前只透传 `raw`，前端**无从展示「逐条 +N」**。
             //   字段名来自实测响应（`checkin-activity-status`）：
             //   `daily_credit` / `today_credit` / `total_credits` / `streak_days` / `checkin_dates`。
@@ -166,12 +175,14 @@ pub async fn get_checkin_status_for(region: Region, account: &Value) -> Value {
     let code2 = resp2.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
     if code2 == 0 || code2 == 200 {
         let data = resp2.get("data").cloned().unwrap_or_else(|| json!({}));
+        let checked = data
+            .get("today_checked_in")
+            .or_else(|| data.get("todayCheckedIn"))
+            .and_then(Value::as_bool);
+        mark_ledger_if_checked(region, account, checked);
         return json!({
             "ok": true,
-            "todayCheckedIn": data.get("today_checked_in")
-                .or_else(|| data.get("todayCheckedIn"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
+            "todayCheckedIn": checked,
             // 与上面同源（备用端点，字段一致）。
             "dailyCredit": data.get("daily_credit").and_then(Value::as_f64),
             "todayCredit": data.get("today_credit").and_then(Value::as_f64),
@@ -305,6 +316,14 @@ pub async fn checkin_account_for(region: Region, account: &Value) -> Value {
     } else {
         None
     };
+    /* ★ 2026-11-19：成功 / 上游回「已签」都要落台账 —— `already` 分支在
+       `decide_from_status` 处提前返回（那条路径的落账在状态查询里完成），
+       这里补的是「提交后才知道已签」这一档。 */
+    if result != "error" {
+        if let Some(id) = acc.get("id").and_then(Value::as_str) {
+            mark_checked_in_for(region, id);
+        }
+    }
     let mut entry_map = json!({
         "result": result,
         "ts": entry["ts"],
@@ -333,6 +352,113 @@ pub fn date_str(ts_ms: Option<i64>) -> String {
             .unwrap_or_else(|| dt.format("%Y-%m-%d").to_string())
     } else {
         dt.format("%Y-%m-%d").to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 今日已签到台账（WorkBuddy）
+// ---------------------------------------------------------------------------
+
+/// 台账内容（跨重启保留「今天谁签过」）。
+///
+/// ## 为什么需要它
+///
+/// 上游状态查询是**逐账号**的（N 个账号 = N 次请求）。台账让「打开账号页」的第一帧
+/// 就能画出已签，不必等上游；也让「本工具签过」这件事在重启后仍然成立。
+/// 与 Trae 的 `checkin_ledger` / Qoder 的 `last_checkin` 同一定位。
+///
+/// ## 它**不能**证明什么
+///
+/// 只记「签过」，不记「没签」：用户在客户端里签到不会进台账。因此读侧只能把
+/// `true` 当成事实，`false`/缺失一律是「未知」，必须去问上游。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CheckinLedger {
+    /// 本地日期 `YYYY-MM-DD`；跨日即视为空（读路径不写盘）。
+    pub date: String,
+    /// 今日已签到的账号 id。
+    pub checked_in: Vec<String>,
+}
+
+/// 台账「读整份 → 改 → 写回」的进程内互斥。
+///
+/// 状态查询（首屏补齐 / 手动刷新 / 自动签到预检）可能并发确认「今日已签」，
+/// 不加锁会互相覆盖，症状正是「已签到又变未签到」。
+static CHECKIN_LEDGER_LOCK: Mutex<()> = Mutex::new(());
+
+/// 台账落点：CN 是 `checkin_ledger.json`，国际版带 `.global` 后缀（与账号库同规则）。
+///
+/// 国际版没有签到通道，但路径仍按 region 派生 —— 避免将来开通时两区共用一本账。
+pub fn checkin_ledger_file_for(region: Region) -> PathBuf {
+    let name = match region {
+        Region::Cn => "checkin_ledger.json",
+        Region::Global => "checkin_ledger.global.json",
+    };
+    crate::modules::config::store_dir().join(name)
+}
+
+/// 读取台账；日期不是今天 ⇒ 空台账。读路径**不写盘**。
+fn load_checkin_ledger_for(region: Region) -> CheckinLedger {
+    let ledger: CheckinLedger = std::fs::read_to_string(checkin_ledger_file_for(region))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    if ledger.date == date_str(None) {
+        ledger
+    } else {
+        CheckinLedger::default()
+    }
+}
+
+/// 今日已签到账号集合（**只证已签**；未出现的账号不代表未签）。
+pub fn checked_in_today_for(region: Region) -> HashSet<String> {
+    load_checkin_ledger_for(region).checked_in.into_iter().collect()
+}
+
+/// 记一笔「今日已签到」；幂等，国际版（无签到通道）直接忽略。
+pub fn mark_checked_in_for(region: Region, account_id: &str) {
+    if account_id.trim().is_empty() {
+        return;
+    }
+    mark_checked_in_many_for(region, &[account_id.to_string()]);
+}
+
+/// 批量记「今日已签到」：一次读、一次写，幂等；无新增时不写盘。
+pub fn mark_checked_in_many_for(region: Region, account_ids: &[String]) {
+    if region == Region::Global || account_ids.is_empty() {
+        return;
+    }
+    let _guard = CHECKIN_LEDGER_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut ledger = load_checkin_ledger_for(region);
+    ledger.date = date_str(None);
+    let mut changed = false;
+    for account_id in account_ids {
+        if account_id.trim().is_empty() || ledger.checked_in.iter().any(|id| id == account_id) {
+            continue;
+        }
+        ledger.checked_in.push(account_id.clone());
+        changed = true;
+    }
+    if !changed {
+        return;
+    }
+    let path = checkin_ledger_file_for(region);
+    if let Some(parent) = path.parent() {
+        let _ = crate::modules::config::ensure_private_dir(parent);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&ledger) {
+        let _ = crate::modules::config::atomic_write(&path, &text);
+    }
+}
+
+/// 上游明确回答「今日已签」⇒ 幂等落账（只认 `Some(true)`）。
+fn mark_ledger_if_checked(region: Region, account: &Value, checked: Option<bool>) {
+    if checked != Some(true) {
+        return;
+    }
+    if let Some(id) = account.get("id").and_then(Value::as_str) {
+        mark_checked_in_for(region, id);
     }
 }
 
@@ -451,6 +577,51 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::*;
 
+    /// 台账：只证已签、幂等、跨日失效、按 region 分家。
+    ///
+    /// 可证伪：去掉「日期不符返回空」⇒ 跨日断言红；去掉幂等判重 ⇒ `len` 变 3；
+    /// 让 `mark_*` 不判 Global ⇒ 国际版会凭空出现一条记录。
+    #[test]
+    fn checkin_ledger_is_idempotent_date_scoped_and_region_split() {
+        // 台账读的是 `$HOME` 下的文件 ⇒ 必须隔离（本仓单测纪律）。
+        let dir = std::env::temp_dir().join(format!("wb-checkin-ledger-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("创建隔离目录");
+        let _guard = crate::modules::config::HomeOverrideGuard::set(&dir);
+
+        let region = Region::Cn;
+        assert!(checked_in_today_for(region).is_empty());
+
+        mark_checked_in_many_for(region, &["a".into(), "b".into()]);
+        // 重复标记（含并发可能导致的重复调用）不产生重复项。
+        mark_checked_in_many_for(region, &["b".into(), "a".into(), "".into()]);
+        let checked = checked_in_today_for(region);
+        assert_eq!(checked.len(), 2, "幂等：同一账号只记一次");
+        assert!(checked.contains("a") && checked.contains("b"));
+
+        // 跨日：文件里的日期不是今天 ⇒ 读路径视为空台账。
+        let path = checkin_ledger_file_for(region);
+        let mut ledger: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        ledger["date"] = json!("2000-01-01");
+        std::fs::write(&path, serde_json::to_string_pretty(&ledger).unwrap()).unwrap();
+        assert!(checked_in_today_for(region).is_empty(), "跨日后旧台账作废");
+
+        // 再次标记 ⇒ 以今天重建（旧账号不复活）。
+        mark_checked_in_for(region, "c");
+        let rebuilt: CheckinLedger =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(rebuilt.date, date_str(None));
+        assert_eq!(rebuilt.checked_in, vec!["c".to_string()]);
+
+        // 国际版没有签到通道：写入被忽略，且与 CN 台账互不可见。
+        mark_checked_in_for(Region::Global, "g");
+        assert!(checked_in_today_for(Region::Global).is_empty());
+        assert!(!checkin_ledger_file_for(Region::Global).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 回归上游 issue #94：信封凭据的签到请求应在入口短路并返回可读错误，
     /// 不发出空 `Bearer`（此前会被网关 401 后把整页 HTML 回显到界面）。
     ///
@@ -514,6 +685,22 @@ mod tests {
     fn unchecked_status_is_the_only_path_to_submission() {
         assert_eq!(
             decide_from_status(&json!({"ok": true, "todayCheckedIn": false})),
+            StatusDecision::Submit
+        );
+    }
+
+    /// 上游成功但**没给「今天签没签」**（`null` / 缺字段）⇒ 仍尝试提交。
+    ///
+    /// 这一档的信号只用于**展示**（`todayCheckedIn: null` = 不知道，不画「未签到」）；
+    /// 若在这里改成「不提交」，字段缺失会让用户当天签不上。
+    #[test]
+    fn missing_checked_flag_still_submits() {
+        assert_eq!(
+            decide_from_status(&json!({"ok": true, "todayCheckedIn": null})),
+            StatusDecision::Submit
+        );
+        assert_eq!(
+            decide_from_status(&json!({"ok": true})),
             StatusDecision::Submit
         );
     }

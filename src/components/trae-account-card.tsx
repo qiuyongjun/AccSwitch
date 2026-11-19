@@ -141,6 +141,14 @@ export function traeCooldownTip(account: TraeAccount, t: Translate): string {
 }
 
 /**
+ * 签到徽章的**展示三态**。
+ *
+ * `unknown` 必须与 `unchecked` 分开：本地台账只能证明「本工具签过」，证明不了「没签」；
+ * 把未知画成「今日未签到」正是 2026-11-19 的报障（在 Trae 客户端里签过、台账没记录）。
+ */
+export type CheckinChipState = "checked" | "unchecked" | "unknown";
+
+/**
  * 账号**状态徽章**（卡片 chips 行与表格「状态」列**同一份实现**，与 WB 的
  * `AccountStatusBadge` 同一角色）：
  *
@@ -154,7 +162,7 @@ export function traeCooldownTip(account: TraeAccount, t: Translate): string {
  *
  * ★ 2026-10-27（用户报障「今日未签到，卡片和列表标签不一致」）：表格此前另写一份 ——
  * 未签到是 secondary 灰、无图标，卡片是 warning 琥珀 + `CheckinIcon` ⇒ 同一状态两种画法。
- * 现在两处都走这里；`checkedToday` 由调用方传**合并后**的值（上游 `checkinMap` 优先）。
+ * 现在两处都走这里；签到态由调用方传**合并后的三态**（见 {@link CheckinChipState}）。
  *
  * 冷却也收进来了（后端只在**未到期**时下发 `cooldownType`，见 `trae/account.rs` 的
  * `active_cooldown`）：此前只有表格画「冷却中」、卡片藏在签到徽章的 tooltip 里，
@@ -162,12 +170,12 @@ export function traeCooldownTip(account: TraeAccount, t: Translate): string {
  */
 export function TraeStatusChips({
   account,
-  checkedToday,
+  checkinState,
   onOpenTab,
 }: {
   account: TraeAccount;
-  /** 页面侧合并后的签到态；不传 ⇒ 读账号快照。 */
-  checkedToday?: boolean;
+  /** 页面侧合并后的签到展示态；不传 ⇒ 只按账号快照（台账 `false` 视为未知）。 */
+  checkinState?: CheckinChipState;
   /** 标签直达详情页签（R10）：签到 / 凭据 → 对应页签；冷却 → 凭据。 */
   onOpenTab?: (tab: DrawerTab) => void;
 }) {
@@ -229,9 +237,10 @@ export function TraeStatusChips({
 
   /* 已过期 / SessionDead 是**互斥的一枚**：凭据都坏了，「签没签到」是次要信息。
      签到两态共用 `CheckinIcon`（与 WB 的 `AccountStatusBadge` 同一枚），并共用
-     `checkinBadgeTip` —— 同一句话在三张卡上不会长成两种说法。 */
+     `checkinBadgeTip` —— 同一句话在三张卡上不会长成两种说法。
+     ★ 未知（未查询 / 读不到）**不画签到徽章** —— 与 WB 的 `accountStatusKind` 同口径。 */
   const credentialSide = account.jwtStatus === "expired" || account.cooldownType === "SessionDead";
-  const checked = checkedToday ?? account.checkedToday;
+  const state: CheckinChipState = checkinState ?? (account.checkedToday ? "checked" : "unknown");
 
   return (
     <>
@@ -244,7 +253,7 @@ export function TraeStatusChips({
                 : t("trae.comp.card.chip.expired"),
             tab: "credential",
           })
-        : checked
+        : state === "checked"
           ? chip({
               variant: "success",
               content: (
@@ -255,16 +264,18 @@ export function TraeStatusChips({
               tip: checkinBadgeTip(true, t),
               tab: "checkin",
             })
-          : chip({
-              variant: "warning",
-              content: (
-                <>
-                  <CheckinIcon /> {t("trae.comp.card.chip.unchecked")}
-                </>
-              ),
-              tip: checkinBadgeTip(false, t),
-              tab: "checkin",
-            })}
+          : state === "unchecked"
+            ? chip({
+                variant: "warning",
+                content: (
+                  <>
+                    <CheckinIcon /> {t("trae.comp.card.chip.unchecked")}
+                  </>
+                ),
+                tip: checkinBadgeTip(false, t),
+                tab: "checkin",
+              })
+            : null}
       {account.cooldownType
         ? chip({
             variant: "warning",
@@ -409,12 +420,13 @@ interface Props {
   /** 刚刚刷新成功（自行淡出）的项，菜单里显示「已更新」。 */
   doneKinds?: readonly AccountRefreshKind[];
   /**
-   * 「今日是否已签到」的**局部覆盖**（页面侧刷新签到状态后立即生效）。
+   * 「今日签到」的**展示三态覆盖**（页面侧合并上游读数后传进来，立即生效）。
    *
    * ⚠️ 为什么不直接改 `account.checkedToday`：那属于账号列表的数据，刷新一个账号
    * 却重取整页会让「点一下刷新」变成整页闪烁；这里把最新事实单独交给卡片渲染。
+   * 不传 ⇒ 按快照推断：台账 `true` 才算已签，`false` 一律视为**未知**。
    */
-  checkedTodayOverride?: boolean;
+  checkinState?: CheckinChipState;
   /* ★ 2026-10-26：`todayTokens` / `todayTokensTruncated` 已删 —— 卡片不再展示今日 Token
      （与 WorkBuddy 同口径：卡片只回答「这个号要不要先用掉」，用量归用量统计页）。
      ★ 2026-10-29：抽屉概览的同名信息行也已移除 ⇒ 整个账号页都不再取这份读数。 */
@@ -472,7 +484,7 @@ export function TraeAccountCard({
   onRefreshPart,
   refreshingKinds,
   doneKinds,
-  checkedTodayOverride,
+  checkinState,
   refreshKinds,
   onSaveLogin,
   onRefreshJwt,
@@ -536,7 +548,7 @@ export function TraeAccountCard({
   const statusChips = (
     <TraeStatusChips
       account={account}
-      checkedToday={checkedTodayOverride ?? account.checkedToday}
+      checkinState={checkinState}
       onOpenTab={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
     />
   );
@@ -925,9 +937,10 @@ export function TraeAccountCard({
           </DropdownMenuItem>
         )}
         {/* 「手动签到」与 WorkBuddy 卡片菜单同位（刷新之后、删除之前）。
-            只在今日未签到时出现：已签到的账号再点一次只会被跳过策略拦下，
-            摆一个点不动的入口比不摆更差。 */}
-        {!(checkedTodayOverride ?? account.checkedToday) && (
+            只在**未确认已签**时出现：已签到的账号再点一次只会被跳过策略拦下，
+            摆一个点不动的入口比不摆更差；未知（还没查 / 读不到）仍保留入口 ——
+            「不知道」不等于「已签到」。 */}
+        {checkinState !== "checked" && (
           <DropdownMenuItem disabled={featuresDisabled || checkingIn} onSelect={() => onCheckin?.(account)}>
             <CircleCheck />{t("trae.comp.card.menu.checkin")}
           </DropdownMenuItem>

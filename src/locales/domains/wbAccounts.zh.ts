@@ -420,7 +420,6 @@ export const zh = {
   "wbAccounts.dialog.installVerbUpgrade": "升级",
 
   // ---- Toast ----
-  "wbAccounts.toast.autoCheckinLoadFail": "自动签到配置加载失败",
   "wbAccounts.toast.autoTravelLoadFail": "自动旅行配置加载失败",
   "wbAccounts.toast.imported": "账号已导入",
   "wbAccounts.toast.importFail": "导入失败",

@@ -60,6 +60,7 @@ import { ScopeChip, scopeLabel } from "@/components/scope-chip";
 import {
   TraeAccountCard,
   TraeStatusChips,
+  type CheckinChipState,
   formatCredits,
   jwtStatusText,
   shortTime,
@@ -140,6 +141,7 @@ import type {
 } from "@/lib/trae-types";
 import { scopeOf } from "@/lib/scope";
 import { useCachedResource } from "@/lib/use-cached-resource";
+import { useCheckinStatusFill } from "@/lib/use-checkin-status-fill";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import { showUndoToast } from "@/lib/undo-toast";
 import { useTraeVariant } from "@/lib/use-trae-variant";
@@ -1684,9 +1686,26 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
     const entry = checkinMap[account.userId];
     if (entry) {
       if (!entry.ok) return { kind: "unreadable", reason: entry.error };
-      return entry.todayCheckedIn ? { kind: "checked" } : { kind: "unchecked" };
+      return entry.todayCheckedIn === true ? { kind: "checked" } : { kind: "unchecked" };
     }
     return account.checkedToday ? { kind: "checked" } : { kind: "unchecked" };
+  }
+
+  /**
+   * 签到状态的**展示三态**（卡片徽章 / 表格状态列 / 状态分桶共用）。
+   *
+   * 与 `checkinStateOf`（菜单的**动作**判据）刻意不同：没有上游读数时，台账只能
+   * 证明「已签」，不能证明「未签」——用户在 Trae 客户端里签过、或读数还没回来时，
+   * `account.checkedToday` 同样是 `false`。展示层若照抄它，就会把「已签到」画成
+   * 「今日未签到」（本次报障的根因）。⇒ 这里一律是 `unknown`，由徽章层不渲染签到标签。
+   */
+  function checkinDisplayStateOf(account: TraeAccount): CheckinChipState {
+    const entry = checkinMap[account.userId];
+    if (entry) {
+      if (!entry.ok) return "unknown";
+      return entry.todayCheckedIn === true ? "checked" : "unchecked";
+    }
+    return account.checkedToday ? "checked" : "unknown";
   }
 
   /**
@@ -1988,6 +2007,32 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
   const groups = overview?.groups ?? [];
 
   /**
+   * 首屏补齐逐账号签到状态（`get_trae_checkin_status_map`，**只读、不 claim**）。
+   *
+   * 卡片初值只认本地台账（`account.checkedToday`），而台账只记「**本工具**签过谁」；
+   * 在 Trae 客户端里当天签到的账号不在台账里 ⇒ 不补这一次上游查询，界面就会把
+   * 「已签到」画成「未签到」（用户报障：打开账号页、自动刷新完成后徽章仍是未签到）。
+   *
+   * 三端共用同一份补取实现（`useCheckinStatusFill`），差异只在取数函数与作用域键：
+   * 分片 50、每账号每作用域一次、失败静默、只合并 `ok:true` 的条目。
+   * 后端还会把上游明确「今日已签」的事实幂等写回台账，重启后的初值随之正确。
+   */
+  const traeCheckinFillIds = useMemo(() => accounts.map((account) => account.userId), [accounts]);
+  useCheckinStatusFill({
+    enabled: traeCheckinFillIds.length > 0,
+    ids: traeCheckinFillIds,
+    scopeKey: checkinMapKey,
+    needsFetch: (userId) => {
+      const account = accounts.find((row) => row.userId === userId);
+      /* 台账 / 上游已确认「今日已签」⇒ 不必再问；其余（含台账说未签）都要问一次真值。 */
+      return account ? checkinDisplayStateOf(account) !== "checked" : false;
+    },
+    fetchMap: (ids) => api.getTraeCheckinStatusMap(variant, ids),
+    onEntries: (entries) => mergeCheckinMap(checkinMapKey, entries),
+    isStale: () => !aliveRef.current,
+  });
+
+  /**
    * 该账号是不是**当前登录**（卡片头部高亮 + 幽灵 logo + 「当前登录」徽章 + 左侧竖条）。
    *
    * ## ★ 为什么不是 `logins[variant]`（2026-10-10 修的真实缺陷）
@@ -2195,7 +2240,11 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
           }
           if (account.cooldownType) return t("trae.page.accounts.toolbar.statusBucket.cooling");
           if (account.jwtStatus === "expired") return t("trae.page.accounts.toolbar.statusBucket.expired");
-          if (!checkinTodayOf(account)) return t("trae.page.accounts.toolbar.statusBucket.notCheckedIn");
+          /* 只有**上游明确「今日未签」**才归进这个桶；未知（还没查 / 读不到）不算 ——
+             与 WB 的 `attentionOf`（`undefined` 不判未签到）同一口径。 */
+          if (checkinDisplayStateOf(account) === "unchecked") {
+            return t("trae.page.accounts.toolbar.statusBucket.notCheckedIn");
+          }
           return t("trae.page.accounts.toolbar.statusBucket.normal");
         }
         if (key === "group") return groupNameOf(account) ?? t("trae.page.accounts.toolbar.groupBucket.default");
@@ -2337,7 +2386,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
       <div className="flex flex-wrap items-center gap-1">
         <TraeStatusChips
           account={account}
-          checkedToday={checkinTodayOf(account)}
+          checkinState={checkinDisplayStateOf(account)}
           onOpenTab={(tab) => openDetail(account, tab)}
         />
       </div>
@@ -2578,13 +2627,17 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
         const entry = checkinMap[detail.userId];
         if (entry && !entry.ok) return t("shared.stat.checkinUnreadable");
         if (entry) {
-          return entry.todayCheckedIn
-            ? t("shared.stat.checkedIn")
-            : entry.active === false
+          /* `null`（上游没回答）⇒ 「—」：不知道 ≠ 未签到。 */
+          if (entry.todayCheckedIn === true) return t("shared.stat.checkedIn");
+          if (entry.todayCheckedIn === false) {
+            return entry.active === false
               ? t("shared.stat.checkinUnavailable")
               : t("shared.stat.notCheckedIn");
+          }
+          return "—";
         }
-        return detail.checkedToday ? t("shared.stat.checkedIn") : t("shared.stat.notCheckedIn");
+        /* 没有上游读数时台账只证「已签」；`false` 不能当成「未签」。 */
+        return detail.checkedToday ? t("shared.stat.checkedIn") : "—";
       })()
     : "—";
 
@@ -2893,7 +2946,7 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    */
   const detailCheckinToday = detail
     ? checkinMap[detail.userId]?.ok
-      ? checkinMap[detail.userId].todayCheckedIn
+      ? checkinMap[detail.userId].todayCheckedIn === true
       : detail.checkedToday
     : false;
 
@@ -3095,7 +3148,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
    * 而那段位于本组件靠上的位置，`const` 会在 TDZ 里。
    */
   function checkinTodayOf(account: TraeAccount): boolean {
-    return checkinMap[account.userId]?.ok ? checkinMap[account.userId].todayCheckedIn : account.checkedToday;
+    return checkinMap[account.userId]?.ok
+      ? checkinMap[account.userId].todayCheckedIn === true
+      : account.checkedToday;
   }
   const checkinHasPending = accounts.some((account) => !checkinTodayOf(account));
   const quickBlocked = batchBusy || quickActionBusy !== null;
@@ -3443,11 +3498,8 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
                               refreshKinds={TRAE_REFRESH_KINDS}
                               /* ★ 2026-10-26：卡片不再收 `todayTokens` —— 今日 Token 不在
                                  卡片上展示（与 WorkBuddy 同口径）。 */
-                              checkedTodayOverride={
-                                checkinMap[account.userId]?.ok
-                                  ? checkinMap[account.userId].todayCheckedIn
-                                  : undefined
-                              }
+                              /* 未知（未查询 / 读失败）不画签到标签 —— 不把「不知道」当成「未签到」。 */
+                              checkinState={checkinDisplayStateOf(account)}
                               /* 「保存登录态」＝把客户端**此刻**的登录态存到这个账号名下，
                                  因此目标只能是「这个账号当前登录着的那个程序位」。
                                  此前这里传的是页面所属的**区域**（`variant`），而区域只能推出

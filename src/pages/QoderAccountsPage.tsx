@@ -163,6 +163,7 @@ import { useScope } from "@/lib/use-scope";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { useRefreshAction } from "@/lib/use-refresh-action";
 import { useCachedResource } from "@/lib/use-cached-resource";
+import { useCheckinStatusFill } from "@/lib/use-checkin-status-fill";
 import { useVisibleRevalidate } from "@/lib/use-visible-revalidate";
 
 /** ISO-8601 → 毫秒时间戳（解析不了给 `null` ⇒ 调用方**省掉那一行**，不显示 1970）。 */
@@ -967,49 +968,36 @@ function QoderAccountsPanel({
    *   抽屉，抽屉那条 effect 会据此跳过，不会对同一账号再打一次上游；
    * - 在途期间用户手动刷新 / 签到成功 ⇒ 写入序号已前进，这份旧响应丢弃。
    */
-  const checkinFillAttempted = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!checkinLoaded || checkinUnavailable) return;
-    if (!accounts || accounts.length === 0) return;
-    const missing = accounts.filter((account) => {
-      if (checkinFillAttempted.current.has(account.uid)) return false;
-      return !checkinEntryOf(account.uid)?.ok;
-    });
-    if (missing.length === 0) return;
-    /* 先记账再发请求：这批 uid 本轮只试一次，即使失败也不会因为
-       `setCheckinMap` 引起的重渲染而反复重发。 */
-    const uids = missing.map((account) => account.uid);
-    for (const uid of uids) {
-      checkinFillAttempted.current.add(uid);
-      checkinAutoFetching.current.add(uid);
-    }
-    const seqAtStart: Record<string, number> = Object.fromEntries(
-      uids.map((uid) => [uid, checkinWriteSeq.current[uid] ?? 0]),
-    );
-    void api
-      .qoderCheckinStatusMap(scope, uids)
-      .then((map) => {
-        if (!aliveRef.current) return;
-        const accepted: Record<string, CheckinStatusEntry> = {};
-        for (const uid of uids) {
-          const row = map[uid];
-          if (!row?.ok) continue;
-          if ((checkinWriteSeq.current[uid] ?? 0) !== seqAtStart[uid]) continue;
-          accepted[uid] = row;
-          /* 与抽屉同一份「已得」记账：成功项以后不必再补。 */
-          checkinAutoFetched.current.add(uid);
-        }
-        if (Object.keys(accepted).length === 0) return;
-        setCheckinMap((prev) => ({ ...prev, ...accepted }));
-      })
-      .catch(() => {
-        /* 后台补齐失败不打扰：卡片保持「未知」并回落凭据徽章；手点刷新仍可重试。 */
-      })
-      .finally(() => {
-        /* 失败项**不**记 `checkinAutoFetched`：下次打开抽屉仍会单独试一次（与 §11 同口径）。 */
-        for (const uid of uids) checkinAutoFetching.current.delete(uid);
-      });
-  }, [accounts, checkinEntryOf, checkinLoaded, checkinUnavailable, scope]);
+  /* 三端共用同一份补取实现（`useCheckinStatusFill`）：分片 50、每账号每作用域一次、
+     失败静默、只合并 `ok:true`。Qoder 的额外语义通过回调保留：
+     · `checkinAutoFetching` —— 与抽屉补取共用「在途」记账，避免同一账号并发两轮；
+     · `checkinWriteSeq` —— 等响应回来期间若用户手动刷新 / 签到成功，这份旧响应丢弃；
+     · `checkinAutoFetched` —— 成功项记「已得」，抽屉以后不必再补。 */
+  const checkinFillSeq = useRef<Record<string, number>>({});
+  const qoderCheckinFillIds = useMemo(() => (accounts ?? []).map((account) => account.uid), [accounts]);
+  useCheckinStatusFill({
+    enabled: checkinLoaded && !checkinUnavailable,
+    ids: qoderCheckinFillIds,
+    scopeKey: scope,
+    needsFetch: (uid) => !checkinEntryOf(uid)?.ok,
+    fetchMap: (uids) => api.qoderCheckinStatusMap(scope, uids),
+    onFetchStart: (uids) => {
+      for (const uid of uids) {
+        checkinAutoFetching.current.add(uid);
+        checkinFillSeq.current[uid] = checkinWriteSeq.current[uid] ?? 0;
+      }
+    },
+    accept: (uid) => (checkinWriteSeq.current[uid] ?? 0) === (checkinFillSeq.current[uid] ?? 0),
+    onEntries: (entries) => {
+      for (const uid of Object.keys(entries)) checkinAutoFetched.current.add(uid);
+      setCheckinMap((prev) => ({ ...prev, ...entries }));
+    },
+    onFetchSettled: (uids) => {
+      /* 失败项**不**记 `checkinAutoFetched`：下次打开抽屉仍会单独试一次（与 §11 同口径）。 */
+      for (const uid of uids) checkinAutoFetching.current.delete(uid);
+    },
+    isStale: () => !aliveRef.current,
+  });
 
   /* ── 选择（照 Trae：全选只作用于**当前可见**的行） ── */
 

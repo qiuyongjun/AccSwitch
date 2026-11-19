@@ -364,7 +364,6 @@ export const en = {
   "wbAccounts.dialog.installVerbUpgrade": "Upgrade",
 
   // ---- Toasts ----
-  "wbAccounts.toast.autoCheckinLoadFail": "Failed to load auto check-in config",
   "wbAccounts.toast.autoTravelLoadFail": "Failed to load auto travel config",
   "wbAccounts.toast.imported": "Account imported",
   "wbAccounts.toast.importFail": "Import failed",

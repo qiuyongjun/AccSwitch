@@ -319,6 +319,16 @@ pub fn account_meta_for(region: Region, acc: &Value) -> Value {
             obj.insert("nickname".to_string(), current_nickname_for(region, acc));
         }
     }
+    /* ★ 2026-11-19：本地「今日已签」台账（与 Trae 的 `checkin_ledger` 同位）。
+       - 只证「已签」：`false` 只代表台账里没有，不代表上游未签 —— 前端把它当**未知**，
+         由逐账号状态查询给真值（见 `useCheckinStatusFill`）；
+       - 跨重启：让打开账号页的第一帧就能画出已签，不必等一轮逐账号上游查询。 */
+    let checked_today = get_str(acc, "id")
+        .map(|id| crate::modules::checkin::checked_in_today_for(region).contains(&id))
+        .unwrap_or(false);
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("checkedToday".to_string(), json!(checked_today));
+    }
     meta
 }
 
@@ -727,6 +737,47 @@ mod tests {
         assert_eq!(meta["needsReloginReason"], "刷新失败");
         assert!(meta.get("access_token").is_none(), "不得泄露 token");
         assert!(meta.get("refresh_token").is_none(), "不得泄露 token");
+    }
+
+    /// 账号列表要带出**本地今日已签台账**（跨重启初值），且按 region 分家。
+    ///
+    /// 可证伪：删掉 `account_meta_for` 里那次 `checked_in_today_for` ⇒ 首条断言红；
+    /// 忽略 `region`（总是读 CN 台账）⇒ 国际版那条红。
+    #[test]
+    fn account_meta_for_exposes_today_ledger_per_region() {
+        let dir = std::env::temp_dir().join(format!(
+            "wb-account-meta-ledger-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("创建隔离目录");
+        let _guard = crate::modules::config::HomeOverrideGuard::set(&dir);
+
+        crate::modules::checkin::mark_checked_in_for(
+            crate::modules::region::Region::Cn,
+            "acc-checked",
+        );
+        let checked = account_meta_for(
+            crate::modules::region::Region::Cn,
+            &json!({"id": "acc-checked"}),
+        );
+        assert_eq!(checked["checkedToday"], true);
+        let unchecked = account_meta_for(
+            crate::modules::region::Region::Cn,
+            &json!({"id": "acc-other"}),
+        );
+        assert_eq!(
+            unchecked["checkedToday"], false,
+            "台账未命中只写 false（= 未知），绝不编造已签"
+        );
+        // 国际版没有签到通道、且台账按 region 分家 ⇒ 不得借到 CN 的已签记录。
+        let global = account_meta_for(
+            crate::modules::region::Region::Global,
+            &json!({"id": "acc-checked"}),
+        );
+        assert_eq!(global["checkedToday"], false, "国际版不得借用 CN 台账");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 明文回落链的**优先级**（不碰磁盘的那几档）。

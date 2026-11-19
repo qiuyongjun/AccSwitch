@@ -92,10 +92,10 @@ import { formatDate } from "@/lib/format";
 import { regionDescriptor } from "@/lib/region";
 import { scopeOf } from "@/lib/scope";
 import { useRefreshAction } from "@/lib/use-refresh-action";
+import { useCheckinStatusFill } from "@/lib/use-checkin-status-fill";
 import type {
   AccountMeta,
   AppStatus,
-  CheckinConfig,
   CheckinLog,
   CodeBuddyCliStatus,
   CodeBuddyCnIdeStatus,
@@ -202,7 +202,10 @@ async function fetchTodayCheckinMap(
   if (isStale?.()) return {};
   const next: Record<string, boolean> = {};
   for (const [id, entry] of Object.entries(entries)) {
-    if (entry.ok) next[id] = entry.todayCheckedIn;
+    // 只有**明确布尔**才算读数：上游成功但没给「今天签没签」时是 `null` ⇒ 保持未知。
+    if (entry.ok && typeof entry.todayCheckedIn === "boolean") {
+      next[id] = entry.todayCheckedIn;
+    }
   }
   return next;
 }
@@ -422,17 +425,46 @@ function RegionPanel({ region }: { region: Region }) {
     client: SwitchClient;
   } | null>(null);
   const [importing, setImporting] = useState(false);
+  /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
+  const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
   /**
-   * 自动签到 / 自动旅行的**配置读取**（开关本身只在设置页操作，见 `SettingsPage`）。
+   * 自动旅行的**配置读取**（开关本身只在设置页操作，见 `SettingsPage`）。
    *
    * ⚠️ 这里只读不写：列表页需要 `enabled` 来决定「要不要发被动请求」（首查与 60 秒轮询）。
    * 2026-10-23 删除了本页的写入路径 —— 添加抽屉的「更多操作」整块移除后，
    * 页面里已没有开关入口，留着 `onAutoCheckinChange` / `onAutoTravelChange` 就是死代码。
+   *
+   * ★ 2026-11-19：自动签到配置**不再**在本页读取 —— 签到状态的只读取数已与
+   * 「自动领取」的开关解耦（见下方 `useCheckinStatusFill`），这里只剩旅行。
    */
-  const [autoCheckinConfig, setAutoCheckinConfig] = useState<CheckinConfig | null>(null);
-  /** 账号 id -> 今日是否已签到（undefined=查询中/未知） */
-  const [checkinMap, setCheckinMap] = useState<Record<string, boolean>>({});
   const [autoTravelConfig, setAutoTravelConfig] = useState<TravelConfig | null>(null);
+
+  /**
+   * 本地「今日已签」台账 → 签到初值（跨重启，第一帧就画得出「已签到」）。
+   *
+   * 后端把台账放在账号元数据的 `checkedToday` 里；这里只补 `undefined`：
+   * 本会话里上游已经答过（含明确「未签」）就以它为准 —— 台账只证已签，
+   * 不能覆盖更新的上游事实。`checkedToday === false` 一律不写：那是「台账没记录」，
+   * 不是「今日未签」。
+   */
+  useEffect(() => {
+    const ledgerChecked = accounts
+      .filter((account) => account.checkedToday === true)
+      .map((account) => account.id);
+    if (ledgerChecked.length === 0) return;
+    setCheckinMap((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of ledgerChecked) {
+        if (next[id] === undefined) {
+          next[id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [accounts]);
+
   /**
    * 账号切换 / 账号列表展示配置（全局单份，不随 region 分家）。
    *
@@ -1504,23 +1536,6 @@ function RegionPanel({ region }: { region: Region }) {
   useEffect(() => {
     let cancelled = false;
     void api
-      .getAutoCheckinConfig()
-      .then((config) => {
-        if (!cancelled) setAutoCheckinConfig(config);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          toast.error(t("wbAccounts.toast.autoCheckinLoadFail"), { description: api.asError(e) });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void api
       .getAutoTravelConfig()
       .then((config) => {
         if (!cancelled) setAutoTravelConfig(config);
@@ -1655,27 +1670,34 @@ function RegionPanel({ region }: { region: Region }) {
     void refreshRegionStatus(region);
   }, [refreshRegionStatus, region]);
 
-  // 账号列表变化后并行查询各账号今日签到状态。
+  // 账号列表变化后补一次今日签到状态（**只读**，三端共用 `useCheckinStatusFill`）。
   //
-  // 这是一次「被动请求」：用户没点任何东西，是我们自己发起的批量查询，所以必须受自动签到开关约束 ——
-  // 开关关掉后还继续查，只会白白消耗上游额度、制造噪声。
-  // `autoCheckinConfig` 为 `null` 表示配置还没读回来，此时同样不发：拿一个「尚未读到」的状态当默认值，
-  // 会在开关实际为关的机器上先误发一轮，等配置回来才停 —— 已经产生的请求收不回来，违背开关本意。
-  // 依赖里带上 `enabled`，开关切换后 effect 才会重跑：开→关立即停，关→开立即补一次。
-  useEffect(() => {
-    if (!autoCheckinConfig?.enabled) return;
-    if (!accountIdsKey) return;
-    let cancelled = false;
-    void fetchTodayCheckinMap(accountIdsKey.split(","), region, () => cancelled).then((next) => {
-      if (!cancelled && Object.keys(next).length > 0) {
-        setCheckinMap((prev) => ({ ...prev, ...next }));
+  // ★ 2026-11-19（三端口径统一）：不再受自动签到开关约束 —— 开关管的是「自动领取」
+  // （写操作），而签到状态是页面必须展示的只读读数；积分读取本来就不受开关约束。
+  // 旧实现的后果是：开关关着的机器打开账号页**完全没有签到状态**，只能手点刷新才看到。
+  // 补取本身仍有成本边界：每个账号每次挂载最多一次、分片 50、失败静默。
+  const checkinFillIds = useMemo(
+    () => (accountIdsKey ? accountIdsKey.split(",") : []),
+    [accountIdsKey],
+  );
+  useCheckinStatusFill({
+    /* 国际版没有签到通道（后端直接回「该版本暂不支持」）⇒ 不做必失败的请求。 */
+    enabled: region === "cn" && checkinFillIds.length > 0,
+    ids: checkinFillIds,
+    scopeKey: region,
+    /* 已确认「今日已签」的账号不再问；未签 / 未知都要问一次真值。 */
+    needsFetch: (id) => checkinMap[id] !== true,
+    fetchMap: (ids) => api.getCheckinStatusMap(ids, region),
+    onEntries: (entries) => {
+      /* 只收**布尔**事实：上游成功但没给「今天签没签」时后端返回 `null` ⇒ 保持未知，
+         不写 `false`（写进去就会在界面上变成「今日未签到」）。 */
+      const next: Record<string, boolean> = {};
+      for (const [id, entry] of Object.entries(entries)) {
+        if (typeof entry.todayCheckedIn === "boolean") next[id] = entry.todayCheckedIn;
       }
-    });
-    return () => {
-      cancelled = true;
-    };
-    // 依赖 id 串而不是数组：回读账号库产生的新数组不该重放这一轮上游查询。
-  }, [accountIdsKey, region, autoCheckinConfig?.enabled]);
+      if (Object.keys(next).length > 0) setCheckinMap((prev) => ({ ...prev, ...next }));
+    },
+  });
 
   /**
    * 批量扫一次成长任务摘要（卡片提示标签）。
@@ -1937,8 +1959,9 @@ function RegionPanel({ region }: { region: Region }) {
       // 刷新该账号的今日签到状态
       try {
         const st = await api.getCheckinStatus(a.id, region);
-        if (st.ok) {
-          setCheckinMap((prev) => ({ ...prev, [a.id]: st.todayCheckedIn }));
+        if (st.ok && typeof st.todayCheckedIn === "boolean") {
+          const todayCheckedIn = st.todayCheckedIn;
+          setCheckinMap((prev) => ({ ...prev, [a.id]: todayCheckedIn }));
           /* ★ 2026-10-23：抽屉「签到」页签现在**自带签到按钮**，所以详情缓存也必须跟着更新 ——
              只写 `checkinMap` 的话，刚签完的账号在抽屉里仍显示「未签到」，
              按钮还留在原地（点了会得到「今天已签到」）。 */
@@ -3993,14 +4016,14 @@ function RegionPanel({ region }: { region: Region }) {
         /* 跑完任务后刷**这一张卡**的提示标签（不重扫全表）。 */
         onGrowthTasksChanged={detail ? () => void refreshGrowthHint(detail.id) : undefined}
         // ★ B5：签到积分（**有数据才渲染**；查询未回来 / 失败时为 `null`）。
-        checkin={
-          detail && checkinDetailMap[detail.id]
-            ? {
-                todayCheckedIn: checkinDetailMap[detail.id].todayCheckedIn,
-                ...checkinCreditsOf(checkinDetailMap[detail.id]),
-              }
-            : null
-        }
+        checkin={(() => {
+          if (!detail) return null;
+          const entry = checkinDetailMap[detail.id];
+          /* `todayCheckedIn` 为 `null`（上游没回答）⇒ 整块按「未知」处理（不传 pack），
+             否则抽屉会把「读不到」画成「未签到」。 */
+          if (!entry || typeof entry.todayCheckedIn !== "boolean") return null;
+          return { todayCheckedIn: entry.todayCheckedIn, ...checkinCreditsOf(entry) };
+        })()}
         remark={detail ? displayText(detail.remark)?.trim() || "" : ""}
         onSaveRemark={detail ? (remark) => onSaveRemark(detail, remark) : undefined}
         autoEditRemark={detailAutoEditRemark}

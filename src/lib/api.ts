@@ -1610,14 +1610,20 @@ export function revealAppInFinder(): Promise<void> {
 
 export async function getCheckinStatus(accountId: string, region?: Region): Promise<{
   ok: boolean;
-  todayCheckedIn: boolean;
+  /**
+   * ★ 2026-11-19：`null` = **上游成功但没回答「今天签没签」**（字段缺失）。
+   *
+   * 这一档必须与 `false`（明确未签）分开：把它当 `false` 会让「不知道」画成
+   * 「今日未签到」——WorkBuddy 侧此前正是这样（后端 `unwrap_or(false)`）。
+   */
+  todayCheckedIn: boolean | null;
   error?: string;
   raw?: unknown;
 }> {
   if (demoModeEnabled) {
     return screenshotDemoResponse("get_checkin_status", { accountId, ...regionArg(region) }) as {
       ok: boolean;
-      todayCheckedIn: boolean;
+      todayCheckedIn: boolean | null;
       error?: string;
       raw?: unknown;
     };
@@ -1629,7 +1635,7 @@ export async function getCheckinStatus(accountId: string, region?: Region): Prom
         accountId: string;
         email: string;
         ok: boolean;
-        todayCheckedIn: boolean;
+        todayCheckedIn: boolean | null;
         error?: string;
         raw?: unknown;
       }[];
@@ -1655,7 +1661,14 @@ export async function getCheckinStatus(accountId: string, region?: Region): Prom
 /** 单个账号的签到状态条目。 */
 export type CheckinStatusEntry = {
   ok: boolean;
-  todayCheckedIn: boolean;
+  /**
+   * 今日是否已签到。
+   *
+   * `null` = 上游**成功但没回答**（字段缺失）—— 与 `false`（明确未签）必须分开：
+   * 前者是「不知道」，展示层不得画成「未签到」。Trae / Qoder 的后端总会给出布尔，
+   * 只有 WorkBuddy 的旧端点可能缺字段。
+   */
+  todayCheckedIn: boolean | null;
   error?: string;
   /**
    * ★ B5：上游的**积分数据**（此前只透传 `raw`，前端无从展示「逐条 +N」）。

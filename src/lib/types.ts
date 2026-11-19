@@ -43,6 +43,14 @@ export interface AccountMeta {
    * 与 `remark` 同为**本地标注**：后端原样透传，未设置时为 `null` 或缺失。
    */
   groupName?: string | null;
+  /**
+   * 本地「今日已签」台账（后端 `checkin_ledger.json`）：只证**已签**，不证未签。
+   *
+   * `true` ⇒ 今日确认签过（本工具签的，或上游曾明确回答已签），可直接画「已签到」；
+   * `false`/缺省 ⇒ **未知**（用户可能在客户端里签到过）—— 看上游逐账号查询的结果，
+   * 不得把它当「今日未签到」。
+   */
+  checkedToday?: boolean;
   /** 该账号所属版本（后端 region 化后返回；缺省视为 "cn"）。 */
   region?: Region;
 }
