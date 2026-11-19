@@ -2293,7 +2293,13 @@ check("★ 页面反馈：写操作必有 toast · 单条不摆结果条 · 进�
       );
     }
   }
-  return "签到必有 toast（三端）· 单条不摆结果条 · 页头进度仅在无勾选时渲染";
+  /* 单条不摆结果条：Qoder 的 `setCheckinResult` 必须被「多条 / 重试续跑」守卫，
+     否则一次单账号签到就占掉整条页面位置，且与刚弹的 toast 重复（§1.12 规则 2）。 */
+  const qoder = stripComments(readCode("src/pages/QoderAccountsPage.tsx"));
+  if (!/if \(targets\.length > 1 \|\| baseOk > 0\) \{\s*setCheckinResult\(/.test(qoder)) {
+    throw new Error("Qoder 的单条签到又会写结果条 —— 单条只给 toast（§1.12 规则 2）");
+  }
+  return "签到必有结果级 toast（三端）· 单条不摆结果条 · 页头进度仅在无勾选时渲染";
 });
 
 check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {

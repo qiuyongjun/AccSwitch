@@ -1542,14 +1542,19 @@ function QoderAccountsPanel({
         }
         return next;
       });
-      setCheckinResult({
-        okCount: ok,
-        earned,
-        disabled,
-        notStarted,
-        failed,
-        unprocessed,
-      });
+      /* ★ §1.12 规则 2：**单条不摆结果条** —— 一屏放一条结果不值，且抽屉打开时它根本看不见
+         （回执由下面的 toast 承担）。`baseOk > 0` 是「只重试失败项」的续跑：那时结果条已是
+         这一批的记录，必须继续更新，不能停在上一轮的计数上。 */
+      if (targets.length > 1 || baseOk > 0) {
+        setCheckinResult({
+          okCount: ok,
+          earned,
+          disabled,
+          notStarted,
+          failed,
+          unprocessed,
+        });
+      }
       /* ★ 2026-11-19（用户报障「三个客户端的页面通知方式不统一」）：签到此前**只有结果条**，
          而结果条渲染在工作台工具栏与列表之间 —— 抽屉一打开就被压在下面，
          「在抽屉里点签到」等于没有任何回执。这里补 toast（单条报账号名、批量报数量），
@@ -1577,6 +1582,8 @@ function QoderAccountsPanel({
         } else if (failed.length > 0) {
           toast.error(t("qoder.page.accounts.checkin.failed", { name }), {
             description: firstError,
+            /* 单条没有结果条 ⇒ 重试出口必须跟着 toast 走（批量仍走结果条里的「重试失败项」）。 */
+            action: { label: t("shared.checkinResult.retryFailed"), onClick: () => void runCheckin([single]) },
           });
         } else if (disabled.length > 0) {
           toast.warning(t("qoder.page.accounts.checkin.disabled"));
@@ -2831,7 +2838,9 @@ function QoderAccountsPanel({
         {/* ★ 2026-10-26（用户要求）：页头补「一键刷新 / 一键签到」，与 WB / Trae 同位置、
             同控件、同冷却。一键作用于**全部账号**且只做只读刷新 / 自动跳过已签；
             删除等破坏性动作仍只在勾选后的批量条。 */}
-        <div className="flex shrink-0 items-center gap-2">
+        {/* `flex-wrap` + `justify-end`：进度与「取消」是**临时**多出来的两个元素，
+            窄窗下必须能换行 —— 否则它们会把一键刷新 / 一键签到挤出可视区。 */}
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {/* ★ 2026-11-19（三端通知口径统一）：一键动作**不依赖勾选**，而批量条在无勾选时
               整块不渲染（`AccountBatchBar` 的 `selectedCount <= 0`）—— 此前「一键签到」
               跑十几秒页面上一句进度都没有。进度与取消在此渲染；有勾选时交给批量条里的
