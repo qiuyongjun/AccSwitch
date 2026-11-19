@@ -2294,9 +2294,10 @@ check("★ 页面反馈：写操作必有 toast · 单条不摆结果条 · 进�
     }
   }
   /* 单条不摆结果条：Qoder 的 `setCheckinResult` 必须被「多条 / 重试续跑」守卫，
-     否则一次单账号签到就占掉整条页面位置，且与刚弹的 toast 重复（§1.12 规则 2）。 */
+     否则一次单账号签到就占掉整条页面位置，且与刚弹的 toast 重复（§1.12 规则 2）。
+     `baseAlready` 同属续跑累计：只重试失败项时上一轮「今日已签」也要继续计入结果条。 */
   const qoder = stripComments(readCode("src/pages/QoderAccountsPage.tsx"));
-  if (!/if \(targets\.length > 1 \|\| baseOk > 0\) \{\s*setCheckinResult\(/.test(qoder)) {
+  if (!/if \(targets\.length > 1 \|\| baseOk > 0(?: \|\| baseAlready > 0)?\) \{\s*setCheckinResult\(/.test(qoder)) {
     throw new Error("Qoder 的单条签到又会写结果条 —— 单条只给 toast（§1.12 规则 2）");
   }
   return "签到必有结果级 toast（三端）· 单条不摆结果条 · 页头进度仅在无勾选时渲染";
@@ -2334,22 +2335,32 @@ check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 �
     throw new Error("Qoder `checkinLoaded` 又用缓存代替「本轮已尝试」—— 抽屉会与在途快照并发补取（spec §11）");
   }
   /* ★ 2026-11-16（spec §13）：首屏不得再依赖「区域快照一次成功」—— 缺读数的账号必须补一轮
-     逐账号查询，否则「打开没有、刷新才有」会复发；而「本区域未开放签到」必须整批跳过。 */
-  if (!/checkinFillAttempted/.test(qoder) || !/qoderCheckinStatusMap\(scope, uids\)/.test(qoder)) {
+     逐账号查询，否则「打开没有、刷新才有」会复发；而「本区域未开放签到」必须整批跳过。
+     2026-11-19：补取收敛到三端共用的 `useCheckinStatusFill`，断言跟着搬到调用点与实现。 */
+  const fillStart = qoder.indexOf("useCheckinStatusFill({");
+  if (fillStart < 0) {
     throw new Error("Qoder 首屏签到补取丢了 —— 区域快照全失败时卡片会一直停在「凭据可用」（spec §13）");
   }
-  if (!/if \(!checkinLoaded \|\| checkinUnavailable\) return;/.test(qoder)) {
+  const fillBlock = qoder.slice(fillStart, qoder.indexOf("});", fillStart));
+  if (!/enabled: checkinLoaded && !checkinUnavailable/.test(fillBlock)) {
     throw new Error("首屏签到补取没排除「本区域未开放签到」—— 会白发 N 次必失败的请求（spec §13）");
   }
-  const fillBlock = qoder.slice(
-    qoder.indexOf("const checkinFillAttempted"),
-    qoder.indexOf("}, [accounts, checkinEntryOf"),
-  );
+  if (!/fetchMap: \(uids\) => api\.qoderCheckinStatusMap\(scope, uids\)/.test(fillBlock)) {
+    throw new Error("Qoder 首屏签到补取没走逐账号查询 —— 区域快照全失败时卡片会一直停在「凭据可用」（spec §13）");
+  }
   if (
     !/checkinAutoFetching\.current\.add\(uid\)/.test(fillBlock) ||
     !/checkinAutoFetching\.current\.delete\(uid\)/.test(fillBlock)
   ) {
     throw new Error("首屏签到补取没与抽屉共用「在途」记账 —— 补齐窗口里点开抽屉会对同一账号重复打上游（spec §13）");
+  }
+  /* 共用 hook 自身要守住两条语义：每作用域每账号只试一次 · 读取失败不写成「今日未签到」。 */
+  const fillHook = stripComments(readCode("src/lib/use-checkin-status-fill.ts"));
+  if (!/attempted\.current\.has\(`\$\{scope\}:\$\{id\}`\)/.test(fillHook)) {
+    throw new Error("共用补取 hook 丢了「每作用域每账号一次」记账 —— 重渲染会变成重试风暴（spec §13）");
+  }
+  if (!/if \(!entry\?\.ok\) continue;/.test(fillHook)) {
+    throw new Error("共用补取 hook 又把读取失败写成了「今日未签到」（spec §13）");
   }
   const nativeBridge = stripComments(readCode("crates/buddy-switch-core/src/modules/qoder/native.rs"));
   if (!/PROBE_LOCK/.test(nativeBridge)) {
