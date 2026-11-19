@@ -453,7 +453,10 @@ mod tests {
     fn cached_value_treats_failure_as_a_hit_and_respects_force() {
         let region = QoderRegion::Cn;
         clear_cache();
-        cache().lock().unwrap().insert(region, (Instant::now(), None));
+        cache()
+            .lock()
+            .unwrap()
+            .insert(region, (Instant::now(), None));
         assert!(
             matches!(cached_value(region, false), Some(None)),
             "失败负缓存必须算命中（否则并发调用者会各拉一份组件）"
@@ -478,7 +481,7 @@ mod tests {
             "成功结果必须命中"
         );
         /* 过期语义：把时刻挪到负缓存 TTL 之前。刚开机不足 5 分钟的机器上构造不出
-           这个时刻，跳过这一条（不影响上面三条主断言）。 */
+        这个时刻，跳过这一条（不影响上面三条主断言）。 */
         if let Some(stale) = Instant::now().checked_sub(NEGATIVE_TTL + Duration::from_secs(1)) {
             cache().lock().unwrap().insert(region, (stale, None));
             assert!(cached_value(region, false).is_none(), "负缓存必须会过期");

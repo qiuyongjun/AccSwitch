@@ -191,7 +191,6 @@ fn image_block_to_url(block: &Value) -> Option<String> {
     }
 }
 
-
 /// Anthropic 请求 → 上游（OpenAI 形态）请求体，**保留图片**。
 ///
 /// 与 [`to_upstream_request`] 的唯一差别：`image` block 转成 OpenAI 多模态

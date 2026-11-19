@@ -254,9 +254,9 @@ pub async fn messages_for_region(
                     //   的真实 `prompt_tokens` 要到末帧 —— 先用请求侧估算占位，
                     //   否则客户端（dsh / Claude Code）的「上下文占用」恒为 0%。
                     //   （#129 的 `with_failover` 未取：本分支无 failover 模块。）
-                    .with_estimated_input(crate::protocol::anthropic::estimate_input_tokens(
-                        &parsed,
-                    )),
+                    .with_estimated_input(
+                        crate::protocol::anthropic::estimate_input_tokens(&parsed),
+                    ),
                 )
             } else {
                 let text = relay::body_text_with_prefix(prefix, response).await;

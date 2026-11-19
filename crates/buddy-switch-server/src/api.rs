@@ -3403,10 +3403,13 @@ async fn api_gateway_set_key_policy(Json(body): Json<Value>) -> Response {
     use buddy_switch_gateway::apikey::KeyPolicy;
     let state = crate::gateway_host::shared_state();
     let id = body.get("id").and_then(Value::as_str).unwrap_or("");
-    let policy: KeyPolicy = match serde_json::from_value(body.get("policy").cloned().unwrap_or(Value::Null)) {
-        Ok(policy) => policy,
-        Err(error) => return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST),
-    };
+    let policy: KeyPolicy =
+        match serde_json::from_value(body.get("policy").cloned().unwrap_or(Value::Null)) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
+            }
+        };
     match state.keys.update_policy(id, policy) {
         Ok(()) => json_ok(json!({ "ok": true })),
         Err(error) => json_err(error, StatusCode::BAD_REQUEST),
@@ -3428,7 +3431,9 @@ async fn api_gateway_key_usage(RawQuery(query): RawQuery) -> Response {
         return json_err("API Key 不存在".to_string(), StatusCode::BAD_REQUEST);
     };
     let usage = state.key_usage.snapshot(&id);
-    let used = state.key_usage.used_for(&id, record.quota_unit, record.quota_period, now);
+    let used = state
+        .key_usage
+        .used_for(&id, record.quota_unit, record.quota_period, now);
     json_ok(json!({
         "ok": true,
         "keyId": id,
@@ -4511,14 +4516,13 @@ async fn api_trae_set_key_policy(Json(body): Json<Value>) -> Response {
     if id.is_empty() {
         return json_err("缺少 id".to_string(), StatusCode::BAD_REQUEST);
     }
-    let policy: KeyPolicy = match serde_json::from_value(
-        body.get("policy").cloned().unwrap_or(Value::Null),
-    ) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
-        }
-    };
+    let policy: KeyPolicy =
+        match serde_json::from_value(body.get("policy").cloned().unwrap_or(Value::Null)) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
+            }
+        };
     let state = crate::trae_gateway_host::shared_state();
     match state.key_store.update_policy(id, policy) {
         Ok(()) => json_ok(json!({ "ok": true })),
@@ -7316,14 +7320,13 @@ async fn api_unified_gateway_revoke_key(Json(body): Json<Value>) -> Response {
 async fn api_unified_gateway_set_key_policy(Json(body): Json<Value>) -> Response {
     use buddy_switch_gateway::apikey::KeyPolicy;
     let id = body.get("id").and_then(Value::as_str).unwrap_or("");
-    let policy: KeyPolicy = match serde_json::from_value(
-        body.get("policy").cloned().unwrap_or(Value::Null),
-    ) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
-        }
-    };
+    let policy: KeyPolicy =
+        match serde_json::from_value(body.get("policy").cloned().unwrap_or(Value::Null)) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
+            }
+        };
     match crate::unified_gateway_host::shared_state()
         .keys
         .update_policy(id, policy)
@@ -7343,9 +7346,10 @@ async fn api_unified_gateway_key_usage_all() -> Response {
     let mut rows = serde_json::Map::new();
     for record in state.keys.list() {
         let policy = record.policy();
-        let used = state
-            .key_usage
-            .used_for(&record.id, policy.quota_unit, policy.quota_period, now);
+        let used =
+            state
+                .key_usage
+                .used_for(&record.id, policy.quota_unit, policy.quota_period, now);
         let exceeded = matches!(
             buddy_switch_gateway::apikey::quota_verdict_for_policy(&policy, used),
             buddy_switch_gateway::apikey::QuotaVerdict::Exceeded { .. }
@@ -7800,9 +7804,8 @@ async fn api_qoder_web_desktop_only() -> Response {
 
 /// GET /api/qoder/web/proxy —— 读逐包出站代理配置（两个区域各一个 URL；空 = 直连）。
 async fn api_qoder_web_proxy_get() -> Response {
-    match serde_json::to_value(
-        buddy_switch_core::modules::qoder::web_proxy::WebProxyConfig::load(),
-    ) {
+    match serde_json::to_value(buddy_switch_core::modules::qoder::web_proxy::WebProxyConfig::load())
+    {
         Ok(value) => json_ok(value),
         Err(error) => json_err(error.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -8050,14 +8053,13 @@ async fn api_qoder_set_key_policy(Json(body): Json<Value>) -> Response {
     if id.is_empty() {
         return json_err("缺少 id".to_string(), StatusCode::BAD_REQUEST);
     }
-    let policy: KeyPolicy = match serde_json::from_value(
-        body.get("policy").cloned().unwrap_or(Value::Null),
-    ) {
-        Ok(policy) => policy,
-        Err(error) => {
-            return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
-        }
-    };
+    let policy: KeyPolicy =
+        match serde_json::from_value(body.get("policy").cloned().unwrap_or(Value::Null)) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return json_err(format!("策略字段不合法: {error}"), StatusCode::BAD_REQUEST)
+            }
+        };
     let state = crate::qoder_gateway_host::shared_state();
     match state.key_store.update_policy(id, policy) {
         Ok(()) => json_ok(json!({ "ok": true })),
@@ -8085,13 +8087,16 @@ async fn api_qoder_key_usage(RawQuery(query): RawQuery) -> Response {
         return json_err("API Key 不存在".to_string(), StatusCode::BAD_REQUEST);
     };
     // 掩码视图是 camelCase ⇒ 按字符串解析枚举（与前端同形态）。
-    let policy: buddy_switch_gateway::apikey::KeyPolicy =
-        match serde_json::from_value(row.clone()) {
-            Ok(policy) => policy,
-            Err(error) => {
-                return json_err(format!("策略字段异常: {error}"), StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        };
+    let policy: buddy_switch_gateway::apikey::KeyPolicy = match serde_json::from_value(row.clone())
+    {
+        Ok(policy) => policy,
+        Err(error) => {
+            return json_err(
+                format!("策略字段异常: {error}"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        }
+    };
     let usage = state.key_usage.snapshot(&id);
     let used = state
         .key_usage

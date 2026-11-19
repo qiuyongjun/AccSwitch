@@ -51,7 +51,9 @@ static MAP_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 取锁；持锁线程 panic 过也继续（毒化不应让设备标识永久不可用）。
 fn lock_map_writes() -> std::sync::MutexGuard<'static, ()> {
-    MAP_WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    MAP_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 一个账号的伪设备标识。

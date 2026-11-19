@@ -22,9 +22,7 @@ fn locks() -> &'static Mutex<HashMap<String, Arc<AsyncMutex<()>>>> {
 }
 
 fn lock_for(key: &str) -> Arc<AsyncMutex<()>> {
-    let mut guard = locks()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = locks().lock().unwrap_or_else(|poison| poison.into_inner());
     guard
         .entry(key.to_string())
         .or_insert_with(|| Arc::new(AsyncMutex::new(())))
@@ -36,9 +34,7 @@ fn release(key: &str, gate: &Arc<AsyncMutex<()>>) {
     if Arc::strong_count(gate) > EXPECTED_HOLDERS {
         return;
     }
-    let mut guard = locks()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let mut guard = locks().lock().unwrap_or_else(|poison| poison.into_inner());
     // 拿到表锁之前可能又有线程 clone 走了这一份，对表里那一份再确认一次，
     // 否则会摘掉别人正在持有的闸门（那人释放时用的还是旧 Arc，串行化就漏了）。
     if guard
@@ -107,11 +103,7 @@ mod tests {
             let barrier = barrier.clone();
             tasks.push(tokio::spawn(async move {
                 with_refresh_lock(key, move || async move {
-                    let joined = tokio::time::timeout(
-                        Duration::from_secs(1),
-                        barrier.wait(),
-                    )
-                    .await;
+                    let joined = tokio::time::timeout(Duration::from_secs(1), barrier.wait()).await;
                     assert!(joined.is_ok(), "异键不应互相阻塞：{key}");
                 })
                 .await;

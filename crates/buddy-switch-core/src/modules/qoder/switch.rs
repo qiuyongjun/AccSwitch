@@ -260,14 +260,7 @@ fn switch_account_for_with<F>(
 where
     F: FnMut(&str) -> bool,
 {
-    switch_account_impl(
-        region,
-        program,
-        uid,
-        SwitchOptions::default(),
-        None,
-        probe,
-    )
+    switch_account_impl(region, program, uid, SwitchOptions::default(), None, probe)
 }
 
 /// 切换的真实实现：`probe` 可注入，`progress` 可为空。

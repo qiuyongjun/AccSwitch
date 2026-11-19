@@ -488,7 +488,14 @@ pub fn pick<E: PoolEntryLike>(
         .values()
         .filter(|entry| {
             !input.tried.contains(entry.uid())
-                && selectable(*entry, policy, now_ms, input.model, input.excluded, input.allowed)
+                && selectable(
+                    *entry,
+                    policy,
+                    now_ms,
+                    input.model,
+                    input.excluded,
+                    input.allowed,
+                )
                 && input
                     .realm
                     .map(|wanted| entry.realm() == Some(wanted))
@@ -672,7 +679,15 @@ pub fn pick_with_preference<E: PoolEntryLike>(
 ) -> Option<String> {
     if let Some(uid) = preferred_uid {
         let preferred_usable = !input.tried.contains(uid)
-            && is_usable(entries, policy, uid, now_ms, input.model, input.excluded, input.allowed)
+            && is_usable(
+                entries,
+                policy,
+                uid,
+                now_ms,
+                input.model,
+                input.excluded,
+                input.allowed,
+            )
             && input
                 .realm
                 .map(|wanted| entries.get(uid).and_then(|entry| entry.realm()) == Some(wanted))
@@ -865,11 +880,7 @@ mod tests {
     /// 变异验证：去掉 `selectable()` 里的 `allowed` 判据 ⇒ 至少一个模式会选出 `b`。
     #[test]
     fn every_pick_mode_honours_the_allowlist() {
-        for mode in [
-            PickMode::Weighted,
-            PickMode::MaxCredits,
-            PickMode::Random,
-        ] {
+        for mode in [PickMode::Weighted, PickMode::MaxCredits, PickMode::Random] {
             let mut entries = entries_of(&["a", "b"]);
             let allowed = uid_set(&["a"]);
             let tried = HashSet::new();

@@ -141,15 +141,15 @@ pub async fn get_checkin_status_for(region: Region, account: &Value) -> Value {
     if code == 0 || code == 200 {
         let data = resp.get("data").cloned().unwrap_or_else(|| json!({}));
         /* ★ 2026-11-19：字段缺失 = **上游没回答**，必须给 `null` 而不是 `false`。
-           当 `false` 展示层会把「不知道」画成「今日未签到」（与「在客户端签过」冲突）。
-           写入判定不受影响：`decide_from_status` 只认 `Some(true)` 为「已签到」，
-           `null` 仍会尝试提交（上游会以 already 去重）。 */
+        当 `false` 展示层会把「不知道」画成「今日未签到」（与「在客户端签过」冲突）。
+        写入判定不受影响：`decide_from_status` 只认 `Some(true)` 为「已签到」，
+        `null` 仍会尝试提交（上游会以 already 去重）。 */
         let checked = data
             .get("today_checked_in")
             .or_else(|| data.get("todayCheckedIn"))
             .and_then(Value::as_bool);
         /* 上游明确「今天已签」是**可跨重启保留的事实** ⇒ 幂等落账，
-           让下次打开页面的第一帧就画得出「已签」（不必再等这一轮请求）。 */
+        让下次打开页面的第一帧就画得出「已签」（不必再等这一轮请求）。 */
         mark_ledger_if_checked(region, account, checked);
         return json!({
             "ok": true,
@@ -317,8 +317,8 @@ pub async fn checkin_account_for(region: Region, account: &Value) -> Value {
         None
     };
     /* ★ 2026-11-19：成功 / 上游回「已签」都要落台账 —— `already` 分支在
-       `decide_from_status` 处提前返回（那条路径的落账在状态查询里完成），
-       这里补的是「提交后才知道已签」这一档。 */
+    `decide_from_status` 处提前返回（那条路径的落账在状态查询里完成），
+    这里补的是「提交后才知道已签」这一档。 */
     if result != "error" {
         if let Some(id) = acc.get("id").and_then(Value::as_str) {
             mark_checked_in_for(region, id);
@@ -411,7 +411,10 @@ fn load_checkin_ledger_for(region: Region) -> CheckinLedger {
 
 /// 今日已签到账号集合（**只证已签**；未出现的账号不代表未签）。
 pub fn checked_in_today_for(region: Region) -> HashSet<String> {
-    load_checkin_ledger_for(region).checked_in.into_iter().collect()
+    load_checkin_ledger_for(region)
+        .checked_in
+        .into_iter()
+        .collect()
 }
 
 /// 记一笔「今日已签到」；幂等，国际版（无签到通道）直接忽略。

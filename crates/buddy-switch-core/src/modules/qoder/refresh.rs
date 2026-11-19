@@ -249,8 +249,9 @@ pub async fn ensure_access_for(region: QoderRegion, uid: &str) -> Result<String,
             .map_err(|error| format!("自动续期失败：{error}"))?;
         let refreshed = account::find_account_for(region, uid)
             .ok_or_else(|| "自动续期后账号已不存在".to_string())?;
-        usable_access(&refreshed, now)
-            .ok_or_else(|| "自动续期成功但没有取得可用的 access token，请重新登录或重新导入".to_string())
+        usable_access(&refreshed, now).ok_or_else(|| {
+            "自动续期成功但没有取得可用的 access token，请重新登录或重新导入".to_string()
+        })
     }
     .await;
 

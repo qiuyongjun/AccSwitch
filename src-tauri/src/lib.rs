@@ -364,7 +364,8 @@ pub fn run() {
                 tauri::async_runtime::spawn_blocking(|| {
                     for region in modules::qoder::region::QoderRegion::all() {
                         let file = modules::qoder::account::load_accounts_for(region);
-                        if let Some(uid) = file.accounts.first().map(|account| account.uid.clone()) {
+                        if let Some(uid) = file.accounts.first().map(|account| account.uid.clone())
+                        {
                             let _ = modules::qoder::native::cached_identity(region, &uid, false);
                         }
                     }

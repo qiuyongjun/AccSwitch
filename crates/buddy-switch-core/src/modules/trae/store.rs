@@ -36,9 +36,9 @@ pub fn read_json_checked<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, 
     let Some(text) = read_text_checked(path)? else {
         return Ok(None);
     };
-    serde_json::from_str(&text).map(Some).map_err(|error| {
-        format!("解析 {} 失败：{error}", path.display())
-    })
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("解析 {} 失败：{error}", path.display()))
 }
 
 /// 读取 JSON；文件缺失、为空、或解析失败一律回落 `T::default()`。

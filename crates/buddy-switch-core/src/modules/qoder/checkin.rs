@@ -513,7 +513,10 @@ fn normalize_campaign_claim(mut value: Value) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if let Some(map) = value.as_object_mut() {
-        map.insert("already".to_string(), json!(already_count > 0 || ledger_already));
+        map.insert(
+            "already".to_string(),
+            json!(already_count > 0 || ledger_already),
+        );
         map.insert("rewardCredits".to_string(), json!(earned));
         map.insert("claimedCount".to_string(), json!(claimed_count));
     }

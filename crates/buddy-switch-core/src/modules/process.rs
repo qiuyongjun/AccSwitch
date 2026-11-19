@@ -714,10 +714,8 @@ mod snapshot {
                             batch.pending += 1;
                         }
                         loop {
-                            let finished = state
-                                .batch
-                                .as_ref()
-                                .and_then(|batch| batch.result.clone());
+                            let finished =
+                                state.batch.as_ref().and_then(|batch| batch.result.clone());
                             if let Some(result) = finished {
                                 if let Some(batch) = state.batch.as_mut() {
                                     batch.pending -= 1;
@@ -2362,9 +2360,7 @@ fn close_image_inner(image: &str, timeout_secs: i64) -> Result<bool, String> {
         if wait_image_gone(image, 5.0) {
             return Ok(true);
         }
-        return Err(format!(
-            "无法关闭 {image} —— 请手动退出该客户端后重试"
-        ));
+        return Err(format!("无法关闭 {image} —— 请手动退出该客户端后重试"));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2379,9 +2375,7 @@ fn close_image_inner(image: &str, timeout_secs: i64) -> Result<bool, String> {
         if wait_image_gone(image, 5.0) {
             return Ok(true);
         }
-        Err(format!(
-            "无法关闭 {image} —— 请手动退出该客户端后重试"
-        ))
+        Err(format!("无法关闭 {image} —— 请手动退出该客户端后重试"))
     }
 }
 
@@ -3554,11 +3548,7 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
             2,
             "失败不得缓存：下一次必须重新枚举"
         );
-        assert_eq!(
-            engine.display().unwrap()[0].pid,
-            2,
-            "成功结果在 TTL 内复用"
-        );
+        assert_eq!(engine.display().unwrap()[0].pid, 2, "成功结果在 TTL 内复用");
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
@@ -3604,10 +3594,8 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = calls.clone();
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-        let release = std::sync::Arc::new((
-            std::sync::Mutex::new(false),
-            std::sync::Condvar::new(),
-        ));
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let release_in_engine = release.clone();
         let clock = FakeClock::new();
         let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
@@ -3651,10 +3639,8 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = calls.clone();
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-        let release = std::sync::Arc::new((
-            std::sync::Mutex::new(false),
-            std::sync::Condvar::new(),
-        ));
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let release_in_engine = release.clone();
         let clock = FakeClock::new();
         let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
@@ -3726,10 +3712,8 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = calls.clone();
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-        let release = std::sync::Arc::new((
-            std::sync::Mutex::new(false),
-            std::sync::Condvar::new(),
-        ));
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let release_in_engine = release.clone();
         let clock = FakeClock::new();
         let engine = std::sync::Arc::new(snapshot::SnapshotEngine::new(
@@ -3750,12 +3734,13 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
         ));
 
         let (tx, rx) = std::sync::mpsc::channel::<snapshot::SnapshotResult>();
-        let spawn_caller = |engine: std::sync::Arc<snapshot::SnapshotEngine>,
-                            tx: std::sync::mpsc::Sender<snapshot::SnapshotResult>| {
-            std::thread::spawn(move || {
-                tx.send(engine.display()).ok();
-            })
-        };
+        let spawn_caller =
+            |engine: std::sync::Arc<snapshot::SnapshotEngine>,
+             tx: std::sync::mpsc::Sender<snapshot::SnapshotResult>| {
+                std::thread::spawn(move || {
+                    tx.send(engine.display()).ok();
+                })
+            };
 
         spawn_caller(engine.clone(), tx.clone());
         started_rx.recv().expect("首批探测应已开始");
@@ -3807,7 +3792,12 @@ C:\\Users\\X\\Programs\\workbuddy-switch\\workbuddy-switch.exe
             "空输出必须报错（不能当成没有进程）"
         );
         assert!(
-            parse_tasklist_run(true, Some(0), b"INFO: No tasks are running which match the specified criteria.\n").is_err(),
+            parse_tasklist_run(
+                true,
+                Some(0),
+                b"INFO: No tasks are running which match the specified criteria.\n"
+            )
+            .is_err(),
             "只有 INFO 行 ⇒ 解析不出任何进程 ⇒ 报错"
         );
         assert!(

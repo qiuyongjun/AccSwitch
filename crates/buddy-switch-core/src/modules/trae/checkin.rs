@@ -537,9 +537,9 @@ where
             }
         }
         /* ★ 请求前自动续期：能续期就续期，不再要求用户先手动点「刷新 JWT」。
-           - 不可续期（无 refresh_token）⇒ 继续用旧 JWT，让 401 走原有的
-             SessionDead 标记（卡片据此提示重新登录）；
-           - 有材料但续期暂时失败 ⇒ 直接记失败，**不写永久 SessionDead**。 */
+        - 不可续期（无 refresh_token）⇒ 继续用旧 JWT，让 401 走原有的
+          SessionDead 标记（卡片据此提示重新登录）；
+        - 有材料但续期暂时失败 ⇒ 直接记失败，**不写永久 SessionDead**。 */
         let mut jwt_value = match account::ensure_jwt_for(variant, uid).await {
             Ok(jwt) => jwt,
             Err(error) if error.is_unrecoverable() => raw.jwt.clone(),
@@ -672,8 +672,8 @@ where
 
         let mut result = claim_with_retry(&jwt_value, &device_entry, options.retry).await;
         /* ★ 令牌被提前吊销（401 / 业务码 1001）⇒ 强制续期一次再试。
-           与 `ensure_jwt_for` 不同：这里不看 `exp` —— 上游可能因风控 / 会话作废，
-           让一个「还没到期」的 JWT 失效。续期失败才沿用原结果去分类（此时才提示重新登录）。 */
+        与 `ensure_jwt_for` 不同：这里不看 `exp` —— 上游可能因风控 / 会话作废，
+        让一个「还没到期」的 JWT 失效。续期失败才沿用原结果去分类（此时才提示重新登录）。 */
         if !result.ok
             && (result.http_status == 401 || result.code == Some(1001))
             && account::find_for(variant, uid)
@@ -886,11 +886,7 @@ fn status_entry(
 }
 
 /// 单账号预检 → 条目（IO 部分；投影逻辑见 [`status_entry`]）。
-async fn status_entry_for(
-    variant: TraeVariant,
-    uid: &str,
-    ledger_says_checked: bool,
-) -> Value {
+async fn status_entry_for(variant: TraeVariant, uid: &str, ledger_says_checked: bool) -> Value {
     let device_entry = match device::ensure_for_variant(variant, uid) {
         Ok(entry) => entry,
         Err(error) => {
@@ -904,17 +900,11 @@ async fn status_entry_for(
         }
     };
     /* 状态查询是只读的，但「查询前自动续期」是用户明确要求的能力：
-       否则本地导入 / 抓取得到的临期账号在卡片上只能显示「读不到」。 */
+    否则本地导入 / 抓取得到的临期账号在卡片上只能显示「读不到」。 */
     let jwt_value = match account::ensure_jwt_for(variant, uid).await {
         Ok(jwt) => jwt,
         Err(error) => {
-            return status_entry(
-                false,
-                None,
-                None,
-                ledger_says_checked,
-                &error.to_string(),
-            )
+            return status_entry(false, None, None, ledger_says_checked, &error.to_string())
         }
     };
     let probe = probe_status(&jwt_value, &device_entry).await;

@@ -210,10 +210,7 @@ pub fn save_accounts_for(region: QoderRegion, file: &AccountsFile) -> Result<(),
 ///
 /// 所有「读整份 → 改一条 → 写整份」的函数都必须从这里进去：直接裸调
 /// `load_accounts_checked_for` + `save_accounts_for` 仍会丢更新（两个调用之间没有互斥）。
-fn accounts_txn<T>(
-    region: QoderRegion,
-    f: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
+fn accounts_txn<T>(region: QoderRegion, f: impl FnMut() -> Result<T, String>) -> Result<T, String> {
     crate::modules::accounts_txn::with_txn(&paths::accounts_file_for(region), f)
 }
 
@@ -387,11 +384,7 @@ pub fn set_group_for(
     accounts_txn(region, || set_group_inner(region, uid, &group))
 }
 
-fn set_group_inner(
-    region: QoderRegion,
-    uid: &str,
-    group: &Option<String>,
-) -> Result<bool, String> {
+fn set_group_inner(region: QoderRegion, uid: &str, group: &Option<String>) -> Result<bool, String> {
     let mut file = load_accounts_checked_for(region)?;
     let Some(account) = file.accounts.iter_mut().find(|a| a.uid == uid) else {
         return Ok(false);
@@ -423,7 +416,9 @@ pub fn record_checkin_for(
     codes: &[(String, String)],
     blocked: &[(String, i64)],
 ) -> Result<bool, String> {
-    accounts_txn(region, || record_checkin_inner(region, uid, last_checkin, codes, blocked))
+    accounts_txn(region, || {
+        record_checkin_inner(region, uid, last_checkin, codes, blocked)
+    })
 }
 
 fn record_checkin_inner(
@@ -499,8 +494,8 @@ pub fn account_view(account: &RawAccount, region: QoderRegion) -> Value {
     let shape = account.credential_shape();
     let mismatched = matches!(account.region(), Some(other) if other != region);
     /* 本地签到台账：**只作初值与提示，不作判据**（上游 `claimStatus` 才是真值，
-       见 `checkin::campaign_entry`）。前端进页面时用 `lastCheckinToday` 画「今日已签」，
-       等用户点「刷新签到状态」再由上游覆盖 —— 与 Trae 的 `checkedToday` 同一口径。 */
+    见 `checkin::campaign_entry`）。前端进页面时用 `lastCheckinToday` 画「今日已签」，
+    等用户点「刷新签到状态」再由上游覆盖 —— 与 Trae 的 `checkedToday` 同一口径。 */
     let stamped_today = checkin_stamp_day(account) == Some(store::today().as_str());
     json!({
         "uid": account.uid,

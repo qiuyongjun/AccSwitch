@@ -1021,29 +1021,28 @@ pub async fn refresh_remaining_for_variant(
         Err(error) if error.is_unrecoverable() => account.jwt.clone(),
         Err(error) => return Err(error.to_string()),
     };
-    let (credits, expire_at, _purchased, packages) =
-        match calc_remaining_credits(&jwt_value).await {
-            Ok(value) => value,
-            Err(error) => {
-                /* 凭据被上游拒绝时要落**持久**状态：只弹一次 toast，用户关掉后
-                卡片上没有任何痕迹，等于什么都没发生。`SessionDead` 会让卡片
-                显示「需重新登录」，重新登录 / JWT 换新成功后由登录路径清除。
-                同时记下判定时的凭据指纹，换到新令牌后这条判定自动失效（#108 §P0-A）。 */
-                if error.is_credential_rejected() {
-                    let credential_exp =
-                        crate::modules::trae::jwt::parse(&jwt_value).exp_timestamp;
-                    save_cooldown_with_credential_for(
-                        variant,
-                        user_id,
-                        "SessionDead",
-                        -1,
-                        &error.to_string(),
-                        credential_exp,
-                    );
-                }
-                return Err(error.to_string());
+    let (credits, expire_at, _purchased, packages) = match calc_remaining_credits(&jwt_value).await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            /* 凭据被上游拒绝时要落**持久**状态：只弹一次 toast，用户关掉后
+            卡片上没有任何痕迹，等于什么都没发生。`SessionDead` 会让卡片
+            显示「需重新登录」，重新登录 / JWT 换新成功后由登录路径清除。
+            同时记下判定时的凭据指纹，换到新令牌后这条判定自动失效（#108 §P0-A）。 */
+            if error.is_credential_rejected() {
+                let credential_exp = crate::modules::trae::jwt::parse(&jwt_value).exp_timestamp;
+                save_cooldown_with_credential_for(
+                    variant,
+                    user_id,
+                    "SessionDead",
+                    -1,
+                    &error.to_string(),
+                    credential_exp,
+                );
             }
-        };
+            return Err(error.to_string());
+        }
+    };
     let mut remaining = load_remaining_for(variant);
     remaining.credits.insert(user_id.to_string(), credits);
     if let Some(expire_at) = expire_at {
@@ -1140,19 +1139,18 @@ pub async fn refresh_all_remaining_for(variant: TraeVariant) -> RefreshAllSummar
                 tasks.spawn(async move {
                     // 每个账号在查询前自动续期；不可续期才回退旧 JWT 让 401 去分类，
                     // 暂时性续期失败则直接作为普通失败返回（不写永久 SessionDead）。
-                    let jwt = match crate::modules::trae::account::ensure_jwt_for(variant, &uid)
-                        .await
-                    {
-                        Ok(jwt) => jwt,
-                        Err(error) if error.is_unrecoverable() => fallback_jwt.clone(),
-                        Err(error) => {
-                            return (
-                                index,
-                                Err(CalcCreditsError::Other(error.to_string())),
-                                fallback_jwt,
-                            )
-                        }
-                    };
+                    let jwt =
+                        match crate::modules::trae::account::ensure_jwt_for(variant, &uid).await {
+                            Ok(jwt) => jwt,
+                            Err(error) if error.is_unrecoverable() => fallback_jwt.clone(),
+                            Err(error) => {
+                                return (
+                                    index,
+                                    Err(CalcCreditsError::Other(error.to_string())),
+                                    fallback_jwt,
+                                )
+                            }
+                        };
                     let result = calc_remaining_credits(&jwt).await;
                     (index, result, jwt)
                 });

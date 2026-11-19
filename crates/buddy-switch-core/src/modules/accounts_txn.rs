@@ -214,7 +214,11 @@ mod tests {
             ensure_unchanged(&path)?;
             Ok::<_, String>(text)
         });
-        assert_eq!(outcome.unwrap(), "v2", "重试必须读到新内容，而不是复用旧快照");
+        assert_eq!(
+            outcome.unwrap(),
+            "v2",
+            "重试必须读到新内容，而不是复用旧快照"
+        );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
@@ -244,8 +248,14 @@ mod tests {
     fn different_files_use_different_gates() {
         let (dir_a, path_a) = isolated("gate-a");
         let (_dir_b, path_b) = isolated("gate-b");
-        assert!(!std::sync::Arc::ptr_eq(&gate_for(&path_a), &gate_for(&path_b)));
-        assert!(std::sync::Arc::ptr_eq(&gate_for(&path_a), &gate_for(&path_a)));
+        assert!(!std::sync::Arc::ptr_eq(
+            &gate_for(&path_a),
+            &gate_for(&path_b)
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &gate_for(&path_a),
+            &gate_for(&path_a)
+        ));
         drop(dir_a);
     }
 

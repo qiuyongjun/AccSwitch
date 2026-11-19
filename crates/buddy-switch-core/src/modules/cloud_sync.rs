@@ -165,7 +165,10 @@ fn resolve_target(url: &str) -> (String, Option<String>) {
         return (url.to_string(), None);
     }
     // 用户已经把 AccSwitch 目录本身填进来时不再套一层。
-    if url.trim_end_matches('/').ends_with(&format!("/{SYNC_DIR_NAME}")) {
+    if url
+        .trim_end_matches('/')
+        .ends_with(&format!("/{SYNC_DIR_NAME}"))
+    {
         return (format!("{url}{SYNC_FILE_NAME}"), None);
     }
     let dir = format!("{url}{SYNC_DIR_NAME}/");
@@ -178,20 +181,29 @@ async fn ensure_remote_dir(
     cfg: &SyncConfigFile,
     dir: &str,
 ) -> Result<(), String> {
-    let method = reqwest::Method::from_bytes(b"MKCOL").map_err(|_| "构造 MKCOL 请求失败".to_string())?;
+    let method =
+        reqwest::Method::from_bytes(b"MKCOL").map_err(|_| "构造 MKCOL 请求失败".to_string())?;
     let response = client
         .request(method, dir)
         .basic_auth(&cfg.username, Some(&cfg.password))
         .send()
         .await
-        .map_err(|error| format!("创建云端目录失败：{}", net::describe_transport_error(&error)))?;
+        .map_err(|error| {
+            format!(
+                "创建云端目录失败：{}",
+                net::describe_transport_error(&error)
+            )
+        })?;
     let status = response.status();
     if status.is_success() || status == reqwest::StatusCode::METHOD_NOT_ALLOWED {
         return Ok(());
     }
     let body: String = response.text().await.unwrap_or_default();
     let snippet: String = body.chars().take(200).collect();
-    Err(format!("创建云端目录失败：{}（HTTP {status}）{snippet}", status_hint(status)))
+    Err(format!(
+        "创建云端目录失败：{}（HTTP {status}）{snippet}",
+        status_hint(status)
+    ))
 }
 
 /// 记录最近一次成功上传 / 下载时间；失败不影响已完成的传输。
@@ -494,8 +506,7 @@ fn apply_payload(payload: &Value) -> Result<Value, String> {
             let mut local = (spec.read)(scope)?;
             let mut incoming = incoming.clone();
             let dropped = normalize_incoming(scope, &mut incoming);
-            let mut counts =
-                (spec.merge)(scope, &mut local, &incoming, ConflictPolicy::Overwrite);
+            let mut counts = (spec.merge)(scope, &mut local, &incoming, ConflictPolicy::Overwrite);
             counts.skipped += dropped;
             (spec.write)(scope, &local)?;
             Ok(counts)
@@ -579,8 +590,12 @@ mod tests {
         normalize_incoming(Scope::TraeCn, &mut incoming);
 
         let spec = section_by_id("accounts").expect("账号分区已注册");
-        let counts =
-            (spec.merge)(Scope::TraeCn, &mut local, &incoming, ConflictPolicy::Overwrite);
+        let counts = (spec.merge)(
+            Scope::TraeCn,
+            &mut local,
+            &incoming,
+            ConflictPolicy::Overwrite,
+        );
 
         assert_eq!(counts.overwritten, 1);
         assert_eq!(local.as_array().map(|items| items.len()), Some(1));
@@ -608,7 +623,10 @@ mod tests {
         // 已带文件名的地址原样使用（允许自定义文件名）。
         assert_eq!(
             resolve_target("https://dav.jianguoyun.com/dav/custom.enc"),
-            ("https://dav.jianguoyun.com/dav/custom.enc".to_string(), None)
+            (
+                "https://dav.jianguoyun.com/dav/custom.enc".to_string(),
+                None
+            )
         );
     }
 

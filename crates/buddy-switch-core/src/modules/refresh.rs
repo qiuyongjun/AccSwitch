@@ -116,7 +116,9 @@ fn clear_refresh_failure(account: &mut Value) {
 /// 惰性刷新的判据：到期时间缺失 / 已过期 / 剩余不足 `lazy_hours`，且有 refresh token。
 fn is_refresh_due(account: &Value, lazy_hours: i64) -> bool {
     let stale = match account.get("expiresAt").and_then(Value::as_i64) {
-        Some(expires_at) => now_ms() >= expires_at || expires_at - now_ms() < lazy_hours * 3_600_000,
+        Some(expires_at) => {
+            now_ms() >= expires_at || expires_at - now_ms() < lazy_hours * 3_600_000
+        }
         None => true,
     };
     let has_refresh_token = !account
@@ -675,7 +677,10 @@ mod tests {
     #[test]
     fn transient_failure_keeps_credential_state() {
         let mut account = json!({"id": "a1", "needs_relogin": true});
-        mark_transient_failure(&mut account, "刷新失败(code=-1): connection reset".to_string());
+        mark_transient_failure(
+            &mut account,
+            "刷新失败(code=-1): connection reset".to_string(),
+        );
         assert_eq!(
             account["needs_relogin"],
             json!(true),

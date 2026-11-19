@@ -1232,8 +1232,8 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
     //   `view_only_list_is_not_a_success` 变红。
     let has_benefit = has_checkin_activity(&snapshot.items);
     // 今天是否已由本仓为该账号盖过章（上游领完会把活动撤掉 ⇒ 列表为空是**预期**）。
-    let stamped_today = account::checkin_stamp_day(&account)
-        .is_some_and(|day| day == store::today().as_str());
+    let stamped_today =
+        account::checkin_stamp_day(&account).is_some_and(|day| day == store::today().as_str());
     let blocked_map: BTreeMap<String, i64> = account.campaign_blocked_until.clone();
     let mut claimed: Vec<Value> = Vec::new();
     let mut already: Vec<Value> = Vec::new();
@@ -1348,7 +1348,9 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
     let message = if ledger_already {
         "今日已签到（本地台账：上游已收回签到活动）".to_string()
     } else {
-        checkin_message(&claimed, &already, &blocked, &pending, &locked, &errors, earned)
+        checkin_message(
+            &claimed, &already, &blocked, &pending, &locked, &errors, earned,
+        )
     };
     Ok(json!({
         // `disabled`（列表里根本没有签到活动）**不算成功** —— 与 de932d7 的

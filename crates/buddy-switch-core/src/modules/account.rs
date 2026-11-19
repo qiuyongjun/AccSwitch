@@ -320,9 +320,9 @@ pub fn account_meta_for(region: Region, acc: &Value) -> Value {
         }
     }
     /* ★ 2026-11-19：本地「今日已签」台账（与 Trae 的 `checkin_ledger` 同位）。
-       - 只证「已签」：`false` 只代表台账里没有，不代表上游未签 —— 前端把它当**未知**，
-         由逐账号状态查询给真值（见 `useCheckinStatusFill`）；
-       - 跨重启：让打开账号页的第一帧就能画出已签，不必等一轮逐账号上游查询。 */
+    - 只证「已签」：`false` 只代表台账里没有，不代表上游未签 —— 前端把它当**未知**，
+      由逐账号状态查询给真值（见 `useCheckinStatusFill`）；
+    - 跨重启：让打开账号页的第一帧就能画出已签，不必等一轮逐账号上游查询。 */
     let checked_today = get_str(acc, "id")
         .map(|id| crate::modules::checkin::checked_in_today_for(region).contains(&id))
         .unwrap_or(false);
@@ -745,10 +745,8 @@ mod tests {
     /// 忽略 `region`（总是读 CN 台账）⇒ 国际版那条红。
     #[test]
     fn account_meta_for_exposes_today_ledger_per_region() {
-        let dir = std::env::temp_dir().join(format!(
-            "wb-account-meta-ledger-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wb-account-meta-ledger-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("创建隔离目录");
         let _guard = crate::modules::config::HomeOverrideGuard::set(&dir);

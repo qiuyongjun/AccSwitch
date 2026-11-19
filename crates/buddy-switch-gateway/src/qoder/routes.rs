@@ -342,9 +342,7 @@ pub async fn chat_for_region(
         // ★ Qoder 上游只读 message content 里的结构化 `image_url` parts ⇒
         //   Anthropic 的 `image` block 必须转成多模态 part（否则图片被整条丢弃）。
         //   Trae / WB 未实测上游是否吃 parts，仍走 `adaptive`（默认丢图并在文本留痕）。
-        Protocol::Anthropic => {
-            crate::protocol::anthropic::to_upstream_request_with_images(&parsed)
-        }
+        Protocol::Anthropic => crate::protocol::anthropic::to_upstream_request_with_images(&parsed),
         Protocol::Responses => payload::responses_to_chat(&parsed),
     };
     let wants_stream = payload::wants_stream(&parsed);

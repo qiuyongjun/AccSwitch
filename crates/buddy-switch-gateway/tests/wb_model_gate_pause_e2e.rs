@@ -155,7 +155,8 @@ async fn paused_model_gate_returns_503_with_retry_after_instead_of_401() {
     {
         let mut pool = state.pool.write().await;
         assert!(
-            pool.admit_model("deepseek-v4-flash", now_ms, "probe-other").is_none(),
+            pool.admit_model("deepseek-v4-flash", now_ms, "probe-other")
+                .is_none(),
             "另一个模型不得被同一道闸门挡住"
         );
     }

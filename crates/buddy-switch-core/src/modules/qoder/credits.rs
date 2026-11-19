@@ -72,8 +72,8 @@ pub async fn region_view(region: QoderRegion, uids: Option<&[String]>) -> Value 
             uid: account.uid.clone(),
             name: account::display_name(account),
             /* 没有 access token 但**有刷新令牌 / PAT** 的账号也要进队列：
-               它们可以在请求前自动续期（本机导入的账号经常是这种形态）。
-               两样都没有才记为 None —— 那才是真的没办法。 */
+            它们可以在请求前自动续期（本机导入的账号经常是这种形态）。
+            两样都没有才记为 None —— 那才是真的没办法。 */
             token: account
                 .access_token
                 .clone()
@@ -85,9 +85,12 @@ pub async fn region_view(region: QoderRegion, uids: Option<&[String]>) -> Value 
         })
         .collect();
 
-    region_view_for_targets(region, targets, shared_query_gate(), move |uid, _token| async move {
-        fetch_account_with_renewal(region, &uid).await
-    })
+    region_view_for_targets(
+        region,
+        targets,
+        shared_query_gate(),
+        move |uid, _token| async move { fetch_account_with_renewal(region, &uid).await },
+    )
     .await
 }
 
@@ -101,7 +104,7 @@ pub async fn region_view(region: QoderRegion, uids: Option<&[String]>) -> Value 
 /// 不能续期才提示重新登录。
 async fn fetch_account_with_renewal(region: QoderRegion, uid: &str) -> AccountOutcome {
     /* 无条件预检：access token 非空也可能已过期（本机导入的常见形态）。
-       `ensure_access_for` 对可用 token 只读一次账号库、不发请求。 */
+    `ensure_access_for` 对可用 token 只读一次账号库、不发请求。 */
     let token = super::refresh::ensure_access_for(region, uid).await?;
     let outcome = fetch_account(
         || api::quota_usage(region, uid, &token),
@@ -417,11 +420,8 @@ mod tests {
             target("u1", Some("t")),
             target("u2", None),
         ];
-        let view = region_view_for_targets(
-            QoderRegion::Cn,
-            targets,
-            test_gate(),
-            move |uid, _token| {
+        let view =
+            region_view_for_targets(QoderRegion::Cn, targets, test_gate(), move |uid, _token| {
                 counted.fetch_add(1, Ordering::SeqCst);
                 async move {
                     if uid == "u1" {
@@ -430,9 +430,8 @@ mod tests {
                         Ok((quota(7), Some("Pro".to_string())))
                     }
                 }
-            },
-        )
-        .await;
+            })
+            .await;
 
         let accounts = view["accounts"].as_array().unwrap();
         assert_eq!(accounts.len(), 3);
