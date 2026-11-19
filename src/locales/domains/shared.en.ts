@@ -589,7 +589,8 @@ export const en = {
   // 2026-10-27: `shared.stat.plan` removed too — the Qoder drawer's subline now reports
   // expiry; the plan name only appears as the pack name in the Credits tab.
   "shared.drawer.close": "Close",
-  "shared.drawer.loading": "Loading details…",
+  /* 2026-11-19: `shared.drawer.loading` removed — the drawer no longer renders a block
+     skeleton (no caller passes `loading`); in-flight state is the header's “syncing…”. */
   // 2026-10-29: header subtitle is UID-only on all three platforms (the name used to be
   // duplicated from the title, and WB showed a masked email instead of the uid).
   "shared.drawer.subtitleUid": "UID · {uid}",

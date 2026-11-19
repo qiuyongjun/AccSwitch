@@ -657,7 +657,8 @@ export const zh = {
   // ★ 2026-10-27：`shared.stat.plan` 也已删 —— Qoder 的副行改报到期后，套餐名只剩
   //   积分页签的包名在用（`detailPacks.name`），不再需要这句。
   "shared.drawer.close": "关闭",
-  "shared.drawer.loading": "正在加载详情…",
+  /* ★ 2026-11-19：`shared.drawer.loading` 已删 —— 抽屉不再有区块骨架（三端都不传
+     `loading`），刷新中的提示归页头「正在同步…」。 */
   /* 头部副标题：**只显示 UID**（2026-10-29 用户要求）。
      此前三平台各写各的（WB 脱敏邮箱 / Trae、Qoder 的 `{name} · UID {uid}`），
      名称与标题重复、邮箱也不是 uid ⇒ 统一成这一句。 */

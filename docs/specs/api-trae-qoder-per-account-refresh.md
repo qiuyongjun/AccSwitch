@@ -334,7 +334,9 @@ Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `
   TTL / 失败重试 / 一键 / 单条）会让环境态在用户没动作时反复闪。
   两处配套改动：WB 页头判据补齐为 `loading || refreshingCredits || creditBusy`
   （`refreshingCredits` **只在 force 时置位**，非强制积分加载此前在任何地方都不可见）；
-  WB 抽屉不再用「积分在飞」当整块骨架（会把账号元信息 / 凭据一起藏掉，三端抽屉同形）。
+  WB 抽屉不再用「积分在飞」当整块骨架（会把账号元信息 / 凭据一起藏掉，三端抽屉同形）——
+  共享壳 `AccountDetailDrawer` 的 `loading` / `<Skeleton>` 分支随之删除（含词条
+  `shared.drawer.loading`），三个调用点都不许再传 `loading=`（`check:scope` 按整段 JSX 断言）。
 
 ### 12.2 积分刷新：单航班 + 失败重试窗口 + 状态清理
 

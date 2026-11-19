@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Skeleton } from "@/components/ui/skeleton";
 import { displayText } from "@/lib/display-text";
 import {
   isDrawerTab,
@@ -58,8 +57,11 @@ import { cn } from "@/lib/utils";
  *
  * ## 状态语言（PLAN §3.6）
  *
- * 区块**首次加载**用 `<Skeleton>`；空态用 `<EmptyState>`（四要素，出口由 `empty.action` 提供）。
- * 注意：`loading` 是**区块加载态**，不是按钮操作态 —— 按钮转圈归卡片，不进这里。
+ * 空态用 `<EmptyState>`（四要素，出口由 `empty.action` 提供）。
+ * ★ 2026-11-19：**没有区块骨架**了 —— 三个调用方都不再传 `loading`（它此前被用来表达
+ * 「这个号的积分在飞」，结果把账号元信息 / 凭据 / 状态这些**即时数据**一起盖成骨架）。
+ * 首屏与刷新中的提示归页头「正在同步…」（`components/sync-indicator.tsx` 的两条通道），
+ * 按钮级忙态归按钮自己。重新引入区块骨架前，先读那段权衡。
  */
 
 /**
@@ -262,8 +264,6 @@ export interface AccountDetailDrawerProps {
   subtitle: string;
   /** 头像底色种子（复用 `avatarTone`，与卡片同一套色板）。 */
   avatarSeed: string;
-  /** 区块加载中（首次打开、数据未就绪）→ `<Skeleton>`；**不是**按钮态。 */
-  loading?: boolean;
   /** 积分 / 资源包明细；空数组 = 不渲染该区块。 */
   packs?: DetailPack[];
   /**
@@ -476,7 +476,6 @@ export function AccountDetailDrawer({
   name,
   subtitle,
   avatarSeed,
-  loading = false,
   packs = [],
   packsNotice = null,
   refreshKinds = [],
@@ -707,8 +706,10 @@ export function AccountDetailDrawer({
             让每个直接子元素都不收缩，超出的部分交给 `overflow-y-auto` 滚动。 */}
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 [&>*]:shrink-0">
           {/* 指标块：一打开就知道「这个账号现在什么状态」，不用滚。
-              每块右上角的 ⟳ 与卡片「更多」里的刷新项**同一个回调**（同源，不是第二套实现）。 */}
-          {!loading && stats.length > 0 && (
+              每块右上角的 ⟳ 与卡片「更多」里的刷新项**同一个回调**（同源，不是第二套实现）。
+              ★ 2026-11-19：不再用 `!loading` 挡住它 —— 指标块正是「即时可见」的那部分，
+              取不到的位先写「—」，页头把「正在同步…」收掉时值自然就有了。 */}
+          {stats.length > 0 && (
             <div className="grid grid-cols-2 gap-2">
               {stats.map((stat) => {
                 const kindBusy = stat.refreshKind
@@ -903,15 +904,7 @@ export function AccountDetailDrawer({
             </section>
           )}
 
-          {loading ? (
-            // 区块级加载态：**不是**按钮态，所以用骨架屏而不是 Loader2。
-            <div className="space-y-3" aria-busy="true" aria-label={t("shared.drawer.loading")}>
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-14 w-full" />
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-14 w-full" />
-            </div>
-          ) : isEmpty ? (
+          {isEmpty ? (
             empty ? (
               <EmptyState
                 icon={Info}

@@ -2191,37 +2191,47 @@ check("★ 刷新提示只有两个通道：页头环境态 + 交互点因果态
      变异：① WB 页头判据退化成 `loading || refreshingCredits`（非强制积分刷新重新静默）；
      ② 任一页拿掉 `<SyncIndicator>`；③ 菜单项丢了「刷新中 / 已更新」两态；
      ④ 抽屉又用积分装载态当整块骨架 ⇒ 本条变红。 */
-  const files = {
-    wb: "src/pages/AccountsPage.tsx",
-    trae: "src/pages/TraeAccountsPage.tsx",
-    qoder: "src/pages/QoderAccountsPage.tsx",
-  };
-  for (const [name, file] of Object.entries(files)) {
-    if (!stripComments(readCode(file)).includes("<SyncIndicator")) {
+  const pages = [
+    ["WorkBuddy", "src/pages/AccountsPage.tsx"],
+    ["Trae", "src/pages/TraeAccountsPage.tsx"],
+    ["Qoder", "src/pages/QoderAccountsPage.tsx"],
+  ];
+  /** 页名 → 去注释源码（下面几条断言都要用，避免重复读盘）。 */
+  const sources = new Map();
+  for (const [name, file] of pages) {
+    const src = stripComments(readCode(file));
+    sources.set(file, src);
+    if (!src.includes("<SyncIndicator")) {
       throw new Error(`${name} 页头缺「正在同步…」—— 该端的刷新会变成完全静默`);
+    }
+    /* 抽屉的 `loading` 是**区块骨架**：拿「积分在飞」当判据会把账号元信息 / 凭据 /
+       状态一起盖住。按**行为**断言（整段 JSX 里不许出现 `loading=`），不按标识符断言
+       —— 否则把 `detailLoading` 内联成 `Boolean(detail && creditLoadingMap[detail.id])`
+       就能绕过去（实测过，能绕）。 */
+    const start = src.indexOf("<AccountDetailDrawer");
+    if (start < 0) throw new Error(`${name} 找不到 `<AccountDetailDrawer>` 调用块 —— 本条断言已失效`);
+    const end = src.indexOf("\n      />", start);
+    const call = end > start ? src.slice(start, end) : "";
+    if (!call) throw new Error(`${name} 的抽屉 JSX 闭合标记变了 —— 请按新结构重写本条断言`);
+    if (/\bloading=/.test(call)) {
+      throw new Error(`${name} 又给抽屉传了 \`loading\`（区块骨架）—— 积分在飞不该藏掉即时区块（2026-11-19 已撤）`);
     }
   }
 
-  const wb = stripComments(readCode(files.wb));
+  const wb = sources.get(pages[0][1]);
   /* 判据必须含「非强制积分加载」这一路：`refreshingCredits` 只在 force 时置位，
      TTL / 失败重试 / 首次挂载走 `creditLoadingMap`（`stores/accounts.ts`）。 */
-  if (!wb.includes("Object.values(creditLoadingMap).some(Boolean)")) {
-    throw new Error("WB 页头少了「任一账号积分在飞」的判据 —— 非强制刷新（TTL / 重试）会重新变得不可见");
+  if (!/const creditBusy = useMemo\([\s\S]{0,200}creditLoadingMap/.test(wb)) {
+    throw new Error("WB 页头少了「任一账号积分在飞」的判据（须由 creditLoadingMap 派生）—— 非强制刷新会重新不可见");
   }
-  if (!wb.includes("<SyncIndicator syncing={loading || refreshingCredits || creditBusy}")) {
-    throw new Error("WB 页头 `syncing` 未合并 `creditBusy` —— 三路判据缺一不可（2026-11-19）");
+  const syncingExpr = (/<SyncIndicator syncing=\{([^}]*)\}/.exec(wb) || [])[1] ?? "";
+  if (!syncingExpr) {
+    throw new Error("找不到 WB 页头 `SyncIndicator syncing={…}` 的表达式 —— 本条断言已失效，请按新结构重写");
   }
-  /* 抽屉的 `loading` 是**区块骨架**：拿积分在飞当判据会把账号元信息一起盖住。
-     按**行为**断言（整段 JSX 里不许出现 `loading=`），不按标识符断言 —— 否则把
-     `detailLoading` 内联成 `Boolean(detail && creditLoadingMap[detail.id])` 就能绕过。 */
-  const drawerStart = wb.indexOf("<AccountDetailDrawer");
-  const drawerEnd = drawerStart >= 0 ? wb.indexOf("\n      />", drawerStart) : -1;
-  const drawerCall = drawerEnd > drawerStart ? wb.slice(drawerStart, drawerEnd) : "";
-  if (!drawerCall) {
-    throw new Error("找不到账号页的 `<AccountDetailDrawer>` 调用块 —— 本条断言已失效，请按新结构重写");
-  }
-  if (/\bloading=/.test(drawerCall)) {
-    throw new Error("账号页又给抽屉传了 `loading`（区块骨架）—— 积分在飞不该藏掉即时区块（2026-11-19 已撤）");
+  for (const token of ["loading", "refreshingCredits", "creditBusy"]) {
+    if (!syncingExpr.includes(token)) {
+      throw new Error(`WB 页头 syncing 缺 \`${token}\` —— 三路判据缺一不可（2026-11-19）`);
+    }
   }
 
   /* 因果态不能一起消失：用户点了刷新，那一项必须自己回话。 */
