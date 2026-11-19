@@ -163,13 +163,13 @@ export const zh = {
   "wbAccounts.card.expiringTipTitle": "按到期时间分批（共 {n} 批）",
   "wbAccounts.card.expiringTipLine": "{time} · {amount} 积分",
   "wbAccounts.card.expiringTipMore": "… 其余 {n} 批",
-  // 指标行下面的凭据行（2026-10-26）：凭证 / 刷新令牌各自的到期时刻。
-  "wbAccounts.card.credentialExpiry": "凭证到期",
+  // 指标行下面的凭据行（2026-10-26）：凭据 / 刷新令牌各自的到期时刻。
+  "wbAccounts.card.credentialExpiry": "凭据到期",
   "wbAccounts.card.refreshTokenExpiry": "刷新令牌到期",
   // ★ 2026-10-26（用户反馈）：两项各补 tooltip —— 两个「到期」的后果不同：
-  //   凭证到期只是续期，刷新令牌到期才必须重新登录；并列在卡片上时更需要分清。
-  "wbAccounts.card.credentialExpiryTip": "登录凭证的到期时间；到期后可凭刷新令牌续期",
-  "wbAccounts.card.refreshTokenExpiryTip": "刷新令牌用于续期登录凭证；到期后需要重新登录该账号",
+  //   凭据到期只是续期，刷新令牌到期才必须重新登录；并列在卡片上时更需要分清。
+  "wbAccounts.card.credentialExpiryTip": "登录凭据的到期时间；到期后可凭刷新令牌续期",
+  "wbAccounts.card.refreshTokenExpiryTip": "刷新令牌用于续期登录凭据；到期后需要重新登录该账号",
   // 头部「当前登录」徽章（原型 `accountCard` :2502）：绑定任一程序位即为当前登录。
   "wbAccounts.card.currentLogin": "当前登录",
   // 卡片指标行（原型 `.acct-metrics` :2510）：`积分 1,240/2,000` · `今日 42.1K` · `2 分钟前`。
@@ -449,7 +449,7 @@ export const zh = {
   // 混进失败会让「只重试失败项」把未处理的漏掉（重试 action 已同时覆盖两者）。
   "wbAccounts.toast.batchCancelled": "已取消，{n} 个未处理",
   "wbAccounts.toast.batchCancelledToast": "已取消批量操作",
-  "wbAccounts.toast.quickRefreshDone": "一键刷新完成",
+  "wbAccounts.toast.quickRefreshDone": "已刷新 {n} 个账号",
   // ★ 2026-10-26（用户拍板）：范围 = **卡片上所有可见读数**（含凭据状态）。
   //   账号信息的刷新与顶栏 ⟳ 共用同一条命令，这是刻意的：卡片的「凭据到期」只有它能更新。
   //   今日 Token 不在范围内（卡片已不展示它）。
@@ -458,7 +458,7 @@ export const zh = {
   "wbAccounts.toast.quickRefreshTasksFailed": "已刷新 {n} 个账号，但任务完成情况刷新失败",
   // ★ 2026-11-10：一键刷新按**层**判定，积分失败不再被报成「已完成」。
   "wbAccounts.toast.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
-  "wbAccounts.toast.quickRefreshFail": "一键刷新失败",
+  "wbAccounts.toast.quickRefreshFail": "刷新失败",
   "wbAccounts.toast.quickRefreshCreditsFailed": "{failed} 个账号积分读取失败",
   "wbAccounts.toast.quickRefreshTravelFailed": "{failed} 个账号旅行状态读取失败",
   "wbAccounts.toast.quickRefreshTasksPartFailed": "任务完成情况刷新失败",
@@ -544,8 +544,8 @@ export const zh = {
   // ★ 2026-10-23：`wbAccounts.table.todayTokens` / `.expiry` / `.current` 已删除 ——
   //   列表随卡片瘦身（今日用量在统计页 / 详情抽屉；到期不再成列；「当前登录」直接复用
   //   `wbAccounts.card.currentLogin`）。见 P4-TOOLBAR-ARCH §1.8。
-  // ★ 2026-10-26：新增 `.credential` —— 卡片补了「凭证到期 · 刷新令牌到期」后，
-  //   2026-10-23 删列的前提（卡片不显示凭证到期）不再成立，表格同批补回一列。
+  // ★ 2026-10-26：新增 `.credential` —— 卡片补了「凭据到期 · 刷新令牌到期」后，
+  //   2026-10-23 删列的前提（卡片不显示凭据到期）不再成立，表格同批补回一列。
   //   列内两项文案复用卡片的 `card.credentialExpiry` / `card.refreshTokenExpiry`。
   "wbAccounts.table.credential": "凭据",
   "wbAccounts.table.programs": "程序位",

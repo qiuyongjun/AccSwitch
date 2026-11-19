@@ -1478,9 +1478,10 @@ function QoderAccountsPanel({
     try {
       const outcomes = await runBatch(runnable, async (account) => {
         try {
-          return await api.qoderCheckinClaim(scope, account.uid);
-        } catch {
-          return null;
+          return { result: await api.qoderCheckinClaim(scope, account.uid) };
+        } catch (e) {
+          /* 错误文本要留着：只报「失败」不给原因，用户不知道是该重试还是该去客户端。 */
+          return { error: api.asError(e) };
         }
       });
       const failed: FailedItem[] = [];
@@ -1493,6 +1494,11 @@ function QoderAccountsPanel({
       const checkedUids: string[] = [];
       let ok = baseOk;
       let earned = baseEarned;
+      /* ★ 本轮（**不含**重试累计的 `baseOk`）的计数：toast 只报这一轮，
+         否则「只重试失败项」会把上一轮的成果再加一遍。 */
+      let roundOk = 0;
+      let roundAlready = 0;
+      let firstError: string | undefined;
       outcomes.forEach((outcome, index) => {
         const account = runnable[index];
         /* 先按**目标索引**取结果：稠密数组里未执行项是 `undefined`，
@@ -1502,19 +1508,23 @@ function QoderAccountsPanel({
           unprocessed.push(item);
           return;
         }
-        if (!outcome) {
+        if ("error" in outcome) {
+          firstError ??= outcome.error;
           failed.push(item);
           return;
         }
-        if (outcome.ok) {
+        const claim = outcome.result;
+        if (claim.ok) {
           ok += 1;
           checkedUids.push(account.uid);
+          if (claim.already) roundAlready += 1;
+          else roundOk += 1;
           // 活动通道会带「真领到多少」；旧通道没这个字段 ⇒ 记 0，不编数。
-          earned += outcome.rewardCredits ?? 0;
-        } else if (outcome.disabled) disabled.push(item);
+          earned += claim.rewardCredits ?? 0;
+        } else if (claim.disabled) disabled.push(item);
         /* 后端也可能回 `notStarted` / `refreshing`（状态行还没刷新）：
            跳过，不算失败、不进重试。 */
-        else if (outcome.notStarted || outcome.refreshing) notStarted.push(item);
+        else if (claim.notStarted || claim.refreshing) notStarted.push(item);
         else failed.push(item);
       });
       for (const uid of checkedUids) markCheckinWrite(uid);
@@ -1540,6 +1550,54 @@ function QoderAccountsPanel({
         failed,
         unprocessed,
       });
+      /* ★ 2026-11-19（用户报障「三个客户端的页面通知方式不统一」）：签到此前**只有结果条**，
+         而结果条渲染在工作台工具栏与列表之间 —— 抽屉一打开就被压在下面，
+         「在抽屉里点签到」等于没有任何回执。这里补 toast（单条报账号名、批量报数量），
+         结果条**仍保留**：它承担「可回看 + 只重试失败项」，与 toast 不互相替代。 */
+      const okThisRound = roundOk + roundAlready;
+      const single = targets.length === 1 ? targets[0] : null;
+      const extras: string[] = [];
+      if (disabled.length > 0) {
+        extras.push(t("qoder.page.accounts.checkin.disabledPart", { n: String(disabled.length) }));
+      }
+      if (notStarted.length > 0) {
+        extras.push(t("shared.checkinResult.notStartedBadge", { n: String(notStarted.length) }));
+      }
+      if (unprocessed.length > 0) {
+        extras.push(t("shared.batch.cancelled", { n: String(unprocessed.length) }));
+      }
+      const description =
+        [...extras, ...(firstError ? [firstError] : [])].join(t("shared.punct.comma")) || undefined;
+      if (single) {
+        const name = qoderAccountName(single);
+        if (roundAlready > 0) {
+          toast.success(t("qoder.page.accounts.checkin.already", { name }));
+        } else if (roundOk > 0) {
+          toast.success(t("qoder.page.accounts.checkin.done", { name }));
+        } else if (failed.length > 0) {
+          toast.error(t("qoder.page.accounts.checkin.failed", { name }), {
+            description: firstError,
+          });
+        } else if (disabled.length > 0) {
+          toast.warning(t("qoder.page.accounts.checkin.disabled"));
+        }
+        /* `notStarted` / `refreshing` 的**单条**情形已在上方「全部跳过」分支提示过，不重复弹。 */
+      } else if (okThisRound > 0 && failed.length === 0 && unprocessed.length === 0) {
+        toast.success(t("qoder.page.accounts.checkin.batchDone", { n: String(okThisRound) }), {
+          description,
+        });
+      } else if (failed.length > 0) {
+        /* 一个都没签上 ⇒ error；部分成功 ⇒ warning。用同一句话报数量，不谎报成功。 */
+        const args = { ok: String(okThisRound), fail: String(failed.length) };
+        const text = t("qoder.page.accounts.checkin.batchPartial", args);
+        if (okThisRound === 0) toast.error(text, { description });
+        else toast.warning(text, { description });
+      } else if (disabled.length > 0) {
+        /* 全部「通道未开放」：既不是成功也不是失败，如实说清。 */
+        toast.warning(t("qoder.page.accounts.checkin.disabled"), { description });
+      } else if (unprocessed.length > 0) {
+        toast.info(t("shared.batch.cancelled", { n: String(unprocessed.length) }));
+      }
       /* 回读账号库：`lastCheckinToday` 是签到状态的**落盘初值**（重开页面时唯一的依据），
          签到成功后必须让它跟上，否则下次打开又变回「未知」。 */
       await reload();
@@ -1676,8 +1734,11 @@ function QoderAccountsPanel({
         ) +
         Number(accountsResult.status === "rejected" || !accountsResult.value);
       if (!aliveRef.current) return true;
-      if (failed === 0) toast.success(t("qoder.page.accounts.quickRefreshDone", { n: ids.length }));
-      else if (failed === 3) {
+      if (failed === 0) {
+        toast.success(t("qoder.page.accounts.quickRefreshDone", { n: ids.length }), {
+          description: t("qoder.page.accounts.quickRefreshScope"),
+        });
+      } else if (failed === 3) {
         toast.error(t("qoder.page.accounts.quickRefreshFail"));
       } else {
         toast.warning(t("qoder.page.accounts.quickRefreshPartial", { n: ids.length }));
@@ -2047,21 +2108,68 @@ function QoderAccountsPanel({
     const targets = selectedRows;
     if (targets.length === 0) return;
     setBusy(true);
+    const deleted: string[] = [];
+    try {
+      for (const account of targets) {
+        try {
+          await api.qoderDeleteAccount(scope, account.uid);
+          deleted.push(account.uid);
+        } catch {
+          /* 逐条失败不影响其余；下面按 deleted / 目标数报差集，不谎报「全部删除」。 */
+        }
+      }
+      const fail = targets.length - deleted.length;
+      setBatchDeleteOpen(false);
+      if (fail === 0) {
+        /* ★ 2026-11-19：与单条删除**同一个撤销出口**（`accountRestore`）—— 另两端
+           批量删除都给了撤销，只有 Qoder 此前只报「已删除 N 个」，与软删除语义不符。 */
+        toast.success(t("qoder.page.accounts.delete.done", { n: String(deleted.length) }), {
+          action: deleted.length > 0
+            ? { label: t("qoder.page.accounts.trash.undo"), onClick: () => void restoreAccounts(deleted) }
+            : undefined,
+        });
+      } else {
+        toast.error(
+          t("qoder.page.accounts.delete.partial", {
+            ok: String(deleted.length),
+            fail: String(fail),
+          }),
+          deleted.length > 0
+            ? {
+                action: {
+                  label: t("qoder.page.accounts.trash.undo"),
+                  onClick: () => void restoreAccounts(deleted),
+                },
+              }
+            : undefined,
+        );
+      }
+      setSelected(new Set());
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * 批量撤销：把刚删掉的账号从回收站恢复回来（与单条撤销同一条命令）。
+   *
+   * 逐条调、逐条计数：一个失败不该把其余已恢复的账号报成失败，也不该中断整批。
+   */
+  async function restoreAccounts(uids: string[]) {
     let ok = 0;
-    let fail = 0;
-    for (const account of targets) {
+    for (const uid of uids) {
       try {
-        await api.qoderDeleteAccount(scope, account.uid);
+        await api.accountRestore(scope, uid);
         ok += 1;
       } catch {
-        fail += 1;
+        /* 计数即可，逐个 toast 会把整屏刷满。 */
       }
     }
-    setBusy(false);
-    setBatchDeleteOpen(false);
-    if (fail === 0) toast.success(t("qoder.page.accounts.delete.done", { n: String(ok) }));
-    else toast.error(t("qoder.page.accounts.delete.partial", { ok: String(ok), fail: String(fail) }));
-    setSelected(new Set());
+    if (ok > 0) toast.success(t("qoder.page.accounts.trash.restoredMany", { n: String(ok) }));
+    if (ok < uids.length) {
+      toast.error(t("qoder.page.accounts.trash.restoreFailed", { n: String(uids.length - ok) }));
+    }
     await reload();
   }
 
@@ -2724,6 +2832,23 @@ function QoderAccountsPanel({
             同控件、同冷却。一键作用于**全部账号**且只做只读刷新 / 自动跳过已签；
             删除等破坏性动作仍只在勾选后的批量条。 */}
         <div className="flex shrink-0 items-center gap-2">
+          {/* ★ 2026-11-19（三端通知口径统一）：一键动作**不依赖勾选**，而批量条在无勾选时
+              整块不渲染（`AccountBatchBar` 的 `selectedCount <= 0`）—— 此前「一键签到」
+              跑十几秒页面上一句进度都没有。进度与取消在此渲染；有勾选时交给批量条里的
+              同一份，两处互斥，不重复画。 */}
+          {batchProgress && selected.size === 0 ? (
+            <>
+              <span className="text-[12px] tabular-nums text-muted-foreground">
+                {t("shared.batch.progress", {
+                  done: batchProgress.done,
+                  total: batchProgress.total,
+                })}
+              </span>
+              <Button type="button" variant="ghost" size="sm" onClick={cancelBatch}>
+                {t("shared.batch.cancel")}
+              </Button>
+            </>
+          ) : null}
           <QuickRefreshAction
             scope={scope}
             busy={quickBusy === "refresh"}

@@ -69,7 +69,8 @@ export const zh = {
   "qoder.page.accounts.toolbar.statusBucket.normal": "正常",
   "qoder.page.accounts.toolbar.statusBucket.noCredential": "无可用凭据",
   "qoder.page.accounts.toolbar.statusBucket.unrecognized": "凭据未识别",
-  "qoder.page.accounts.quickRefreshDone": "已刷新 {n} 个账号：积分 · 签到状态 · 凭证状态",
+  "qoder.page.accounts.quickRefreshDone": "已刷新 {n} 个账号",
+  "qoder.page.accounts.quickRefreshScope": "积分 · 签到状态 · 凭据状态",
   "qoder.page.accounts.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
   "qoder.page.accounts.quickRefreshFail": "刷新失败",
 
@@ -221,6 +222,8 @@ export const zh = {
 
   // ── 回收站（软删除）──
   "qoder.page.accounts.trash.restored": "已恢复 {name}",
+  "qoder.page.accounts.trash.restoredMany": "已恢复 {n} 个账号",
+  "qoder.page.accounts.trash.restoreFailed": "{n} 个账号恢复失败",
   "qoder.page.accounts.trash.undo": "撤销",
 
   // ── 签到 / 额度（后端早已就绪，此前无 UI 入口）──
@@ -301,6 +304,10 @@ export const zh = {
   "qoder.page.accounts.checkin.done": "{name} 签到成功",
   "qoder.page.accounts.checkin.batchDone": "已签到 {n} 个账号",
   "qoder.page.accounts.checkin.batchPartial": "成功 {ok} 个，失败 {fail} 个",
+  "qoder.page.accounts.checkin.failed": "{name} 签到失败",
+  // 「通道未开放」= 上游没给这个号下发签到活动（不是失败，也不是成功），点重试无用。
+  "qoder.page.accounts.checkin.disabled": "签到通道未开放",
+  "qoder.page.accounts.checkin.disabledPart": "{n} 个通道未开放",
   "qoder.page.accounts.checkin.resultOk": "签到成功 {n} 个",
   "qoder.page.accounts.checkin.resultFail": "签到失败 {n} 个",
   "qoder.page.accounts.refresh.done": "{name} 的令牌已刷新",

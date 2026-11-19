@@ -28,7 +28,8 @@ export const en = {
   // P4: labels for the minimal batch bar (composed via actionDone / actionFailed).
   "trae.page.accounts.actionBatchCheckin": "Batch check-in",
   "trae.page.accounts.actionRefreshCredits": "Refresh credits",
-  "trae.page.accounts.quickRefreshDone": "Refreshed {n} account(s): credits · check-in status · credential status",
+  "trae.page.accounts.quickRefreshDone": "Refreshed {n} account(s)",
+  "trae.page.accounts.quickRefreshScope": "Credits · check-in status · credential status",
   "trae.page.accounts.quickRefreshPartial": "Refreshed {n} account(s); some data did not update",
   "trae.page.accounts.quickRefreshFail": "Refresh failed",
   "trae.page.accounts.batchRefreshPartial": "{ok} succeeded, {failed} failed",

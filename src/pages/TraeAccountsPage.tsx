@@ -1826,7 +1826,9 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
          上游请求确实打过了，仍应进冷却，否则切回来可以立刻重刷。 */
       if (!aliveRef.current) return true;
       if (outcomes.every((outcome) => outcome === "ok")) {
-        toast.success(t("trae.page.accounts.quickRefreshDone", { n: ids.length }));
+        toast.success(t("trae.page.accounts.quickRefreshDone", { n: ids.length }), {
+          description: t("trae.page.accounts.quickRefreshScope"),
+        });
       } else if (outcomes.every((outcome) => outcome === "fail")) {
         toast.error(t("trae.page.accounts.quickRefreshFail"), {
           description: creditsFailureReason,
@@ -3179,6 +3181,22 @@ function TraeAccountsPanel({ variant }: { variant: TraeRegionId }) {
             同控件、同冷却（30 秒）。一键作用于**全部账号**且只做只读刷新 / 自动跳过已签，
             写操作与破坏性操作仍只在勾选后的批量条与单账号菜单里（PLAN §3.4 三作用域）。 */}
         <div className="flex shrink-0 items-center gap-2">
+          {/* ★ 2026-11-19（三端通知口径统一）：一键动作不依赖勾选，而批量条在无勾选时整块
+              不渲染 —— 「一键签到」此前跑十几秒没有一句进度。进度与取消在此渲染；
+              有勾选时交给批量条里的同一份，两处互斥。 */}
+          {batchProgress && selectedKeys.size === 0 ? (
+            <>
+              <span className="text-[12px] tabular-nums text-muted-foreground">
+                {t("shared.batch.progress", {
+                  done: batchProgress.done,
+                  total: batchProgress.total,
+                })}
+              </span>
+              <Button type="button" variant="ghost" size="sm" onClick={cancelBatch}>
+                {t("shared.batch.cancel")}
+              </Button>
+            </>
+          ) : null}
           <QuickRefreshAction
             scope={scope}
             busy={quickActionBusy === "refresh"}

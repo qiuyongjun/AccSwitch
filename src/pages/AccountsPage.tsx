@@ -1240,7 +1240,7 @@ function RegionPanel({ region }: { region: Region }) {
         ? t("wbAccounts.toast.quickRefreshScope", { n: ids.length })
         : t("wbAccounts.toast.quickRefreshScopeNoTasks", { n: ids.length });
       if (allOk) {
-        toast.success(t("wbAccounts.toast.quickRefreshDone"), { description });
+        toast.success(t("wbAccounts.toast.quickRefreshDone", { n: String(ids.length) }), { description });
       } else if (allFail) {
         toast.error(t("wbAccounts.toast.quickRefreshFail"), { description: failureReason });
       } else {
@@ -3298,8 +3298,11 @@ function RegionPanel({ region }: { region: Region }) {
         <div className="flex flex-wrap items-center gap-2">
           {/* ★ 批处理进度 + 取消：此前一轮 20 个账号的签到/续期只有一个转圈，
               用户既不知道到哪了、也没法停。进度只在「按账号循环」的动作里出现
-              （一键刷新是几个整批请求，没有可计数单位）。 */}
-          {bulkProgress ? (
+              （一键刷新是几个整批请求，没有可计数单位）。
+              ⚠️ 2026-11-19：**只在没有勾选时**渲染 —— 勾选后的批量条自己也渲染同一份
+              进度与取消（`AccountBatchBar` 的 `progress`/`onCancel`），两处同时画等于
+              同一句话出现两遍。一键动作不依赖勾选，走这里；勾选动作走批量条。 */}
+          {bulkProgress && selectedKeys.size === 0 ? (
             <>
               <span className="text-[12px] tabular-nums text-muted-foreground">
                 {t("shared.batch.progress", {

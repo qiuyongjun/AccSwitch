@@ -61,7 +61,8 @@ export const en = {
   "qoder.page.accounts.toolbar.statusBucket.normal": "Normal",
   "qoder.page.accounts.toolbar.statusBucket.noCredential": "No usable credential",
   "qoder.page.accounts.toolbar.statusBucket.unrecognized": "Credential unrecognized",
-  "qoder.page.accounts.quickRefreshDone": "Refreshed {n} account(s): credits · check-in status · credential status",
+  "qoder.page.accounts.quickRefreshDone": "Refreshed {n} account(s)",
+  "qoder.page.accounts.quickRefreshScope": "Credits · check-in status · credential status",
   "qoder.page.accounts.quickRefreshPartial": "Refreshed {n} account(s); some data did not update",
   "qoder.page.accounts.quickRefreshFail": "Refresh failed",
 
@@ -206,6 +207,8 @@ export const en = {
 
   // ── Recycle bin (soft delete) ──
   "qoder.page.accounts.trash.restored": "Restored {name}",
+  "qoder.page.accounts.trash.restoredMany": "Restored {n} accounts",
+  "qoder.page.accounts.trash.restoreFailed": "{n} accounts could not be restored",
   "qoder.page.accounts.trash.undo": "Undo",
 
   // ── Check-in / quota (backend was ready; there was no UI entry) ──
@@ -287,6 +290,11 @@ export const en = {
   "qoder.page.accounts.checkin.done": "{name} checked in",
   "qoder.page.accounts.checkin.batchDone": "Checked in {n} accounts",
   "qoder.page.accounts.checkin.batchPartial": "{ok} succeeded, {fail} failed",
+  "qoder.page.accounts.checkin.failed": "Check-in failed for {name}",
+  // “Channel unavailable” = upstream publishes no check-in activity for this account:
+  // neither failure nor success, and retrying never helps.
+  "qoder.page.accounts.checkin.disabled": "Check-in channel unavailable",
+  "qoder.page.accounts.checkin.disabledPart": "{n} unavailable",
   "qoder.page.accounts.checkin.resultOk": "{n} checked in",
   "qoder.page.accounts.checkin.resultFail": "{n} failed",
   "qoder.page.accounts.refresh.done": "Token refreshed for {name}",

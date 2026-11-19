@@ -39,7 +39,8 @@ export const zh = {
   "trae.page.accounts.actionRefreshCredits": "刷新积分",
   // ★ 2026-10-26：页头「一键刷新」回执 —— 与 WB 同一句式（「已刷新 N 个账号：…」），
   //   只是项少三项（Trae 没有旅行 / 成长任务，Token 不进卡片）。
-  "trae.page.accounts.quickRefreshDone": "已刷新 {n} 个账号：积分 · 签到状态 · 凭证状态",
+  "trae.page.accounts.quickRefreshDone": "已刷新 {n} 个账号",
+  "trae.page.accounts.quickRefreshScope": "积分 · 签到状态 · 凭据状态",
   "trae.page.accounts.quickRefreshPartial": "已刷新 {n} 个账号，部分数据未更新",
   "trae.page.accounts.quickRefreshFail": "刷新失败",
   // 勾选批量刷新积分：逐账号结果（成功 / 失败）—— 部分失败时不中断整批。
@@ -105,7 +106,7 @@ export const zh = {
   //    这里只保留仍被 `EmptyTraeCard` 引用的键。
   "trae.page.accounts.dataDirMissing": "（尚未生成，请先启动一次 Trae 并登录）",
   // ★ issue #136：目录在、storage.json 不在。与上一句是**两种不同状态**：
-  //   上一句是「连目录都没有」，本句是「目录有了但客户端从没写出设备凭证」。
+  //   上一句是「连目录都没有」，本句是「目录有了但客户端从没写出设备凭据」。
   "trae.page.accounts.storageJsonMissing": "（目录存在，但 storage.json 还没生成 —— 客户端从未完成首次登录）",
 
   // ---- 账号工具栏 ----

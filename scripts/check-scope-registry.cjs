@@ -1716,11 +1716,17 @@ check("★ Qoder 程序位 id 必须与**凭据来源 id 同源**（一事实一
 
 check("★ Qoder 签到结果**三档**：「通道未开放」既不算成功、也不进重试桶（issue #46 的 D 项）", () => {
   const page = stripComments(fs.readFileSync(path.join(ROOT, "src/pages/QoderAccountsPage.tsx"), "utf8"));
-  if (!/else if \(outcome\.disabled\)/.test(page)) {
+  /* ⚠️ 2026-11-19：`runCheckin` 的结果项从 `outcome` 改名为 `claim`（worker 现在返回
+     `{result} | {error}`，为了把失败原因带进 toast）⇒ 断言**不绑定局部变量名**，
+     只要求「`disabled` 走独立分支并进第三个桶」。 */
+  const disabledBranch = page.match(
+    /else if \([\w.]*\.disabled\)\s*(?:\{[^}]*\}|[\w.]*disabled\.push\(item\);)/,
+  );
+  if (!disabledBranch) {
     throw new Error("`runCheckin` 没有把 `disabled` 单独成档 —— 未开放会被混进成功或失败");
   }
-  if (!/outcome\.disabled\) disabled\.push\(item\)/.test(page)) {
-    throw new Error("`disabled` 必须进第三个桶（`disabled.push`），不能进 `failed`");
+  if (!/disabled\.push\(item\)/.test(disabledBranch[0]) || /failed\.push/.test(disabledBranch[0])) {
+    throw new Error("`disabled` 必须只进第三个桶（`disabled.push`），不能进 `failed`");
   }
   if (!/skippedNames: checkinResult\.disabled\.map/.test(page)) {
     throw new Error("第三档没有透传给结果条（`skippedNames`）");
@@ -2242,6 +2248,52 @@ check("★ 刷新提示只有两个通道：页头环境态 + 交互点因果态
     }
   }
   return "页头「正在同步…」覆盖全部加载（含非强制积分）· 三端都挂 · 卡片/抽屉不再各自转圈 · 因果态留在菜单项";
+});
+
+check("★ 页面反馈：写操作必有 toast · 单条不摆结果条 · 进度只画一处", () => {
+  /* 2026-11-19（用户报障「三个客户端的页面通知方式不统一」）后的约定，见
+     `docs/specs/P4-TOOLBAR-ARCH.md` §1.12。这里只钉**会被悄悄违反**的两条：
+     ① 写操作（签到 / 续期 / 删除）只更新结果条或状态、不弹 toast —— 抽屉一打开，
+        结果条就被压在下面，等于「点了没反应」（Qoder 签到的实际形态）；
+     ② 进度两处都画 / 一处都不画 —— WB 曾在页头与批量条各画一份，Qoder/Trae 则在
+        「一键」（不勾选）时一处都没有。
+     变异：删掉签到路径里的 toast / 去掉 `selected*.size === 0` 守卫 ⇒ 本条变红。 */
+  const checkinFns = [
+    ["WorkBuddy", "src/pages/AccountsPage.tsx", "async function onCheckin("],
+    ["Trae", "src/pages/TraeAccountsPage.tsx", "async function checkinOne("],
+    ["Qoder", "src/pages/QoderAccountsPage.tsx", "async function runCheckin("],
+  ];
+  for (const [name, file, marker] of checkinFns) {
+    const src = stripComments(readCode(file));
+    const start = src.indexOf(marker);
+    if (start < 0) throw new Error(`${name} 找不到 \`${marker}\` —— 本条断言已失效，请按新结构重写`);
+    /* 切到下一个同级成员为止：避免把下面别的函数里的 toast 算进来。 */
+    const rest = src.slice(start + marker.length);
+    const nextFn = rest.search(/\n {2}(?:async )?function /);
+    const body = nextFn >= 0 ? rest.slice(0, nextFn) : rest;
+    /* 只认**结果级** toast（success / error / warning）：函数开头的「未到时间」是
+       `toast.info`，它只能说明「一个都没跑」，不能替代「跑完之后的结果」。 */
+    if (!/toast\.(success|error|warning)\(/.test(body)) {
+      throw new Error(
+        `${name} 的签到路径没有**结果级** toast（success/error/warning）—— 只靠结果条不算回执（抽屉会把它盖住，§1.12 规则 1）`,
+      );
+    }
+  }
+
+  /* 进度只画一处：页头的进度必须带「没有勾选」守卫，否则与批量条里的同一句重复。 */
+  for (const [name, file] of [
+    ["WorkBuddy", "src/pages/AccountsPage.tsx"],
+    ["Trae", "src/pages/TraeAccountsPage.tsx"],
+    ["Qoder", "src/pages/QoderAccountsPage.tsx"],
+  ]) {
+    const src = stripComments(readCode(file));
+    if (!/(bulkProgress|batchProgress) && (selectedKeys|selected)\.size === 0/.test(src)) {
+      throw new Error(
+        `${name} 页头进度没有「无勾选才渲染」守卫 —— 勾选后与批量条的进度会同时出现（§1.12 规则 3）`,
+      );
+    }
+  }
+  return "签到必有 toast（三端）· 单条不摆结果条 · 页头进度仅在无勾选时渲染";
 });
 
 check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {

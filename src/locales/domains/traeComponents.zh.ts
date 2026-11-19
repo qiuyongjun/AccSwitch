@@ -238,7 +238,7 @@ export const zh = {
   "trae.comp.oauth.pasteCallback.submit": "提交回调",
   "trae.comp.oauth.pasteCallback.busy": "正在兑换…",
   "trae.comp.oauth.keyNote": "另外：Trae 的换 token 与续期都用客户端 storage.json 里的 icube 设备私钥。本机没有客户端就没有这把钥匙 —— 把装了客户端那台机器的 storage.json 拷到服务器同一路径，或改用「导入备份」（备份不含私钥，续期会失败，只能用到 access_token 过期）。",
-  "trae.comp.oauth.launchOk": "已启动 {variant} 客户端。等它写完设备凭证（首次启动还会弹出登录页，按提示登录一次），再点「重新发起登录」。",
+  "trae.comp.oauth.launchOk": "已启动 {variant} 客户端。等它写完设备凭据（首次启动还会弹出登录页，按提示登录一次），再点「重新发起登录」。",
 
   // =====================================================================
   // trae-import-accounts-dialog.tsx —— 导入账号
