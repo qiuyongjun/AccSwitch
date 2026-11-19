@@ -233,6 +233,10 @@ export const zh = {
   "qoder.page.accounts.chip.notStartedTip": "Qoder 每日签到 10:00 开放；当前显示的是上一轮状态，到点再来",
   "qoder.page.accounts.chip.refreshing": "签到刷新中",
   "qoder.page.accounts.chip.refreshingTip": "今日窗口已开放，官方活动尚未刷新出来 —— 稍后点刷新重试",
+  // ★ 2026-11-19：`campaignMissing`（上游本轮没下发签到活动）与「漏签」同形不同因。
+  //   徽章只写「今日未签」会把上游规则说成用户/工具的问题，故这里单给一句短解释（tooltip）。
+  "qoder.page.accounts.chip.notCheckedInMissingTip":
+    "上游本轮没有向该账号下发签到活动 —— 同一设备多账号时每轮只有一份，再刷新也不会变",
   "qoder.page.accounts.chip.checkinUnavailable": "签到不可用",
   "qoder.page.accounts.metric.credits": "积分",
   // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
@@ -308,6 +312,16 @@ export const zh = {
   // 「通道未开放」= 上游没给这个号下发签到活动（不是失败，也不是成功），点重试无用。
   "qoder.page.accounts.checkin.disabled": "签到通道未开放",
   "qoder.page.accounts.checkin.disabledPart": "{n} 个通道未开放",
+  /**
+   * ★ 2026-11-19：抽屉 / 批量结果条用的**长解释**（徽章 tooltip 用上面那条短的）。
+   *
+   * 必须写清三件事，否则用户会继续反复点签到：
+   * ① 这是**上游没下发**，不是漏签、不是工具坏了；② 判据是「同一用户 / 同一设备」
+   * 每日一份，本机多账号时通常只有一个能领到（实证见 docs/specs/QODER-PLATFORM.md）；
+   * ③ 能查的地方是官方客户端的成长页，不是这里。
+   */
+  "qoder.page.accounts.checkin.missingHint":
+    "本轮官方没有向该账号下发「每天领 100 Credits」活动：Qoder 按「同一用户 / 同一设备」每日只发一份，本机多个账号时通常只有一个能领到。这是上游规则（不是漏签），再点签到不会改变结果；可在官方客户端成长页查看。",
   "qoder.page.accounts.checkin.resultOk": "签到成功 {n} 个",
   "qoder.page.accounts.checkin.resultFail": "签到失败 {n} 个",
   "qoder.page.accounts.refresh.done": "{name} 的令牌已刷新",

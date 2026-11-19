@@ -144,11 +144,22 @@ export type QoderCheckinDisplay =
 export function QoderStatusChips({
   account,
   checkin = "unknown",
+  checkinHint,
   onOpenTab,
 }: {
   account: QoderAccountView;
   /** 五态：已签 / 未签 / 未开始 / 刷新中 / 未知。 */
   checkin?: QoderCheckinDisplay;
+  /**
+   * 「今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 用通用两态 tooltip）。
+   *
+   * ★ 2026-11-19（用户报障「一键签到显示成功，刷新又显示未签」→ 定位为上游按人去重后）：
+   *   这一档的真实含义常常不是「你忘了签」，而是**上游本轮没有向该账号下发签到活动**
+   *   （同一设备多账号时每轮只有一份）。只说「今日未签」会让用户以为是工具坏了或漏签，
+   *   于是反复点签到 —— 既拿不到，又在往上叠可疑信号。
+   *   只覆盖 `unchecked`：`notStarted` / `refreshing` 各有自己的解释，别抢它们的词。
+   */
+  checkinHint?: string;
   /** 标签直达详情页签（R10）：凭据类 → 凭据；签到类 → 签到。 */
   onOpenTab?: (tab: DrawerTab) => void;
 }) {
@@ -270,7 +281,8 @@ export function QoderStatusChips({
           <CheckinIcon /> {t("qoder.page.accounts.chip.notCheckedIn")}
         </>
       ),
-      tip: checkinBadgeTip(false, t),
+      /* 有上游事实（`campaignMissing`）时讲原因，没有才退回通用的两态说法。 */
+      tip: checkinHint ?? checkinBadgeTip(false, t),
       tab: "checkin",
     });
   }
@@ -366,6 +378,8 @@ export interface QoderAccountCardProps {
   creditPriority?: boolean;
   /** 今日签到五态（`unknown` = 未知，落回凭据徽章）。 */
   checkin?: QoderCheckinDisplay;
+  /** 「今日未签」的原因说明（`campaignMissing` 时由页面装配；不传 ⇒ 通用 tooltip）。 */
+  checkinHint?: string;
   /**
    * 程序位状态（只读）。
    *
@@ -416,6 +430,7 @@ export function QoderAccountCard({
   credits = null,
   creditPriority = false,
   checkin = "unknown",
+  checkinHint,
   programs = null,
   onSwitch,
   onSetGroup,
@@ -714,6 +729,7 @@ export function QoderAccountCard({
         <QoderStatusChips
           account={account}
           checkin={checkin}
+          checkinHint={checkinHint}
           onOpenTab={onOpenTab ? (tab) => onOpenTab(account, tab) : undefined}
         />
         <QoderForeignBadge account={account} />

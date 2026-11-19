@@ -120,6 +120,8 @@ export interface AccountWorkbenchProps<T> {
     okCount: number;
     failedNames: string[];
     skippedNames?: string[];
+    /** 「未开放」那一档的原因说明（Qoder 装配；不传 ⇒ 结果条不渲染这一行）。 */
+    skippedHint?: string;
     /** 「未到签到时间」的账号（Qoder 每日 10:00 开窗；可选，其它平台不传）。 */
     notStartedNames?: string[];
     /** 本次真领到的额度合计（活动通道专用；不传 = 不渲染那枚徽标）。 */
@@ -291,6 +293,7 @@ export function AccountWorkbench<T>({
             okCount={checkinResult.okCount}
             failedNames={checkinResult.failedNames}
             skippedNames={checkinResult.skippedNames}
+            skippedHint={checkinResult.skippedHint}
             notStartedNames={checkinResult.notStartedNames}
             unprocessedCount={checkinResult.unprocessedCount}
             onRetry={checkinResult.onRetry}

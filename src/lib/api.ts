@@ -3623,6 +3623,13 @@ export interface QoderCheckinClaimResult {
   already?: boolean;
   disabled?: boolean;
   /**
+   * `disabled` 的成因：上游活动列表里**没有签到类活动**（`campaignMissing`）。
+   *
+   * ★ 2026-11-19：同机多号时服务端每轮只向一个账号下发该活动，其余账号这一档是
+   * 「上游没发」而不是「接口坏了」。回执据此补一句原因，避免用户反复点签到。
+   */
+  campaignMissing?: boolean;
+  /**
    * 今日窗口还没开（每日 10:00 前）或活动尚未刷新：**未发起领取**。
    * 既不是成功也不是失败，前端不得计入失败 / 重试。
    */

@@ -365,6 +365,14 @@ export interface AccountDetailDrawerProps {
      */
     statsScope?: "upstream" | "local";
   } | null;
+  /**
+   * 「今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 不渲染）。
+   *
+   * ★ 2026-11-19：Qoder 的 `campaignMissing`（上游本轮没下发签到活动，同机多号时每轮
+   *   只有一份）与「你忘了签」在界面上长得一模一样。抽屉是用户点进来找原因的地方，
+   *   没有这句话，他只能看到三个「—」和一枚「今日未签」。其它平台不传 ⇒ 逐字不变。
+   */
+  checkinHint?: string;
   /** 头部是否展示「当前登录」徽章（原型 :3475）。缺省不展示。 */
   current?: boolean;
   /** ★ 可点「切换到此账号」程序位；传空数组 / 不传 = 不渲染该区块（退回只读 `programs`）。 */
@@ -496,6 +504,7 @@ export function AccountDetailDrawer({
   initialTab = null,
   empty,
   checkin,
+  checkinHint,
   current = false,
   switchTargets = [],
   onWizardSwitch,
@@ -1228,6 +1237,13 @@ export function AccountDetailDrawer({
                       }
                     />
                   </div>
+                  {/* 未签的**原因**（Qoder `campaignMissing`）：没有这一句，用户只能看到
+                      「今日未签」+ 三个「—」，无从判断是漏签、工具坏了、还是上游没发。 */}
+                  {checkinHint ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                      {checkinHint}
+                    </p>
+                  ) : null}
                   {(checkin.windowOpen === false || !checkin.todayCheckedIn) &&
                     actions?.credentialUnavailable && (
                     <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">

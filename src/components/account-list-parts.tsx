@@ -115,6 +115,14 @@ export interface CheckinResultBarProps {
    */
   notStartedNames?: string[];
   /**
+   * 「未开放」那一档的**原因说明**（Qoder 装配；其它平台不传 ⇒ 不渲染）。
+   *
+   * ★ 2026-11-19：这一档现在有两种成因 —— 区域没有活动平台，以及**上游本轮没有向这些
+   *   账号下发签到活动**（同一设备多账号时每轮只有一份）。两个都说成「通道未开放」，
+   *   用户会以为是接口坏了，于是反复点「一键签到」。
+   */
+  skippedHint?: string;
+  /**
    * 本次**真领到**的额度合计（活动通道专用；其它平台不传）。
    *
    * ⚠️ 可选且**默认为 0/不传** ⇒ 不渲染这枚徽标，WB / Trae 的输出逐字不变。
@@ -155,6 +163,7 @@ export function CheckinResultBar({
   failedNames,
   skippedNames,
   notStartedNames,
+  skippedHint,
   earnedCredits = 0,
   unprocessedCount = 0,
   onRetry,
@@ -248,6 +257,13 @@ export function CheckinResultBar({
       <Button size="sm" variant="ghost" className="shrink-0" onClick={onDismiss}>
         {t("shared.checkinResult.dismiss")}
       </Button>
+      {/* 原因说明单起一行（`w-full`）：它与上面那句「谁没领到」是不同的信息，
+          挤在同一行会被长名单吃掉。不传 ⇒ 不渲染，WB / Trae 逐字不变。 */}
+      {skippedHint && hasSkipped ? (
+        <span className="w-full text-[11px] leading-relaxed text-muted-foreground">
+          {skippedHint}
+        </span>
+      ) : null}
     </div>
   );
 }
