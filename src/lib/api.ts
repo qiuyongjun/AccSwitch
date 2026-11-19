@@ -1695,6 +1695,22 @@ export type CheckinStatusEntry = {
   nextWindowAt?: number;
   /** 下一个签到窗口的可读文本（`MM-DD HH:mm`）。 */
   nextWindowText?: string;
+  /**
+   * ★ Qoder 专有：**列表落后于时钟**（该切新一轮了，上游还是上一轮）。
+   *
+   * 只有它是 `true` 时 `status === "NONE"` 才等于「签到刷新中」—— 再刷一次可能变。
+   * 缺省（老后端 / 旧缓存）= 不知道 ⇒ 按「今日未签」处理：宁可少画一个转圈态，
+   * 也不要挂一个永不结束的「刷新中」。
+   */
+  stale?: boolean;
+  /**
+   * ★ Qoder 专有：上游 200 正常答复，但列表里**没有**积分类签到活动
+   * （实测常见：只剩「首次订阅福利」这类 `VIEW_DETAILS`）。
+   *
+   * 这一档**不是**「还没刷新完」：再刷新也不会变，界面按「今日未签」呈现。
+   * 见 `crates/buddy-switch-core/src/modules/qoder/checkin.rs` 模块头那张表。
+   */
+  campaignMissing?: boolean;
   raw?: unknown;
 };
 
@@ -3560,6 +3576,10 @@ export interface QoderCheckinRow {
   windowOpen?: boolean;
   nextWindowAt?: number;
   nextWindowText?: string;
+  /** 列表落后于时钟（上游还没切到新一轮）—— 只有这一档才是「签到刷新中」。 */
+  stale?: boolean;
+  /** 上游答复里**没有**今日签到活动 ⇒ 按「今日未签」呈现（再刷新也不会变）。 */
+  campaignMissing?: boolean;
   streakDays?: number;
   totalClaimDays?: number;
   rewardCredits?: number;

@@ -807,12 +807,33 @@ function QoderAccountsPanel({
    * ⚠️ 上游**明确**答了（`ok:true`）就以上游为准 —— 哪怕它是「未签到」。
    * 只有读不到 / 还没查时才让台账兜底，且台账**只会**给出「已签到」（盖章就是今天）；
    * 更早的盖章不构成任何结论，状态仍是「未知」。
+   * 唯一的例外是 `campaignMissing`（上游压根没下发签到活动）：那句答复不携带
+   * 「今天签没签」的结论，此时今天的本地盖章可以补正布尔值（见下方内联注释）。
    */
   const checkinEntryOf = useCallback(
     (uid: string): CheckinStatusEntry | undefined => {
+      const account = accounts?.find((row) => row.uid === uid);
       const upstream = checkinMap[uid] ?? checkinRows[uid];
-      if (upstream?.ok) return upstream;
-      return ledgerCheckinEntry(accounts?.find((account) => account.uid === uid)) ?? upstream;
+      if (upstream?.ok) {
+        /* ★ 2026-11-19：上游答复里**没有**今日签到活动（`campaignMissing`，既不是列表
+           落后也不是窗口未开）时，它只能证明「现在没东西可领」，**不能**证明「今天没签」
+           —— 我们自己在 10:00 领过之后，服务端会把这条活动从列表里撤掉，于是同一份答复
+           会把「刚签成功」读成「未签」。这一档只补正布尔值，上游的额度字段原样保留，
+           并把来源标成 `ledger`（与 Trae / WB 的台账口径一致：不冒称上游答案）。
+           ⚠️ 三个前置条件缺一不可：窗口**已开**（否则「没有活动」只是还没开放）、
+           列表**没落后**（stale 时上游的答复整体不可信）、今天**确实盖过章**。 */
+        if (
+          upstream.todayCheckedIn !== true &&
+          upstream.windowOpen !== false &&
+          upstream.stale !== true &&
+          upstream.campaignMissing === true &&
+          account?.lastCheckinToday
+        ) {
+          return { ...upstream, todayCheckedIn: true, source: "ledger" };
+        }
+        return upstream;
+      }
+      return ledgerCheckinEntry(account) ?? upstream;
     },
     [checkinMap, checkinRows, accounts],
   );
@@ -822,8 +843,15 @@ function QoderAccountsPanel({
    *
    * ★ Qoder 的「今天」是 UTC+8 10:00 起的窗口，不是自然日：
    * - 窗口未开时上游的 `CLAIMED` 属于上一轮 ⇒ `notStarted`（不是「今日已签」）；
-   * - 窗口已开但列表里没有积分类活动 ⇒ `refreshing`（官方还没刷出来，不是「未签」）。
+   * - 窗口已开但列表仍是上一轮（`stale`）⇒ `refreshing`（真·刷新中，再刷可能变）。
    * 把这两档压回布尔，就会出现「10 点前显示已签、10 点后显示未签」的假状态。
+   *
+   * ★ 2026-11-19（用户报障「一键刷新一直显示签到刷新中，刷新也不变」）：
+   * `status === "NONE"` **不等于**「刷新中」—— 上游 200 正常答复、但列表里根本没有
+   * 积分类签到活动（只剩「首次订阅福利」这类详情活动）时也是 `NONE`，而这一档
+   * 再刷新一百次也不会变。此前两者共用「刷新中」，用户看到的是一个永不结束的转圈态，
+   * 而详情页签（按 `todayCheckedIn` 渲染）写的是「未签到」—— 同一份数据两种说法。
+   * ⇒ 只有 `stale` 才是「刷新中」；`NONE` 的其余情况如实写「今日未签」。
    */
   const checkinDisplayOf = useCallback(
     (account: QoderAccountView): QoderCheckinDisplay => {
@@ -831,7 +859,7 @@ function QoderAccountsPanel({
       if (!entry || !entry.ok) return "unknown";
       if (entry.windowOpen === false) return "notStarted";
       if (entry.todayCheckedIn === true) return "checked";
-      if (entry.status === "NONE") return "refreshing";
+      if (entry.status === "NONE" && entry.stale === true) return "refreshing";
       return "unchecked";
     },
     [checkinEntryOf],
@@ -1915,8 +1943,10 @@ function QoderAccountsPanel({
     /* 窗口未开（每日 10:00 前）：上游的 CLAIMED 属于上一轮 —— 到点再签，不是「未签」。 */
     if (entry.windowOpen === false) return { kind: "notStarted" };
     if (entry.todayCheckedIn) return { kind: "checked" };
-    /* 窗口已开但活动还没刷出来：不是「未签」，稍后刷新即可。 */
-    if (entry.status === "NONE") return { kind: "refreshing" };
+    /* 窗口已开但列表还是上一轮（`stale`）：不是「未签」，稍后刷新即可。
+       ⚠️ 只认 `stale` —— `status === "NONE"` 还包含「上游没下发签到活动」那一档，
+       它再刷新也不会变，必须落到 `unchecked`（见 `checkinDisplayOf` 的注释）。 */
+    if (entry.status === "NONE" && entry.stale === true) return { kind: "refreshing" };
     if (entry.active === false) return { kind: "unavailable" };
     return { kind: "unchecked" };
   }
@@ -2422,8 +2452,10 @@ function QoderAccountsPanel({
       /* 窗口未开（每日 10:00 前）⇒ 抽屉写「未开始」并把签到按钮禁用；
          否则上游的「已签」是上一轮的事实，不能当成今天。 */
       windowOpen: row.windowOpen !== false,
-      /* 窗口已开但上游列表还是上一轮 ⇒ 抽屉写「活动刷新中」，按钮禁用。 */
-      refreshing: row.windowOpen !== false && row.status === "NONE",
+      /* 窗口已开但上游列表还是上一轮 ⇒ 抽屉写「活动刷新中」，按钮禁用。
+         ⚠️ 只有 `stale` 才算 —— 「上游没下发签到活动」那一档不是刷新中，
+         它按「未签到」渲染（与卡片 / 表格同一口径，见 `checkinDisplayOf`）。 */
+      refreshing: row.windowOpen !== false && row.status === "NONE" && row.stale === true,
       nextWindowText: row.nextWindowText ?? null,
       todayCredit: row.todayCredit ?? null,
       streakDays: row.streakDays ?? null,

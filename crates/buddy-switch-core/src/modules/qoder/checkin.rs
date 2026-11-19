@@ -35,6 +35,18 @@
 //! `windowOpen` / `nextWindowAt` / `nextWindowText`：窗口未开时界面显示「未开始」，
 //! 签到请求也**不发起领取**（只读一次活动列表用于判定，见 `campaign::checkin_for`）。
 //!
+//! ## ★ `status = NONE` 有两种原因，界面**必须**分开画（2026-11-19）
+//!
+//! | 原因 | 字段 | 含义 | 界面 |
+//! |:--|:--|:--|:--|
+//! | 列表落后于时钟 | `stale: true` | 该切新一轮了，列表还是上一轮 | 「签到刷新中」（再刷可能变） |
+//! | 上游没下发签到活动 | `campaignMissing: true` | 200 正常答复，但列表里没有积分类活动 | **「今日未签」**（再刷也不会变） |
+//!
+//! 第二档在真机上是常态：实测两个账号的活动列表只剩「首次订阅福利」
+//! （`VIEW_DETAILS` + 金额 0），一条积分类签到活动都没有（用户同时反馈官方客户端
+//! 仍能领）。列表里没有 `campaignId` 就没有可 POST 的对象 ⇒ 本仓对这一档**无项可领**，
+//! 只能如实写「今日未签」。把它画成「刷新中」＝ 让用户对着一个永不结束的转圈态反复点刷新。
+//!
 //! ## 排程（`ScheduleTask::QoderCheckin`）
 //!
 //! [`run_cycle_for`] 逐账号**顺序**调用 [`claim_for`]（并发会踩风控）；
@@ -163,7 +175,11 @@ pub fn summarize_campaigns(items: &[campaign::CampaignItem]) -> CampaignSummary 
 ///
 /// - `todayCheckedIn` 只认上游 `claimStatus`（本地盖章只给 `stampedToday` 作提示）；
 /// - `dailyCredit` = 现在能领的合计，没有可领时退回已领合计（否则「已签」会显示成 0）；
-/// - `todayCredit` 只在**今天确实领到**时才有值（`0` 会被读成「签了但没给分」）。
+/// - `todayCredit` 只在**今天确实领到**时才有值（`0` 会被读成「签了但没给分」）；
+/// - `stale` / `campaignMissing` 解释 `status = NONE` 到底是哪一种（见模块头那张表）。
+///
+/// `now` 由调用方注入（真机传 `campaign::now_secs()`），与 `window_from_items` 同一条
+/// 纪律：窗口判定必须可测，不能让断言随「跑测试的时刻」漂移。
 ///
 /// ★ `uid` / `name` 是**行身份**，不是可选项：`status_for` 的 `accounts` 是逐账号数组，
 /// 前端按 `row.uid` 建索引；缺了它结果会全部落进 `undefined` 键（2026-10-31 用户报障：
@@ -173,6 +189,7 @@ fn campaign_entry(
     name: &str,
     snapshot: &campaign::CampaignsSnapshot,
     stamped_today: bool,
+    now: i64,
 ) -> Value {
     let summary = summarize_campaigns(&snapshot.items);
     let daily = if summary.claimable_amount > 0 {
@@ -186,7 +203,6 @@ fn campaign_entry(
     let has_checkin_activity = snapshot.items.iter().any(|item| {
         item.is_credit_kind() && campaign::classify(item) != campaign::CampaignClass::View
     });
-    let now = campaign::now_secs();
     let window = campaign::window_from_items(&snapshot.items, now);
     // 上游是否给了**可用的窗口时间**（正常响应都有；老版本 / 异常载荷可能没有）。
     // 没有时间数据时退回旧口径（直接信 claimStatus），否则测试结果会随「跑测试的时刻」漂移。
@@ -195,13 +211,23 @@ fn campaign_entry(
             && campaign::classify(item) != campaign::CampaignClass::View
             && item.start_at > 0
     });
-    // ★ 上一轮的 CLAIMED 不能当作「今天已签」：窗口未开（startAt 还是昨天）时不算；
+    // ★ 上一轮 **CLAIMED 不能当作「今天已签」**：窗口未开（startAt 还是昨天）时不算；
     //   列表落后于时钟（stale）时更不可信 —— 直接归到「刷新中」。
     let today_checked_in =
         summary.claimed && (!has_upstream_window || (window.open && !window.stale));
+    // ★ 2026-11-19（用户报障「一键刷新一直显示签到刷新中，刷新也不变」）：
+    //   `status = NONE` 有**两个完全不同的原因**，此前被压成同一档：
+    //   ① `stale`：上游该切到新一轮了但列表还是上一轮的 —— **真·刷新中**，
+    //      再点一次刷新确实可能变（用户等一等有意义）；
+    //   ② `campaign_missing`：上游 200 正常答复，但列表里**压根没有**积分类签到活动
+    //      （实测国内版常见：只剩「首次订阅福利」这类 `VIEW_DETAILS` 活动）——
+    //      这不是「还没刷新完」，再刷新一百次也还是这份答复。它等于「今天没有可领项」，
+    //      界面必须如实写「今日未签」并让用户去官方客户端领，而不是挂一个永久的转圈态。
+    //   两个原因各自成字段透出（`status` 仍是 `NONE`，老前端契约不变）。
+    let campaign_missing = !has_checkin_activity && !window.stale;
     let status = if window.stale || !has_checkin_activity {
-        // 没有新一轮的签到活动（列表还没刷出来）：既不是「已签」也不是「未签」，
-        // 让界面显示「刷新中」。
+        // 两种原因都归 `NONE`（既不是「已签」也不是上游给的「未签」），
+        // 但由 `stale` / `campaignMissing` 分别说明到底是哪一种 —— 见上方注释。
         "NONE"
     } else if summary.claimed {
         "CLAIMED"
@@ -228,6 +254,11 @@ fn campaign_entry(
         "windowOpen": window.open,
         "nextWindowAt": window.next_at,
         "nextWindowText": window.next_text,
+        // ★ `status = NONE` 的两个原因分开透出（见上方 `campaign_missing` 的注释）：
+        //   只有 `stale` 才是「刷新中」；`campaignMissing` 是「上游今天没给这个账号
+        //   下发签到活动」—— 界面按「今日未签」呈现，并引导去官方客户端领取。
+        "stale": window.stale,
+        "campaignMissing": campaign_missing,
         // 身份来源（`runtime-info` / `derived`）与机器头状态 —— 国际版拿不到活动时，
         // 界面要能说清「是没装客户端」而不是「今天没有活动」。
         "source": "campaign",
@@ -269,7 +300,10 @@ async fn status_row_for(
     // ── 活动平台优先（只读状态路径吃 20 秒缓存；领取路径永远绕缓存）──
     let snapshot = campaign::fetch_campaigns_cached(region, &uid, &access).await;
     if snapshot.ok {
-        return (campaign_entry(&uid, &name, &snapshot, stamped_today), None);
+        return (
+            campaign_entry(&uid, &name, &snapshot, stamped_today, campaign::now_secs()),
+            None,
+        );
     }
     if snapshot.available {
         // 账号级失败（网络 / 鉴权 / 响应格式）：如实报错，**不**回落旧通道 ——
@@ -613,7 +647,7 @@ pub async fn status_map_for(region: QoderRegion, uids: Vec<String>) -> Value {
             // 「卡片上的今日状态」给出不同答案。
             let snapshot = campaign::fetch_campaigns_cached(region, &uid, &access).await;
             if snapshot.ok {
-                let entry = campaign_entry(&uid, &name, &snapshot, stamped);
+                let entry = campaign_entry(&uid, &name, &snapshot, stamped, campaign::now_secs());
                 return (uid, entry);
             }
             if snapshot.available {
@@ -873,6 +907,16 @@ mod tests {
         }
     }
 
+    /// 测试用**固定时刻**：11:30（UTC+8）⇒ 当日窗口已开，且结果不随跑测试的钟漂移。
+    ///
+    /// `campaign_entry` 的 `now` 由调用方注入（真机路径传 `campaign::now_secs()`），
+    /// 否则「窗口开没开」会跟着机器时间变，断言只能写成恒真。
+    fn fixed_now() -> i64 {
+        chrono::DateTime::parse_from_rfc3339("2026-11-19T11:30:00+08:00")
+            .expect("固定时刻")
+            .timestamp()
+    }
+
     /// 聚合口径：只认积分类活动；已领 / 可领 / 都没有 三种形状。
     #[test]
     fn summarize_campaigns_splits_claimed_and_claimable() {
@@ -905,6 +949,7 @@ mod tests {
             "账号甲",
             &snapshot(vec![campaign_item("CLAIMED", 100, "CREDITS")]),
             false,
+            fixed_now(),
         );
         assert_eq!(
             claimed["uid"], "uid-1",
@@ -921,6 +966,7 @@ mod tests {
             "账号甲",
             &snapshot(vec![campaign_item("CLAIMABLE", 100, "CREDITS")]),
             false,
+            fixed_now(),
         );
         assert_eq!(pending["todayCheckedIn"], Value::Bool(false));
         assert_eq!(
@@ -938,9 +984,83 @@ mod tests {
             "账号甲",
             &snapshot(vec![campaign_item("CLAIMABLE", 100, "CREDITS")]),
             true,
+            fixed_now(),
         );
         assert_eq!(stamped_only["todayCheckedIn"], Value::Bool(false));
         assert_eq!(stamped_only["stampedToday"], Value::Bool(true));
+    }
+
+    /// ★ `status = NONE` 的**两个原因必须分得开**（2026-11-19 用户报障：
+    /// 「一键刷新一直显示签到刷新中，刷新也不变」）。
+    ///
+    /// 真机证据（国内版，2026-11-19 真机探测）：两个账号的活动列表**只有**
+    /// 「首次订阅福利」（`VIEW_DETAILS` + 金额 0 + `CLAIMED`），一条积分类签到活动都没有，
+    /// 上游 HTTP 200、`claimable: false` —— 这不是「还没刷新完」，再刷新也不会变。
+    /// 此前它与「列表落后于时钟」共用 `NONE`，界面于是挂了一个永不结束的「签到刷新中」，
+    /// 用户以为刷新坏了，而详情页签（按 `todayCheckedIn` 渲染）写的是「未签到」。
+    ///
+    /// 可证伪：把 `campaign_missing` 写死成 `false`（或让 UI 只认 `status === "NONE"`）
+    /// ⇒ 第一条断言红，界面回退成永久转圈。
+    #[test]
+    fn campaign_entry_separates_missing_activity_from_stale_list() {
+        // ① 只有详情类福利活动（真机形态）⇒ 上游没下发签到活动，不是「刷新中」。
+        let mut subscription = campaign_item("CLAIMED", 0, "CREDITS");
+        subscription.action_type = "VIEW_DETAILS".into();
+        subscription.title = "首次订阅福利".into();
+        let missing = campaign_entry(
+            "uid-1",
+            "账号甲",
+            &snapshot(vec![subscription.clone()]),
+            false,
+            fixed_now(),
+        );
+        assert_eq!(missing["status"], "NONE");
+        assert_eq!(
+            missing["campaignMissing"],
+            Value::Bool(true),
+            "上游没有积分类签到活动 ⇒ campaignMissing"
+        );
+        assert_eq!(missing["stale"], Value::Bool(false), "列表没有落后于时钟");
+        assert_eq!(missing["todayCheckedIn"], Value::Bool(false));
+        assert_eq!(missing["windowOpen"], Value::Bool(true), "11:30 窗口已开");
+
+        // ② 上一轮的签到活动还挂着（startAt = 昨天 10:00）⇒ 真·刷新中（stale）。
+        let mut yesterday = campaign_item("CLAIMED", 100, "CREDITS");
+        yesterday.start_at = fixed_now() - 86_400;
+        let stale = campaign_entry(
+            "uid-1",
+            "账号甲",
+            &snapshot(vec![yesterday.clone(), subscription]),
+            false,
+            fixed_now(),
+        );
+        assert_eq!(stale["status"], "NONE");
+        assert_eq!(
+            stale["stale"],
+            Value::Bool(true),
+            "列表落后于时钟 ⇒ stale（这一档才该显示「刷新中」）"
+        );
+        assert_eq!(
+            stale["campaignMissing"],
+            Value::Bool(false),
+            "有签到活动、只是没刷新 ⇒ 不是 campaignMissing"
+        );
+        assert_eq!(
+            stale["todayCheckedIn"],
+            Value::Bool(false),
+            "上一轮的 CLAIMED 不能当作今日已签"
+        );
+
+        // ③ 正常可领 ⇒ 两个新字段都为 false（避免前端把健康态读成异常）。
+        let claimable = campaign_entry(
+            "uid-1",
+            "账号甲",
+            &snapshot(vec![campaign_item("CLAIMABLE", 100, "CREDITS")]),
+            false,
+            fixed_now(),
+        );
+        assert_eq!(claimable["stale"], Value::Bool(false));
+        assert_eq!(claimable["campaignMissing"], Value::Bool(false));
     }
 
     /// 旧契约兼容：`already` 必须是布尔、`rewardCredits` 取 `earned`。
