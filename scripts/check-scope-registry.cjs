@@ -2180,6 +2180,60 @@ check("★ 积分「上次成功读数」占位：只落成功值 · 只做展�
   return "只落 ok:true · 7 天过期 · 实时覆盖缓存 · 排序键只读实时 · 无读数静态占位（不逐卡转圈、不标时间）";
 });
 
+check("★ 刷新提示只有两个通道：页头环境态 + 交互点因果态（三端同形）", () => {
+  /* 2026-11-19 决定（用户拍板）：**不做**卡片级刷新状态。
+     - 环境态 = 页头「正在同步…」（`components/sync-indicator.tsx`，三页共用）；
+     - 因果态 = 用户点的那一项自己回话（菜单项「刷新中…→已更新」、按钮内小转圈、
+       批量进度 / 结果条 / toast）。
+     理由：请求本身是整批的，逐卡状态只能模拟整体；三份卡片组件每加一类状态就是三处
+     实现 + 三套词条；触发点有六类，环境态会在用户没动作时反复闪。
+
+     变异：① WB 页头判据退化成 `loading || refreshingCredits`（非强制积分刷新重新静默）；
+     ② 任一页拿掉 `<SyncIndicator>`；③ 菜单项丢了「刷新中 / 已更新」两态；
+     ④ 抽屉又用积分装载态当整块骨架 ⇒ 本条变红。 */
+  const files = {
+    wb: "src/pages/AccountsPage.tsx",
+    trae: "src/pages/TraeAccountsPage.tsx",
+    qoder: "src/pages/QoderAccountsPage.tsx",
+  };
+  for (const [name, file] of Object.entries(files)) {
+    if (!stripComments(readCode(file)).includes("<SyncIndicator")) {
+      throw new Error(`${name} 页头缺「正在同步…」—— 该端的刷新会变成完全静默`);
+    }
+  }
+
+  const wb = stripComments(readCode(files.wb));
+  /* 判据必须含「非强制积分加载」这一路：`refreshingCredits` 只在 force 时置位，
+     TTL / 失败重试 / 首次挂载走 `creditLoadingMap`（`stores/accounts.ts`）。 */
+  if (!wb.includes("Object.values(creditLoadingMap).some(Boolean)")) {
+    throw new Error("WB 页头少了「任一账号积分在飞」的判据 —— 非强制刷新（TTL / 重试）会重新变得不可见");
+  }
+  if (!wb.includes("<SyncIndicator syncing={loading || refreshingCredits || creditBusy}")) {
+    throw new Error("WB 页头 `syncing` 未合并 `creditBusy` —— 三路判据缺一不可（2026-11-19）");
+  }
+  /* 抽屉的 `loading` 是**区块骨架**：拿积分在飞当判据会把账号元信息一起盖住。
+     按**行为**断言（整段 JSX 里不许出现 `loading=`），不按标识符断言 —— 否则把
+     `detailLoading` 内联成 `Boolean(detail && creditLoadingMap[detail.id])` 就能绕过。 */
+  const drawerStart = wb.indexOf("<AccountDetailDrawer");
+  const drawerEnd = drawerStart >= 0 ? wb.indexOf("\n      />", drawerStart) : -1;
+  const drawerCall = drawerEnd > drawerStart ? wb.slice(drawerStart, drawerEnd) : "";
+  if (!drawerCall) {
+    throw new Error("找不到账号页的 `<AccountDetailDrawer>` 调用块 —— 本条断言已失效，请按新结构重写");
+  }
+  if (/\bloading=/.test(drawerCall)) {
+    throw new Error("账号页又给抽屉传了 `loading`（区块骨架）—— 积分在飞不该藏掉即时区块（2026-11-19 已撤）");
+  }
+
+  /* 因果态不能一起消失：用户点了刷新，那一项必须自己回话。 */
+  const menu = stripComments(readCode("src/components/account-menu-parts.tsx"));
+  for (const token of ["export function RefreshMenuGroup", "refreshingKinds", "doneKinds"]) {
+    if (!menu.includes(token)) {
+      throw new Error(`菜单缺 \`${token}\` —— 刷新就只剩页头一句，用户点的那一项没有回应`);
+    }
+  }
+  return "页头「正在同步…」覆盖全部加载（含非强制积分）· 三端都挂 · 卡片/抽屉不再各自转圈 · 因果态留在菜单项";
+});
+
 check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {
   /* 变异：去掉 `creditInflight` 复用 / 把 TTL 判据改回 `creditRefreshedAt` /
      只凭旅行与任务判定「一键刷新完成」 ⇒ 本条变红。 */

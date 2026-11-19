@@ -324,6 +324,17 @@ Qoder 卡片菜单的「刷新积分」与页头「一键刷新」都走现有 `
 - **有读数时 loading 不得顶掉内容**（2026-11-10 整改，2026-11-17 后已无逐卡 loading）：
   旧顺序是 `creditLoading ? 转圈 : !credit ? 等待 : …`，而页面挂载的 `ensureCredits` 会把
   每个账号的 `creditLoadingMap` 置 `true` ⇒ 缓存占位永远被转圈盖住。
+- **刷新提示只有两个通道**（2026-11-19，用户拍板；`check:scope` 同名一条钉住，已做变异验证）：
+  ① **环境态** = 页头「正在同步…」（`components/sync-indicator.tsx`，三个账号页共用）；
+  ② **因果态** = 用户点的那一项自己回话（菜单项「刷新中… → 已更新」、按钮内小转圈、
+     批量进度 / 结果条 / toast）。
+  **不做**卡片级刷新状态：请求本身是整批的（WB `mapWithConcurrency` 3 路、Qoder 一次批量
+  调用），逐卡状态只能模拟整体；三份卡片组件（`account-card` / `trae-account-card` /
+  `qoder-account-card`）每加一类状态就是三处实现 + 三套词条；六类触发点（挂载 / 可见 /
+  TTL / 失败重试 / 一键 / 单条）会让环境态在用户没动作时反复闪。
+  两处配套改动：WB 页头判据补齐为 `loading || refreshingCredits || creditBusy`
+  （`refreshingCredits` **只在 force 时置位**，非强制积分加载此前在任何地方都不可见）；
+  WB 抽屉不再用「积分在飞」当整块骨架（会把账号元信息 / 凭据一起藏掉，三端抽屉同形）。
 
 ### 12.2 积分刷新：单航班 + 失败重试窗口 + 状态清理
 

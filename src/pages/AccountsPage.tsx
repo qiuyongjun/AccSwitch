@@ -341,6 +341,18 @@ function RegionPanel({ region }: { region: Region }) {
   const refreshingCredits = useAccountsStore((s) =>
     region === "cn" ? s.refreshingCredits : s.global.refreshingCredits,
   );
+  /**
+   * **任一账号**的积分请求在飞 —— 不看 force。
+   *
+   * ★ 2026-11-19（用户提问「WB 刷新时卡片会不会出现积分查询中」）：页头判据此前是
+   * `loading || refreshingCredits`，而 `refreshingCredits` 只在 `force` 时置位
+   * （`stores/accounts.ts` 的 `loadCredits`）；TTL 续期 / 失败重试 / 非强制首次加载
+   * 走的是 `creditLoadingMap[id]`，**这一路此前在任何地方都不可见** —— 卡片撤掉逐卡
+   * 转圈之后，用户看到的又回到「几秒后数字突然变」。
+   * ⇒ 页头把这一路也吃进来；卡片级状态因此没有存在理由（见 `components/sync-indicator.tsx`
+   * 的两条通道：页头回答「在同步吗」，交互点回答「我点的这一项怎么样了」）。
+   */
+  const creditBusy = useMemo(() => Object.values(creditLoadingMap).some(Boolean), [creditLoadingMap]);
   const reconcileAccounts = useAccountsStore((s) => s.reconcileAccounts);
   const refreshRegionStatus = useAccountsStore((s) => s.refreshRegionStatus);
   const deleteAccountStore = useAccountsStore((s) => s.deleteAccount);
@@ -2794,7 +2806,8 @@ function RegionPanel({ region }: { region: Region }) {
     : "";
   const detailUid = displayText(detail?.uid);
   const detailCredit = detail ? displayCreditMap[detail.id] : undefined;
-  const detailLoading = detail ? Boolean(creditLoadingMap[detail.id]) : false;
+  /* ★ 2026-11-19：**不给抽屉传积分装载态** —— 它会把整块 sections（账号元信息 / 凭据 /
+     状态，全是即时数据）一起盖成骨架，且「积分在飞」已由页头如实说明。三端抽屉同形。 */
   const detailSections: DetailSection[] = detail
     ? [
         {
@@ -3273,10 +3286,12 @@ function RegionPanel({ region }: { region: Region }) {
             {/*
              * ★ 后台同步指示：`loadRegion` 有旧数据时不会出骨架（也不该出），
              * 此前那几秒的重新读取完全不可见 —— 用户读到的是「打开页面没反应，
-             * 几秒后突然刷新」。这里把 store 的 `loading`（账号 + 状态整轮读取）
-             * 与批量积分刷新如实说出来，见 `components/sync-indicator.tsx` 文件头。
+             * 几秒后突然刷新」。这里把 store 的 `loading`（账号 + 状态整轮读取）、
+             * 强制积分刷新（`refreshingCredits`）与**非强制**积分加载（`creditBusy`，
+             * TTL / 失败重试 / 首次挂载）一并如实说出来，见 `components/sync-indicator.tsx`。
+             * ⚠️ 三路缺一不可：只写前两路时，非强制刷新整条链路静默（2026-11-19）。
              */}
-            <SyncIndicator syncing={loading || refreshingCredits} />
+            <SyncIndicator syncing={loading || refreshingCredits || creditBusy} />
           </p>
         </div>
         <div className="grow" />
@@ -3923,7 +3938,8 @@ function RegionPanel({ region }: { region: Region }) {
            名称已经在标题里，副标题再写第二遍身份没有信息量。 */
         subtitle={detailUid ? t("shared.drawer.subtitleUid", { uid: detailUid }) : ""}
         avatarSeed={detailName}
-        loading={detailLoading}
+        /* ⚠️ 不传 `loading`：那是**区块级骨架**，用它表达「这个号的积分在飞」会把
+           账号元信息一起藏起来；积分在飞由页头「正在同步…」表达（2026-11-19）。 */
         packs={detailPacks}
         stats={detailStats}
         refreshingKinds={detail ? refreshBusy.kindsOf(detail.id) : []}

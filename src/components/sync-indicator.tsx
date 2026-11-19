@@ -32,6 +32,17 @@ import { cn } from "@/lib/utils";
  * 同步结束后短暂亮一下「已更新」（{@link DONE_VISIBLE_MS}），回答用户
  * 「刚才那一下跳变是什么」—— 否则「突然更新」永远是个没有解释的事件。
  * **不常驻**：常驻时间戳会让页头多一列永远在变的小字，价值低于噪声。
+ *
+ * ## 与卡片的分工（2026-11-19，用户拍板）
+ *
+ * 本组件是**环境态**：只回答「现在在同步吗」，不回答「哪个账号」。
+ * 逐账号「我点的这一项刷到哪一步」归**因果态**，留在交互点自己回话：菜单项
+ * 「刷新中… → 已更新」、按钮内小转圈、批量进度 / 结果条 / toast。
+ * 卡片正文**不**再出现 loading（2026-11-17 撤掉逐卡「积分查询中…」）。
+ * ⇒ 判据必须覆盖**全部**加载路径，否则撤掉逐卡指示后那段刷新就彻底静默：
+ * WorkBuddy 侧是 `loading || refreshingCredits || creditBusy`，其中 `creditBusy`
+ * （任一账号的 `creditLoadingMap`）专门补「非 force」的 TTL / 失败重试 ——
+ * `refreshingCredits` 只在强刷时置位。Trae / Qoder 的资源 `pending` 本来就覆盖全部加载。
  */
 const MIN_VISIBLE_MS = 500;
 const DONE_VISIBLE_MS = 2400;
