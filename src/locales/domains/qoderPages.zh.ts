@@ -307,6 +307,8 @@ export const zh = {
   "qoder.page.accounts.checkin.already": "{name} 今日已签到",
   "qoder.page.accounts.checkin.done": "{name} 签到成功",
   "qoder.page.accounts.checkin.batchDone": "已签到 {n} 个账号",
+  "qoder.page.accounts.checkin.batchAlready": "{n} 个账号今日已签到",
+  "qoder.page.accounts.checkin.batchAlreadyPart": "另有 {n} 个今日已签到（未重复领取）",
   "qoder.page.accounts.checkin.batchPartial": "成功 {ok} 个，失败 {fail} 个",
   "qoder.page.accounts.checkin.failed": "{name} 签到失败",
   // 「通道未开放」= 上游没给这个号下发签到活动（不是失败，也不是成功），点重试无用。

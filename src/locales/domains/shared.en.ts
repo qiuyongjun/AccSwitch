@@ -717,6 +717,7 @@ export const en = {
   "shared.checkinResult.summary4": "{ok} ok · {skip} unavailable · {fail} failed",
   "shared.checkinResult.skippedNames": "Check-in channel unavailable for: {names}",
   "shared.checkinResult.notStartedBadge": "{n} not started",
+  "shared.checkinResult.alreadyBadge": "{n} already signed today",
   "shared.checkinResult.notStartedNames":
     "Check-in has not started for: {names} (opens daily at 10:00, or the campaign has not refreshed yet)",
   "shared.checkinResult.earned": "+{n} Credits this run",

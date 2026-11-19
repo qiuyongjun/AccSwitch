@@ -293,6 +293,9 @@ export const en = {
   "qoder.page.accounts.checkin.already": "{name} already checked in today",
   "qoder.page.accounts.checkin.done": "{name} checked in",
   "qoder.page.accounts.checkin.batchDone": "Checked in {n} accounts",
+  "qoder.page.accounts.checkin.batchAlready": "{n} accounts already checked in today",
+  "qoder.page.accounts.checkin.batchAlreadyPart":
+    "{n} more already checked in today (not claimed again)",
   "qoder.page.accounts.checkin.batchPartial": "{ok} succeeded, {fail} failed",
   "qoder.page.accounts.checkin.failed": "Check-in failed for {name}",
   // “Channel unavailable” = upstream publishes no check-in activity for this account:

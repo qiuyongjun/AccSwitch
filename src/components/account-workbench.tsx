@@ -118,6 +118,8 @@ export interface AccountWorkbenchProps<T> {
    *    `CheckinResultBar` 的渲染与加这个 prop 之前逐字一致 ⇒ WB / Trae 不受影响）。 */
   checkinResult?: {
     okCount: number;
+    /** 「今日已签、本轮未实际领取」的账号数（Qoder 专用，可选）。 */
+    alreadyCount?: number;
     failedNames: string[];
     skippedNames?: string[];
     /** 「未开放」那一档的原因说明（Qoder 装配；不传 ⇒ 结果条不渲染这一行）。 */
@@ -291,6 +293,7 @@ export function AccountWorkbench<T>({
         {checkinResult ? (
           <CheckinResultBar
             okCount={checkinResult.okCount}
+            alreadyCount={checkinResult.alreadyCount}
             failedNames={checkinResult.failedNames}
             skippedNames={checkinResult.skippedNames}
             skippedHint={checkinResult.skippedHint}

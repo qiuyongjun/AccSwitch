@@ -93,8 +93,16 @@ export function AccountsTableAvatar({ name }: { name: string }) {
 }
 
 export interface CheckinResultBarProps {
-  /** 成功数。 */
+  /** 成功数（**本次真领到**；不含「今日已签、此前领过」那一档）。 */
   okCount: number;
+  /**
+   * 「今日已签、但本轮没有实际领取」的账号数（Qoder 专用；其它平台不传）。
+   *
+   * ⚠️ 可选且默认为 0 ⇒ 不渲染这枚徽标，WB / Trae 的输出逐字不变。
+   * 为什么必须分开：「成功 N」被 `already` 混算时，两台机器各签一个会被读成
+   * 「同一台机器签上了两个」，直接误导对上游规则的判断（2026-11-19 用户报障）。
+   */
+  alreadyCount?: number;
   /** **失败账号的显示名**（不是 id）—— 由页面装配，本组件只渲染。 */
   failedNames: string[];
   /**
@@ -160,6 +168,7 @@ export interface CheckinResultBarProps {
  */
 export function CheckinResultBar({
   okCount,
+  alreadyCount = 0,
   failedNames,
   skippedNames,
   notStartedNames,
@@ -206,6 +215,11 @@ export function CheckinResultBar({
             })
           : t("shared.checkinResult.summary", { ok: okCount, fail: failedNames.length })}
       </Badge>
+      {alreadyCount > 0 ? (
+        <Badge variant="outline" className="shrink-0 tabular-nums border-transparent">
+          {t("shared.checkinResult.alreadyBadge", { n: String(alreadyCount) })}
+        </Badge>
+      ) : null}
       {earnedCredits > 0 ? (
         <Badge variant="success" className="shrink-0 tabular-nums border-transparent">
           {t("shared.checkinResult.earned", { n: String(earnedCredits) })}

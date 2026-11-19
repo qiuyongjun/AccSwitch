@@ -830,6 +830,8 @@ export const zh = {
   "shared.checkinResult.summary4": "成功 {ok} · 未开放 {skip} · 失败 {fail}",
   "shared.checkinResult.skippedNames": "以下账号的签到通道未开放（桌面端网页活动页才可领）：{names}",
   "shared.checkinResult.notStartedBadge": "未到时间 {n}",
+  // 「今日已签、本轮未实际领取」的单独一档：不能并进「成功 N」（会让人误读成本轮领到）。
+  "shared.checkinResult.alreadyBadge": "今日已签 {n}",
   "shared.checkinResult.notStartedNames": "以下账号未到签到时间（每日 10:00 开放或活动尚未刷新）：{names}",
   // 本次真领到的额度合计（活动通道）。**可选**：不传时结果条不显示这一枚徽标，
   // WB / Trae 的渲染逐字不变（它们没有活动通道，也不该凭空多一行）。

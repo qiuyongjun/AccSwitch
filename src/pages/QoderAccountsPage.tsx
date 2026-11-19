@@ -391,7 +391,10 @@ function QoderAccountsPanel({
   /** 批量签到结果条（含失败项，可只重试失败项）。`null` = 不渲染。 */
   /* 五档：成功数 / 通道未开放 / **未到签到时间** / 失败 / 未处理（协作式取消后没发出的）。 */
   const [checkinResult, setCheckinResult] = useState<{
+    /** 本次**真领到**的账号数（不含「今日已签、此前领过」那一档）。 */
     okCount: number;
+    /** 确认今日已签、但本轮没有实际领取的账号数（此前在别处 / 更早领过）。 */
+    alreadyCount: number;
     /** 本次**真领到**的额度合计（活动通道；只作展示，不参与成败判定）。 */
     earned: number;
     disabled: FailedItem[];
@@ -1484,7 +1487,12 @@ function QoderAccountsPanel({
    * ★ **四档**：成功（含 `already`）/ 通道未开放（`disabled`，重试永远无效）/ 失败 /
    * **未处理**（用户取消、请求根本没发出 —— 它既不是成功也不是失败）。
    */
-  async function runCheckin(targets: QoderAccountView[], baseOk = 0, baseEarned = 0) {
+  async function runCheckin(
+    targets: QoderAccountView[],
+    baseOk = 0,
+    baseEarned = 0,
+    baseAlready = 0,
+  ) {
     if (targets.length === 0 || busy) return;
     /* ★ 窗口没开 / 活动还没刷出来的账号**不发起领取**：
        Qoder 每日 10:00 才切到新一天，此时上游的 CLAIMED 属于上一轮，领不出今天的奖励。
@@ -1519,6 +1527,7 @@ function QoderAccountsPanel({
       /** 「未开放」里有多少是**上游本轮没下发**（`campaignMissing`）—— 决定回执怎么说。 */
       let disabledMissing = 0;
       let ok = baseOk;
+      let alreadyCount = baseAlready;
       let earned = baseEarned;
       /* ★ 本轮（**不含**重试累计的 `baseOk`）的计数：toast 只报这一轮，
          否则「只重试失败项」会把上一轮的成果再加一遍。 */
@@ -1541,10 +1550,17 @@ function QoderAccountsPanel({
         }
         const claim = outcome.result;
         if (claim.ok) {
-          ok += 1;
           checkedUids.push(account.uid);
-          if (claim.already) roundAlready += 1;
-          else roundOk += 1;
+          /* ⚠️ `already` 是「今日已签」（可能在公司 / 更早由另一台机器领过），
+             不是**本轮真领到**。两者混算会让回执把「本身已签」说成本次成功
+             （2026-11-19 用户报障：两台机器各签一个，批量却显示「已签到 2 个账号」）。 */
+          if (claim.already) {
+            roundAlready += 1;
+            alreadyCount += 1;
+          } else {
+            roundOk += 1;
+            ok += 1;
+          }
           // 活动通道会带「真领到多少」；旧通道没这个字段 ⇒ 记 0，不编数。
           earned += claim.rewardCredits ?? 0;
         } else if (claim.disabled) {
@@ -1575,9 +1591,10 @@ function QoderAccountsPanel({
       /* ★ §1.12 规则 2：**单条不摆结果条** —— 一屏放一条结果不值，且抽屉打开时它根本看不见
          （回执由下面的 toast 承担）。`baseOk > 0` 是「只重试失败项」的续跑：那时结果条已是
          这一批的记录，必须继续更新，不能停在上一轮的计数上。 */
-      if (targets.length > 1 || baseOk > 0) {
+      if (targets.length > 1 || baseOk > 0 || baseAlready > 0) {
         setCheckinResult({
           okCount: ok,
+          alreadyCount,
           earned,
           disabled,
           notStarted,
@@ -1589,9 +1606,16 @@ function QoderAccountsPanel({
          而结果条渲染在工作台工具栏与列表之间 —— 抽屉一打开就被压在下面，
          「在抽屉里点签到」等于没有任何回执。这里补 toast（单条报账号名、批量报数量），
          结果条**仍保留**：它承担「可回看 + 只重试失败项」，与 toast 不互相替代。 */
-      const okThisRound = roundOk + roundAlready;
+      /* ★ `okThisRound` 只算**本轮真领到**：`already` 是「今日已签」（可能在另一台机器 /
+         更早领过），把它算进「本次成功」会让回执口径失真。 */
+      const okThisRound = roundOk;
       const single = targets.length === 1 ? targets[0] : null;
       const extras: string[] = [];
+      if (roundAlready > 0) {
+        extras.push(
+          t("qoder.page.accounts.checkin.batchAlreadyPart", { n: String(roundAlready) }),
+        );
+      }
       if (disabled.length > 0) {
         extras.push(t("qoder.page.accounts.checkin.disabledPart", { n: String(disabled.length) }));
       }
@@ -1632,6 +1656,11 @@ function QoderAccountsPanel({
         /* `notStarted` / `refreshing` 的**单条**情形已在上方「全部跳过」分支提示过，不重复弹。 */
       } else if (okThisRound > 0 && failed.length === 0 && unprocessed.length === 0) {
         toast.success(t("qoder.page.accounts.checkin.batchDone", { n: String(okThisRound) }), {
+          description: descriptionWithMissing,
+        });
+      } else if (roundAlready > 0 && failed.length === 0 && unprocessed.length === 0) {
+        /* 本轮没有**新**领取，只是确认「今日已签」：单独一句话，不能混进「成功 N 个」。 */
+        toast.success(t("qoder.page.accounts.checkin.batchAlready", { n: String(roundAlready) }), {
           description: descriptionWithMissing,
         });
       } else if (failed.length > 0) {
@@ -3006,6 +3035,7 @@ function QoderAccountsPanel({
           checkinResult
             ? {
                 okCount: checkinResult.okCount,
+                alreadyCount: checkinResult.alreadyCount,
                 failedNames: checkinResult.failed.map((item) => item.name),
                 /* ⚠️ 「通道未开放」单独一档：不算成功、也不进重试桶。 */
                 skippedNames: checkinResult.disabled.map((item) => item.name),
@@ -3033,6 +3063,7 @@ function QoderAccountsPanel({
                           rows.filter((a) => retryUids.has(a.uid)),
                           checkinResult.okCount,
                           checkinResult.earned,
+                          checkinResult.alreadyCount,
                         );
                       }
                     : undefined,
