@@ -294,7 +294,6 @@ export const zh = {
   "qoder.page.accounts.web.state.unknownHint": "登录网页端后即可查看每个积分包各剩多少、何时到期。",
   "qoder.page.accounts.web.state.unsupported": "当前形态看不到逐包",
   "qoder.page.accounts.web.state.unsupportedHint": "逐包需要内嵌浏览器采集网页会话，仅桌面版支持；聚合额度在任意形态都可用。",
-  "qoder.page.accounts.credits.loading": "额度查询中…",
   "qoder.page.accounts.checkin.action": "签到",
   // Qoder 的「今天」= UTC+8 10:00 起的窗口；窗口未开 / 活动未刷新各成一档。
   "qoder.page.accounts.checkin.notStartedToast": "今日签到 10:00 后开放，到点再来",

@@ -2123,19 +2123,27 @@ check("★ 列表与卡片同契约：今日用量不进表；积分 / 凭据 / 
   return "今日用量不进表 · 积分列=当前/总额+最近到期+优先 · 凭据列复用卡片 `CredentialExpiryMeta` · 当前登录复用卡片文案 · 状态列复用卡片徽章 · 表格壳有 tooltip provider";
 });
 
-check("★ 积分「上次成功读数」占位：只落成功值 · 只做展示 · 必须自报时间 · 不顶掉实时值", () => {
-  /* 2026-11-10：首屏占位（`lib/credit-cache.ts`）引入了三条**会被悄悄违反**的边界，
-     逐条钉住。变异：写失败结果 / 拿缓存参与排序 / 去掉时间标注 / 让 loading 盖住读数
-     / 用单值时刻当 TTL 判据 ⇒ 本条变红。 */
+check("★ 积分「上次成功读数」占位：只落成功值 · 只做展示 · 不逐卡转圈、不标时间", () => {
+  /* 2026-11-10：首屏占位（`lib/credit-cache.ts`）引入三条**会被悄悄违反**的边界。
+     2026-11-17（99614bad）：又撤掉了「上次读数 · N 分钟前」与逐卡「积分查询中…」
+     —— 切页 / 后台 / 一键刷新都会重取，逐卡指示与页头的「正在同步…」是同一轮请求的
+     第二遍表达。本条随之改为钉住**现行**口径（此前仍断言 `cachedCreditAt` /
+     `creditCacheNote` 必须存在，而那两者已被删除 ⇒ check:scope 长期 1 红）。
+     变异：写失败结果 / 拿缓存参与排序 / 让 loading 盖住读数 / 把时间标注或逐卡转圈加回来
+     ⇒ 本条变红。 */
   const cache = stripComments(readCode("src/lib/credit-cache.ts"));
   if (!/if \(!value\.ok\) return;/.test(cache)) {
     throw new Error("`writeCreditCacheEntry` 未拒绝失败读数 —— 一次网络抖动会被固化成「上次读数」");
   }
   if (!/out\[id\] = \{ at: entry\.at, value: entry\.value \}/.test(cache)) {
-    throw new Error("`readCreditCache` 没有把 `at` 交出来 —— 展示层无法标注「上次读数」");
+    throw new Error("`readCreditCache` 没有把 `at` 交出来 —— 7 天过期判据读不到写入时刻");
   }
   if (!/MAX_AGE_MS = 7 \* 24 \* 3600 \* 1000/.test(cache)) {
     throw new Error("缓存过期窗口被改动 —— 「7 天」是 spec §12.1 的口径");
+  }
+  /* 时间标注已按 2026-11-17 的决定撤除；重新加回必须同步改本条与 spec §12.1。 */
+  if (/creditCacheNote|formatCreditCacheAge/.test(cache)) {
+    throw new Error("`credit-cache.ts` 又出现了「上次读数 · N 分钟前」格式化器 —— 该标注已于 2026-11-17 撤除");
   }
 
   const page = stripComments(readCode("src/pages/AccountsPage.tsx"));
@@ -2143,8 +2151,9 @@ check("★ 积分「上次成功读数」占位：只落成功值 · 只做展�
   if (!/\{ \.\.\.cachedCreditValues, \.\.\.creditMap \}/.test(page)) {
     throw new Error("`displayCreditMap` 的合并顺序不等于「缓存 ⊕ 实时」—— 旧值会盖掉新读数");
   }
-  if (!/creditMap\[id\] \? undefined : cachedCredits\[id\]\?\.at/.test(page)) {
-    throw new Error("`cachedCreditAt` 没有在「已有实时值」时返回 undefined —— 新数据会被标成缓存");
+  /* 缓存只做占位：一旦把写入时刻接回展示层，等于又把「旧值伪装成当前态」放回来了。 */
+  if (/cachedCreditAt|creditCachedAt/.test(page)) {
+    throw new Error("账号页又把「上次读数」时刻接回展示层 —— 标注已于 2026-11-17 撤除（spec §12.1）");
   }
   /* 排序 / 优先级 / `attentionOf` 只能读实时 `creditMap`（spec §12.1 的边界）。 */
   const priorityBlock = page.slice(
@@ -2158,24 +2167,17 @@ check("★ 积分「上次成功读数」占位：只落成功值 · 只做展�
   if (nextBatchBlock.includes("displayCreditMap")) {
     throw new Error("`nextBatchById` 读了展示缓存 —— 排序键必须来自实时读数");
   }
-  for (const [name, source] of [
-    ["表格「积分」列", "creditCacheNote(cachedAt"],
-    ["卡片指标行", "creditCachedAt"],
-  ]) {
-    if (!page.includes(source)) {
-      throw new Error(`${name}未接「上次读数」标注 —— 7 天前的批次会被渲染成「明天到期」`);
-    }
-  }
 
   const card = stripComments(readCode("src/components/account-card.tsx"));
-  /* 判据顺序：先看有没有读数，再看 loading。反过来 loading 会把缓存占位整个盖住。 */
-  if (!/\{!credit \?\s*\(\s*creditLoading \?/.test(card)) {
-    throw new Error("卡片先判 `creditLoading` 再判 `credit` —— 转圈会盖住「上次读数」占位（§12.1 目标落空）");
+  /* 没有读数时只给**静态**占位：逐卡「积分查询中…」已按 2026-11-17 的决定撤掉，
+     刷新状态由页头统一说明（三端同形：Qoder 渲染「—」、Trae 渲染「未查询」+ 刷新按钮）。 */
+  if (!/t\("wbAccounts\.card\.waitingCredits"\)/.test(card)) {
+    throw new Error("卡片缺「等待积分数据」静态占位 —— 无读数时正文会变成空白");
   }
-  if (!/creditCacheNote\(creditCachedAt/.test(card)) {
-    throw new Error("卡片没有把 `creditCachedAt` 渲染出来 —— 缓存的年龄必须可见");
+  if (/creditLoading|wbAccounts\.card\.loadingCredits/.test(card)) {
+    throw new Error("卡片又出现逐卡「积分查询中…」—— 与页头「正在同步…」重复（2026-11-17 已撤）");
   }
-  return "只落 ok:true · 7 天过期 · 实时覆盖缓存 · 排序键只读实时 · 卡片/表格/抽屉均自报「上次读数」";
+  return "只落 ok:true · 7 天过期 · 实时覆盖缓存 · 排序键只读实时 · 无读数静态占位（不逐卡转圈、不标时间）";
 });
 
 check("★ 积分刷新：单航班 · 全量时刻与任意请求时刻分离 · 按层如实判定（WorkBuddy）", () => {

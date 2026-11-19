@@ -280,7 +280,6 @@ export const en = {
   "qoder.page.accounts.web.state.unknownHint": "Sign in to the web console to see how much each credit pack has left and when it expires.",
   "qoder.page.accounts.web.state.unsupported": "Per-pack unavailable in this build",
   "qoder.page.accounts.web.state.unsupportedHint": "Per-pack needs an embedded browser to capture the web session, so it is desktop-only. Aggregate credits work everywhere.",
-  "qoder.page.accounts.credits.loading": "Loading quota…",
   "qoder.page.accounts.checkin.action": "Check in",
   "qoder.page.accounts.checkin.notStartedToast":
     "Today’s check-in opens at 10:00; come back after that",
