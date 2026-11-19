@@ -130,6 +130,49 @@ macOS 上永远查不到钥匙串条目 ⇒ 解密失败 ⇒ 「桌面端检测�
 - 若**本仓**当天已领过（本地台账盖章），同一份空列表不得把「刚签成功」读回「未签」——
   `checkinEntryOf` 会在这一档用台账补正布尔值并标 `source: "ledger"`。
 
+**判据同源（2026-11-19，用户报障「一键签到显示成功，刷新又显示未签」）**：
+
+「这个账号今天有没有签到活动」**只有一个判据** —— `campaign::is_checkin_item`
+（积分类 `benefit.kind` **且** `classify != View`）/ `has_checkin_activity`。
+三处必须同源：窗口推导（`window_from_items`）、状态行（`campaign_entry` 的
+`campaignMissing`）、领取路径（`checkin_for` 的 `ok`）。
+
+- 领取路径曾单独写「只看 `is_credit_kind`」⇒ 「首次订阅福利」（`VIEW_DETAILS` + 0 元）
+  被当成签到活动，一份**无可领项**的答复被判成 `ok:true`：toast 弹「已签到 N 个账号」、
+  `lastCheckin` 没盖章，刷新后卡片如实写「今日未签」。真机取证：3 个账号一键签到后
+  只有 1 个落章（`accounts.cn.json` 的 `lastCheckin`），另两个即此形态。
+- 上游**领完会撤掉活动** ⇒ 重复点签到拿到的空列表与「未下发」不可区分，唯一例外是
+  本地台账：`ledger_says_checked_in(has_benefit=false, stamped_today=true)` 回
+  `ok:true` + `ledgerAlready:true`（`normalize_campaign_claim` 映射成旧契约的
+  `already:true` ⇒ toast 说「今日已签到」，不说「签到成功」）。没盖章时仍走 `disabled`。
+
+**「客户端里没有签到入口」= 列表里没有该条目，不能据此推断封号（2026-11-19 15:58 对照取证）**：
+
+同一时刻、**同一套请求头**（含 `cosy-clienttype/version`，**不带** `cosy-machine*`）
+分别拉三个国内版账号的 `/sash/api/v1/me/campaigns`：
+
+| 账号 | `showCampaign` | `campaigns` 条目 |
+|:--|:--|:--|
+| qiuyongjun | `true` | 仅 `act-20261020-008`「首次订阅福利」（`VIEW_DETAILS` / `CLAIMED`） |
+| nick7663489616 | `true` | 同上 |
+| nick9550841228 | `true` | `act-20261116-166`「每天领 100 Credits」（`CLAIM_BENEFIT` / `CLAIMED`，`startAt` = 当天 10:00）+ 上条 |
+
+结论（可直接引用）：
+
+- **不是**请求头 / 解析 / 封禁问题：`showCampaign: true`、`campaignUrl` 正常
+  （`gateway.qoder.com.cn/growth-page/activity-iframe`），同一套头对第 3 个账号能拿到条目
+  ⇒ 差异在**账号维度**，由服务端决定发不发那一条。
+- 客户端「签到入口」就是成长页 iframe 内嵌的这份列表 ⇒ 列表里没有该条目，客户端自然没有入口。
+  「没有入口」与「账号被封」是两件事，前者不能推出后者。
+- 与模块头「同机多号共享每轮一次额度、没轮到的号列表里连活动都不显示」同源：
+  官方桌面端一台机器只登一个账号，本仓轮换全部账号签到必然撞这条规则。
+- 未证实项：无法从数据区分「按人去重」与「服务端定向排除」。可区分实验：换一台从未登录过
+  这些账号的设备 / 网络再看成长页；出现入口 ⇒ 去重；仍无 ⇒ 账号维度定向。
+- 界面（2026-11-19）：这一档不再只写「今日未签」。卡片 / 表格徽章的 tooltip、抽屉签到区、
+  批量签到结果条三处都补原因（`qoder.page.accounts.chip.notCheckedInMissingTip` 短句、
+  `…checkin.missingHint` 长句）。理由：只有一枚「未签」时用户会反复点签到 —— 既拿不到，
+  又持续命中同一条规则。
+
 ---
 
 ## 5. 模型清单（三层优先级）

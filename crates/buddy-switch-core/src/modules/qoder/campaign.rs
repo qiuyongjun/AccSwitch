@@ -141,6 +141,41 @@ impl CampaignItem {
     }
 }
 
+/// 一条活动是不是**签到类**活动（纯函数，**唯一判据**）。
+///
+/// 判据 = 积分类 kind（[`CampaignItem::is_credit_kind`]）**且** 不是详情类
+/// （[`CampaignClass::View`]）。
+///
+/// ## ⚠️ 为什么要提成函数（2026-11-19 用户报障「一键签到显示成功，刷新又显示未签」）
+///
+/// 这个判据此前散在三处，其中一处的口径**漏了 `View`**：
+///
+/// | 位置 | 旧判据 | 后果 |
+/// |:--|:--|:--|
+/// | [`window_from_items`] | 积分类 且 非 View | 正确 |
+/// | `checkin::campaign_entry` | 积分类 且 非 View | 正确（画「今日未签」） |
+/// | **`checkin_for`（领取路径）** | **只看积分类** | **假成功** |
+///
+/// 真机形态：国内版列表里只剩「首次订阅福利」（`kind` 空 / `CREDITS`、金额 0、
+/// `actionType=VIEW_DETAILS`），它是「积分类」但**不是签到活动**。领取路径据此认定
+/// 「有活动」⇒ `ok:true`（`earned:0`、什么都没领）⇒ 前端弹「已签到 N 个账号」，
+/// 而状态路径同一份数据得出「今日未签」⇒ 同一屏两种说法，用户反复点签到。
+///
+/// 可证伪：把 [`has_checkin_activity`] 的 `classify != View` 去掉 ⇒
+/// `view_only_list_is_not_a_success` 立即变红。
+pub fn is_checkin_item(item: &CampaignItem) -> bool {
+    item.is_credit_kind() && classify(item) != CampaignClass::View
+}
+
+/// 列表里**有没有**签到类活动（[`is_checkin_item`] 的聚合形态）。
+///
+/// 「没有」才是「今日无可领 / 上游未下发签到活动」那一档的**唯一**依据：
+/// 领取路径（`checkin_for` 的 `ok` 判据）与状态路径（`campaign_entry` 的
+/// `campaignMissing`）必须同源，否则一边说「成功」、一边说「未签」。
+pub fn has_checkin_activity(items: &[CampaignItem]) -> bool {
+    items.iter().any(is_checkin_item)
+}
+
 /// 一条活动的**处置分类**（纯函数，见 [`classify`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CampaignClass {
@@ -403,9 +438,9 @@ pub fn window_from_items(items: &[CampaignItem], now: i64) -> CheckinWindow {
     const DAY: i64 = 86_400;
     let cycle_start = items
         .iter()
-        // 只认「签到类」积分活动：`kind` 为空但 `action=VIEW_DETAILS` 的福利活动
+        // 只认「签到类」活动：`kind` 为空但 `action=VIEW_DETAILS` 的福利活动
         // （实测「首次订阅福利」）不算签到，不能拿它的整体周期来推每日窗口。
-        .filter(|item| item.is_credit_kind() && classify(item) != CampaignClass::View)
+        .filter(|item| is_checkin_item(item))
         .map(|item| item.start_at)
         .filter(|start| *start > 0)
         .max();
@@ -1089,6 +1124,27 @@ pub fn checkin_ok(errors: &[String], has_benefit: bool) -> bool {
     errors.is_empty() && has_benefit
 }
 
+/// 列表里**没有**签到活动，但本地台账证明「今天已经领过」（纯函数，可测）。
+///
+/// ## 为什么这一档不能算「未开放」
+///
+/// 上游的行为是：**领取成功后把该活动从列表里撤掉**（真机实测，见
+/// `QoderAccountsPage` 里 `campaignMissing` 的注释）。于是「今天再点一次一键签到」
+/// 拿到的答复与「上游压根没下发」长得一模一样 —— 单看列表无法区分。
+///
+/// 区分依据只有一条：本仓今天为这个账号**盖过章**（`last_checkin` 是本地时间今天）。
+/// 盖章不是猜测，它是「领取成功 / 上游答 `CLAIMED`」那次动作的产物。
+///
+/// 状态路径早已按这个口径渲染（`checkin::campaign_entry` 出 `campaignMissing`，
+/// 前端用台账补正成「今日已签」）；领取路径若不认它，就会出现
+/// 「卡片写已签、点一键签到却提示未开放」——同一个账号两种说法。
+///
+/// 可证伪：把 `checkin_for` 的 `ok` 去掉 `ledger_says_checked_in` ⇒
+/// `ledger_keeps_a_repeat_claim_consistent` 变红。
+pub fn ledger_says_checked_in(has_benefit: bool, stamped_today: bool) -> bool {
+    !has_benefit && stamped_today
+}
+
 /// 单账号签到：领取**所有可领的积分活动**（`CREDITS` / 空 kind），并落盘状态。
 ///
 /// 返回的 JSON 形状与前端「签到结果条」直接对应（见 `campaign_checkin` 的字段名）。
@@ -1164,9 +1220,20 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
         }));
     }
 
-    // 「有没有积分类活动」决定第三档语义（issue #58 §5 / #46-D）：
+    // 「有没有签到类活动」决定第三档语义（issue #58 §5 / #46-D）：
     // 一条都没有 ⇒ 未开放（`ok:false` + `disabled:true`），**不得**报成功。
-    let has_benefit = snapshot.items.iter().any(|item| item.is_credit_kind());
+    //
+    // ★ 2026-11-19（用户报障「一键签到显示成功，刷新又显示未签」）：这里此前写的是
+    //   `items.any(is_credit_kind)` —— 把「首次订阅福利」这类 `VIEW_DETAILS` + 0 元的
+    //   积分类活动也算成「有活动」，于是一份**无可领项**的答复被判成 `ok:true`：
+    //   toast 弹「已签到 N 个账号」，`lastCheckin` 没盖章，刷新后卡片如实写「今日未签」。
+    //   判据必须与 `checkin::campaign_entry`（画「今日未签」的那一处）**同源**，
+    //   即 [`has_checkin_activity`]。可证伪：改回 `is_credit_kind` ⇒
+    //   `view_only_list_is_not_a_success` 变红。
+    let has_benefit = has_checkin_activity(&snapshot.items);
+    // 今天是否已由本仓为该账号盖过章（上游领完会把活动撤掉 ⇒ 列表为空是**预期**）。
+    let stamped_today = account::checkin_stamp_day(&account)
+        .is_some_and(|day| day == store::today().as_str());
     let blocked_map: BTreeMap<String, i64> = account.campaign_blocked_until.clone();
     let mut claimed: Vec<Value> = Vec::new();
     let mut already: Vec<Value> = Vec::new();
@@ -1273,17 +1340,33 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
     invalidate_campaigns(region, uid);
 
     let (next_at, next_note) = next_checkin_window(now);
-    let message = checkin_message(
-        &claimed, &already, &blocked, &pending, &locked, &errors, earned,
-    );
+    // ★ 「列表里没有签到活动 + 今天已盖过章」⇒ 今日已签（台账），不是「未开放」。
+    //   上游领完就撤活动，重复点「一键签到」必然走到这一档；此时报「未开放」会与
+    //   卡片上的「今日已签」自相矛盾（见 `ledger_says_checked_in` 的注释）。
+    //   有报错时不认台账 —— 那说明这次动作本身出了问题，如实报失败。
+    let ledger_already = ledger_says_checked_in(has_benefit, stamped_today) && errors.is_empty();
+    let message = if ledger_already {
+        "今日已签到（本地台账：上游已收回签到活动）".to_string()
+    } else {
+        checkin_message(&claimed, &already, &blocked, &pending, &locked, &errors, earned)
+    };
     Ok(json!({
-        // `disabled`（列表里根本没有积分类活动）**不算成功** —— 与 de932d7 的
+        // `disabled`（列表里根本没有签到活动）**不算成功** —— 与 de932d7 的
         // `disabled_claim_response` 同一条语义，前端按 `ok` 计数时才不会谎报「N 个成功」。
-        "ok": checkin_ok(&errors, has_benefit),
+        // 唯一例外见 `ledger_already`：今天确实由本仓领过，那是「已签」而不是「未开放」。
+        "ok": checkin_ok(&errors, has_benefit) || ledger_already,
         "uid": uid,
         "source": "campaign",
         "available": true,
-        "disabled": !has_benefit,
+        "disabled": !has_benefit && !ledger_already,
+        // 「列表里没有签到活动」的具体成因（`disabled` 是它的上位结论）。
+        // 前端据此把回执说成「上游本轮未下发」而不是「通道坏了」——
+        // 2026-11-19 用户报障后补：只说「通道未开放」会让人反复点签到。
+        "campaignMissing": !has_benefit,
+        // 逐项 `alreadyItems` 为空（活动已被上游撤掉），但今天**确实签过**：
+        // `normalize_campaign_claim` 据此把旧契约的布尔 `already` 置真，
+        // 前端于是说「今日已签到」而不是「签到成功」（两者不能混为一谈）。
+        "ledgerAlready": ledger_already,
         "claimed": claimed,
         // ⚠️ 键名带 `Items`：旧契约里 `already` 是**布尔**（`qoder_checkin_claim` 的
         // `QoderCheckinClaimResult.already`），两个形状同名会让前端拿到数组当布尔用。
@@ -1749,6 +1832,50 @@ mod tests {
             !checkin_ok(&["上游 500".to_string()], false),
             "既无活动又报错 ⇒ 失败"
         );
+    }
+
+    /// ★ 2026-11-19 回归钉子：**「积分类」不等于「签到活动」，领取路径不得据此报成功**。
+    ///
+    /// 真机形态（国内版）：列表里只剩「首次订阅福利」（`kind` 空 / `CREDITS`、金额 0、
+    /// `actionType=VIEW_DETAILS`、`claimStatus=CLAIMED`）。它是一条积分类活动，但
+    /// `classify` 判为 `View` ⇒ 没有可领项、也没有签到事实。
+    ///
+    /// 此前 `checkin_for` 用 `items.any(is_credit_kind)` 当 `ok` 判据 ⇒ `ok:true`、
+    /// `earned:0`、什么都没领，前端弹「已签到 N 个账号」；同一份答复在状态路径
+    /// （`checkin::campaign_entry`）却是 `campaignMissing` ⇒ 卡片写「今日未签」。
+    /// 用户看到的就是「提示成功，刷新又显示未签」。
+    ///
+    /// 可证伪：把 [`is_checkin_item`] 里的 `classify(item) != View` 去掉 ⇒
+    /// 下面第 2、3 条断言立即变红。
+    #[test]
+    fn view_only_list_is_not_a_success() {
+        // 「首次订阅福利」：积分类，但详情类、0 元、已领。
+        let subscription = item("sub", "VIEW_DETAILS", "CLAIMED", 0);
+
+        assert!(
+            subscription.is_credit_kind(),
+            "它确实是积分类 —— 所以只看 kind 会误判"
+        );
+        assert_eq!(classify(&subscription), CampaignClass::View);
+        assert!(
+            !is_checkin_item(&subscription),
+            "详情类活动不是签到活动（同一判据也用于窗口与状态）"
+        );
+
+        let items = vec![subscription];
+        assert!(
+            !has_checkin_activity(&items),
+            "列表里没有签到活动 ⇒ has_checkin_activity=false"
+        );
+        assert!(
+            !checkin_ok(&[], has_checkin_activity(&items)),
+            "没有签到活动 ⇒ 领取路径必须回 ok:false（disabled 档），不能报成功"
+        );
+
+        // 真正的签到活动仍要算成功（防止把判据收得过紧，反把正常账号判成未开放）。
+        let daily = item("daily", "CLAIM_BENEFIT", "CLAIMABLE", 100);
+        assert!(is_checkin_item(&daily));
+        assert!(checkin_ok(&[], has_checkin_activity(&[daily])));
     }
 
     // ── 真机探针（issue #58 第 0 步；本机无账号，刻意保留位）──

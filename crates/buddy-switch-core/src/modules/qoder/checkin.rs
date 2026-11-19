@@ -47,6 +47,19 @@
 //! 仍能领）。列表里没有 `campaignId` 就没有可 POST 的对象 ⇒ 本仓对这一档**无项可领**，
 //! 只能如实写「今日未签」。把它画成「刷新中」＝ 让用户对着一个永不结束的转圈态反复点刷新。
 //!
+//! ## ★ 「有没有签到活动」只有一个判据（2026-11-19）
+//!
+//! 那句询问（「这个账号今天有签到活动吗」）**必须**走
+//! [`campaign::has_checkin_activity`] / [`campaign::is_checkin_item`]：
+//!
+//! - 领取路径（`campaign::checkin_for` 的 `ok` 判据）；
+//! - 状态路径（本文件的 [`campaign_entry`]，落到 `campaignMissing`）；
+//! - 窗口推导（`campaign::window_from_items`）。
+//!
+//! 任一处自己写一份「只看 `benefit.kind`」的判据，就会把「首次订阅福利」这类
+//! `VIEW_DETAILS` + 0 元活动当成签到活动 ⇒ 领取报成功、状态报未签
+//! （2026-11-19 用户报障「一键签到显示成功，刷新又显示已签/未签」正是此形态）。
+//!
 //! ## 排程（`ScheduleTask::QoderCheckin`）
 //!
 //! [`run_cycle_for`] 逐账号**顺序**调用 [`claim_for`]（并发会踩风控）；
@@ -200,17 +213,18 @@ fn campaign_entry(
     // ★ 只有**真正的签到类**活动（可领 / 已领 / 待领 / 被锁）才算「今天有活动」。
     //   实测的「首次订阅福利」也是空 kind 的积分类，但 action=VIEW_DETAILS、金额为 0，
     //   不能拿它撑起「有活动」，否则活动空窗期会被显示成「今日未签」而不是「刷新中」。
-    let has_checkin_activity = snapshot.items.iter().any(|item| {
-        item.is_credit_kind() && campaign::classify(item) != campaign::CampaignClass::View
-    });
+    //
+    // ⚠️ 判据**必须**走 `campaign::has_checkin_activity`（与领取路径 `checkin_for` 的
+    //   `ok` 判据同源）。2026-11-19 用户报障「一键签到显示成功，刷新又显示未签」就是
+    //   领取路径单独写了一份「只看积分类」的判据造成的：同一份答复，一个说成功、一个说未签。
+    let has_checkin_activity = campaign::has_checkin_activity(&snapshot.items);
     let window = campaign::window_from_items(&snapshot.items, now);
     // 上游是否给了**可用的窗口时间**（正常响应都有；老版本 / 异常载荷可能没有）。
     // 没有时间数据时退回旧口径（直接信 claimStatus），否则测试结果会随「跑测试的时刻」漂移。
-    let has_upstream_window = snapshot.items.iter().any(|item| {
-        item.is_credit_kind()
-            && campaign::classify(item) != campaign::CampaignClass::View
-            && item.start_at > 0
-    });
+    let has_upstream_window = snapshot
+        .items
+        .iter()
+        .any(|item| campaign::is_checkin_item(item) && item.start_at > 0);
     // ★ 上一轮 **CLAIMED 不能当作「今天已签」**：窗口未开（startAt 还是昨天）时不算；
     //   列表落后于时钟（stale）时更不可信 —— 直接归到「刷新中」。
     let today_checked_in =
@@ -478,6 +492,10 @@ pub async fn claim_for(region: QoderRegion, uid: &str) -> Result<Value, String> 
 /// - `already` = 有已领活动（布尔，与旧契约同名同义）；
 /// - `rewardCredits` = `earned`（本次真领到的额度）；
 /// - `claimedCount` = 本次领取条数。
+///
+/// ★ `ledgerAlready`（今天由本仓领过、上游已把活动撤掉）也映射成 `already: true`：
+///   前端只认这个布尔，`alreadyItems` 此时必然是空的 —— 不映射的话，
+///   「今日已签到」会被说成「签到成功」（见 `campaign::ledger_says_checked_in`）。
 fn normalize_campaign_claim(mut value: Value) -> Value {
     let already_count = value
         .get("alreadyItems")
@@ -490,8 +508,12 @@ fn normalize_campaign_claim(mut value: Value) -> Value {
         .map(Vec::len)
         .unwrap_or(0);
     let earned = value.get("earned").and_then(api::as_num).unwrap_or(0);
+    let ledger_already = value
+        .get("ledgerAlready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if let Some(map) = value.as_object_mut() {
-        map.insert("already".to_string(), json!(already_count > 0));
+        map.insert("already".to_string(), json!(already_count > 0 || ledger_already));
         map.insert("rewardCredits".to_string(), json!(earned));
         map.insert("claimedCount".to_string(), json!(claimed_count));
     }
@@ -1089,6 +1111,39 @@ mod tests {
         assert_eq!(disabled["ok"], Value::Bool(false));
         assert_eq!(disabled["disabled"], Value::Bool(true));
     }
+
+    /// ★ 2026-11-19：**今天已由本仓领过**（上游随后撤掉活动）时，重复签到要回「已签」。
+    ///
+    /// 否则同一个账号会出现「卡片写今日已签、点一键签到说通道未开放」。
+    /// 印章是领取行为的产物，不是猜测；没盖章时仍如实报「未开放」。
+    ///
+    /// 另一头（「列表只剩订阅福利 ⇒ 领取报成功」）由 `campaign.rs` 的
+    /// `view_only_list_is_not_a_success` 与上方 `campaign_entry_separates_missing_activity_…`
+    /// 各钉一半：两条路径现在共用 `campaign::has_checkin_activity`，这里不再重复造用例。
+    ///
+    /// 可证伪：让 `ledger_says_checked_in` 恒返回 `false` ⇒ 第一条断言红。
+    #[test]
+    fn ledger_keeps_a_repeat_claim_consistent() {
+        // 有活动：走正常领取口径，台账不参与。
+        assert!(!campaign::ledger_says_checked_in(true, true));
+        // 没活动 + 今天盖过章 ⇒ 今日已签（不是未开放）。
+        assert!(campaign::ledger_says_checked_in(false, true));
+        // 没活动 + 没盖章 ⇒ 如实「未开放」。
+        assert!(!campaign::ledger_says_checked_in(false, false));
+
+        // 前端只认旧契约的布尔 `already` ⇒ 台账已签也必须是 true（`alreadyItems` 此时为空）。
+        let ledger = normalize_campaign_claim(json!({
+            "ok": true, "ledgerAlready": true, "earned": 0,
+            "claimed": [], "alreadyItems": [],
+        }));
+        assert_eq!(ledger["ok"], Value::Bool(true));
+        assert_eq!(
+            ledger["already"],
+            Value::Bool(true),
+            "台账已签 ⇒ 前端要说「今日已签到」，不能说「签到成功」"
+        );
+    }
+
     // ── 真机探针：**会真的领取**今日奖励（消耗当天额度），只在手动跑时执行 ──
     //
     //   cargo test -p buddy-switch-core --lib live_checkin_claim -- --ignored --nocapture
