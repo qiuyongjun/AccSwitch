@@ -122,11 +122,7 @@ fn carrier_file_size_exceeds(base64_len: usize) -> bool {
 /// 否则退回字典序最后一个。仅凭"遍历时最后一个"会挑错设备：源机可能因
 /// 重置过设备而留有多条 `icube-dc:*`，而 `device_id` 现在会被写进
 /// [`register_account_if_missing`] 的绑定，挑错的代价是上游 `20405`。
-fn pick_device_id(
-    variant: TraeVariant,
-    uid: &str,
-    keys: &BTreeMap<String, String>,
-) -> String {
+fn pick_device_id(variant: TraeVariant, uid: &str, keys: &BTreeMap<String, String>) -> String {
     let present: Vec<&str> = keys
         .keys()
         .filter_map(|key| key.strip_prefix(ICUBE_DC_PREFIX))
@@ -261,8 +257,8 @@ pub struct Readiness {
 /// 把 `storage.json` 读成对象（**只读**，不写回）。
 fn read_storage_object(dir: &Path) -> Result<Map<String, Value>, String> {
     let path = icube::storage_path_in_dir(dir);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
     let value: Value =
         serde_json::from_str(&text).map_err(|e| format!("解析 storage.json 失败: {e}"))?;
     value
@@ -295,7 +291,10 @@ fn dir_logged_in_as(variant: TraeVariant, uid: &str) -> Option<PathBuf> {
 ///    而客户端登录着 B 时，唯一的诚实回答是「这台机器上没有 A 的登录态」。
 ///
 /// 失败文案直接给用户看，所以写清「怎么办」而不是只写「不行」。
-pub fn capture_for(variant: TraeVariant, user_id: &str) -> Result<(Carrier, CaptureSummary), String> {
+pub fn capture_for(
+    variant: TraeVariant,
+    user_id: &str,
+) -> Result<(Carrier, CaptureSummary), String> {
     let uid = user_id.trim();
     if uid.is_empty() {
         return Err("账号 ID 不能为空".to_string());
@@ -424,7 +423,8 @@ pub fn write_carrier(path: &Path, carrier: &Carrier) -> Result<(), String> {
 pub fn read_carrier_text(text: &str) -> Result<Carrier, String> {
     // 先看 `format` 再整体反序列化：否则「别的工具的 JSON」会被报成
     // `missing field capturedAt`，用户看到的是字段名而不是「这不是迁移包」。
-    let raw: Value = serde_json::from_str(text).map_err(|e| format!("迁移包不是合法的 JSON：{e}"))?;
+    let raw: Value =
+        serde_json::from_str(text).map_err(|e| format!("迁移包不是合法的 JSON：{e}"))?;
     let format = raw
         .get("format")
         .and_then(Value::as_str)
@@ -465,10 +465,7 @@ pub fn read_carrier_text(text: &str) -> Result<Carrier, String> {
     }
     // ③ files：数量、路径白名单、体积上限。
     if carrier.files.len() > MAX_CARRIER_FILES {
-        return Err(format!(
-            "迁移包里的文件数超过上限（{}）",
-            MAX_CARRIER_FILES
-        ));
+        return Err(format!("迁移包里的文件数超过上限（{}）", MAX_CARRIER_FILES));
     }
     let mut seen = std::collections::HashSet::new();
     for file in &carrier.files {
@@ -515,9 +512,13 @@ pub fn materialize_for(
             variant.as_str()
         ));
     }
-    let slot = paths::profile_dir_for(variant, uid)
-        .ok_or_else(|| "无法定位登录态快照目录".to_string())?;
-    if slot.is_dir() && std::fs::read_dir(&slot).map(|mut it| it.next().is_some()).unwrap_or(false) {
+    let slot =
+        paths::profile_dir_for(variant, uid).ok_or_else(|| "无法定位登录态快照目录".to_string())?;
+    if slot.is_dir()
+        && std::fs::read_dir(&slot)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(false)
+    {
         return Ok(MaterializeOutcome {
             user_id: uid.to_string(),
             slot: slot.display().to_string(),
@@ -531,10 +532,8 @@ pub fn materialize_for(
     // ⚠️ 名字必须唯一：固定 `.import-{uid}` 时两个并发导入会互相
     // `remove_dir_all` 掉对方正在写的目录（`store::atomic_write_text` 早就
     // 为同一类并发事故把临时名改成带 uuid，这里不能重犯）。
-    let staging = paths::profiles_dir_for(variant).join(format!(
-        ".import-{uid}-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let staging = paths::profiles_dir_for(variant)
+        .join(format!(".import-{uid}-{}", uuid::Uuid::new_v4().simple()));
     let _ = std::fs::remove_dir_all(&staging);
     let result = write_slot(&staging, carrier);
     match result {
@@ -543,8 +542,7 @@ pub fn materialize_for(
                 let _ = std::fs::remove_dir_all(&slot);
             }
             if let Some(parent) = slot.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("创建快照目录失败: {e}"))?;
+                std::fs::create_dir_all(parent).map_err(|e| format!("创建快照目录失败: {e}"))?;
             }
             std::fs::rename(&staging, &slot).map_err(|e| {
                 let _ = std::fs::remove_dir_all(&staging);
@@ -591,8 +589,8 @@ fn write_slot(slot: &Path, carrier: &Carrier) -> Result<(usize, u64), String> {
             .map(|(key, value)| (key.clone(), Value::String(value.clone())))
             .collect(),
     );
-    let storage_text =
-        serde_json::to_string_pretty(&storage).map_err(|e| format!("序列化 storage.json 失败: {e}"))?;
+    let storage_text = serde_json::to_string_pretty(&storage)
+        .map_err(|e| format!("序列化 storage.json 失败: {e}"))?;
     std::fs::write(global.join("storage.json"), &storage_text)
         .map_err(|e| format!("写入 storage.json 失败: {e}"))?;
 
@@ -614,8 +612,7 @@ fn write_slot(slot: &Path, carrier: &Carrier) -> Result<(usize, u64), String> {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
         }
-        std::fs::write(&target, &bytes_out)
-            .map_err(|e| format!("写入 {} 失败: {e}", file.path))?;
+        std::fs::write(&target, &bytes_out).map_err(|e| format!("写入 {} 失败: {e}", file.path))?;
         files += 1;
         bytes += bytes_out.len() as u64;
     }
@@ -742,7 +739,10 @@ pub fn parse_credentials(carrier: &Carrier) -> Result<CarrierCredentials, String
         .filter(|text| !text.is_empty())
         .ok_or_else(|| "迁移包里的登录态没有 token".to_string())?
         .to_string();
-    let parsed_uid = value.get("userId").and_then(Value::as_str).unwrap_or_default();
+    let parsed_uid = value
+        .get("userId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     // 防御：载体自报的 uid 与密文里的 uid 必须一致，否则落库会绑到错的账号上。
     if !parsed_uid.is_empty() && parsed_uid != uid {
         return Err(format!(
@@ -833,7 +833,10 @@ pub fn register_account_if_missing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /* 仅 Windows 用例使用：macOS / Linux 上这些 import 会触发 `-D warnings`。 */
+    #[cfg(windows)]
     use crate::modules::trae::account::{self, AccountsFile, RawAccount};
+    #[cfg(windows)]
     use crate::modules::trae::test_support::TempEnv;
 
     /// 注册入口的新签名要先做纯解析；测试里统一走这个薄壳。
@@ -924,7 +927,10 @@ mod tests {
         assert_eq!(carrier.device_id, "3563979885552250");
         assert_eq!(summary.key_count, 3);
         assert!(
-            !carrier.storage_keys.values().any(|v| v.contains("should-not-be-carried")),
+            !carrier
+                .storage_keys
+                .values()
+                .any(|v| v.contains("should-not-be-carried")),
             "机器指纹不得随账号搬走"
         );
         // 会话库必须在：缺了它，目标机若已登录别的账号会被判缓存不一致。
@@ -987,7 +993,10 @@ mod tests {
 
         // 账号库里没有它 ⇒ 即使磁盘上已经有同名目录，也不得报「可切」。
         materialize_for(variant, &carrier).unwrap();
-        assert_eq!(readiness_for(variant, uid).unwrap().verdict, "unknown_account");
+        assert_eq!(
+            readiness_for(variant, uid).unwrap().verdict,
+            "unknown_account"
+        );
 
         seed_account(variant, uid);
         let ready = readiness_for(variant, uid).unwrap();
@@ -1020,9 +1029,17 @@ mod tests {
         assert!(register(variant, &carrier));
         let stored = account::find_for(variant, uid).expect("应已建记录");
         // 凭据来自载体里的密文（读，不是构造）：token 与 refresh 都要落到库里。
-        assert!(stored.jwt.starts_with("Cloud-IDE-JWT "), "实际: {}", stored.jwt);
         assert!(
-            stored.refresh_token.as_deref().map(|t| !t.is_empty()).unwrap_or(false),
+            stored.jwt.starts_with("Cloud-IDE-JWT "),
+            "实际: {}",
+            stored.jwt
+        );
+        assert!(
+            stored
+                .refresh_token
+                .as_deref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false),
             "refresh_token 必须一并落库，否则网关侧用不了这个账号"
         );
         let bound = account::load_accounts_for(variant)
@@ -1064,7 +1081,9 @@ mod tests {
                     updated_at: None,
                     remark: None,
                 }],
-                device_bindings: [(uid.to_string(), "9999999999999999".to_string())].into_iter().collect(),
+                device_bindings: [(uid.to_string(), "9999999999999999".to_string())]
+                    .into_iter()
+                    .collect(),
             },
         )
         .unwrap();
