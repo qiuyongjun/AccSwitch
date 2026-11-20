@@ -17,11 +17,15 @@
 //! ③ 领取           POST /sash/api/v1/me/campaigns/{id}/claim（官方幂等）
 //! ```
 //!
-//! ## 服务端按「**人**」去重（不是按账号）
+//! ## 发放对象由**上游按账号**决定（2026-11-20 纠正）
 //!
-//! 同机多号共享每轮一次的额度：后领的号拿到 `SAME_PERSON_ALREADY_CLAIMED`，
-//! 且**列表里连活动都不显示**。我们记 6 小时冷却（落盘），冷却期内不再白打上游，
-//! 并在结果里如实报「同人已领取」——**不谎报成功，也不谎报失败**。
+//! 上游是否在 `campaigns` 里下发积分类活动，取决于**账号侧**资格（试用 / 套餐状态、
+//! 服务端定向），与设备无关：2026-11-20 用户实测同一台设备、同一天，三个账号里两个
+//! 有入口并各自领到 ⇒ 「同机多号共享每轮一次额度」的旧推断**已被证伪**。
+//!
+//! `SAME_PERSON_ALREADY_CLAIMED` 仍然处理（上游真返回时归「已领」并记 6 小时冷却，
+//! 避免每轮白打上游），但它**不是**「同机多号必然触发」的证据 —— 不要用它反推设备限额，
+//! 也不要把「列表里没有活动」归因到设备。判据与证据见 `docs/specs/QODER-PLATFORM.md` §4。
 //!
 //! ## 与 `credits.rs` 的分工
 //!
@@ -859,7 +863,7 @@ pub struct ClaimOutcome {
     pub status: String,
     /// 上游幂等重放（已领过）。
     pub replayed: bool,
-    /// 服务端按「人」去重（同机其它账号本轮已领）。
+    /// 上游判定「同一身份本轮已领」（不推断成因：可能来自其它设备 / 更早领过）。
     pub blocked: bool,
     pub failure_code: String,
     pub redemption_code: String,
@@ -1015,7 +1019,7 @@ pub fn interpret_claim(payload: &Value) -> ClaimOutcome {
             redemption_code,
             confirming: false,
             amount,
-            message: "同人已领取（同一设备 / 身份下的其他账号本轮已领，服务端按人去重）".into(),
+            message: "同人已领取（上游判定该身份本轮已领，可能来自其它设备或更早领取）".into(),
         };
     }
     // 上游把「失败」放在 body 里（`success=false`）而不是 HTTP 状态。
@@ -1399,7 +1403,7 @@ fn checkin_message(
         return format!("活动领取成功 +{earned} Credits（{} 项）", claimed.len());
     }
     if !blocked.is_empty() {
-        return "同人已领取：同一设备 / 身份下的其他账号本轮已领过（服务端按人去重）".to_string();
+        return "同人已领取：上游判定该身份本轮已领过（可能在其它设备领的）".to_string();
     }
     if !already.is_empty() {
         return format!("今日活动奖励已领取（{} 项）", already.len());

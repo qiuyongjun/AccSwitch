@@ -114,8 +114,9 @@ pub struct RawAccount {
     pub campaign_codes: BTreeMap<String, String>,
     /// 「同人已领」**冷却截止**（`campaignId -> epoch 秒`）。
     ///
-    /// 服务端按「人」（机器指纹）去重：同机多号共享每轮一次的额度，后领的号会拿到
-    /// `SAME_PERSON_ALREADY_CLAIMED`。记冷却避免每轮都白打一次上游。
+    /// 上游**真返回** `SAME_PERSON_ALREADY_CLAIMED` 时记冷却，避免每轮都白打一次上游。
+    /// ⚠️ 不要据此推断「同机多号只能领一份」—— 该推断 2026-11-20 已被实测证伪
+    /// （同一设备同日两个账号各领到一份，见 `docs/specs/QODER-PLATFORM.md` §4）。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub campaign_blocked_until: BTreeMap<String, i64>,
     /// 加入时刻（ISO-8601）。

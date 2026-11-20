@@ -222,8 +222,10 @@ export const en = {
     "Today’s window is open, but the official campaign has not shown up yet — refresh again shortly",
   // 2026-11-19: `campaignMissing` (upstream did not offer the campaign this round) looks
   // identical to "you forgot to check in" — the badge alone cannot say which it is.
+  // 2026-11-20 correction: the cause is on the **account** side (trial / plan eligibility),
+  // not "one per device per round" — two accounts on one device can each claim the same day.
   "qoder.page.accounts.chip.notCheckedInMissingTip":
-    "Upstream did not offer the check-in campaign to this account this round — with several accounts on one device only one gets it per round; refreshing will not change that",
+    "Upstream did not offer the check-in campaign to this account this round (it is outside the credit-issuing scope, e.g. its trial has ended) — refreshing will not change that",
   "qoder.page.accounts.chip.checkinUnavailable": "Check-in unavailable",
   "qoder.page.accounts.metric.credits": "Credits",
   // 2026-10-26: `{remaining} / {total}` removed — card and table render
@@ -304,8 +306,10 @@ export const en = {
   "qoder.page.accounts.checkin.disabledPart": "{n} unavailable",
   // 2026-11-19: the long explanation for the drawer / batch result bar (the badge tooltip
   // uses the shorter `chip.notCheckedInMissingTip` above).
+  // 2026-11-20 correction: eligibility is decided per **account** (trial / plan), not per
+  // device — see docs/specs/QODER-PLATFORM.md §4.
   "qoder.page.accounts.checkin.missingHint":
-    "Upstream did not offer the “earn 100 Credits daily” campaign to this account this round. Qoder issues it per user / per device — one per day — so with several accounts on one machine usually only one can claim. This is an upstream rule, not a missed check-in, and retrying will not change it; check the official client’s growth page.",
+    "Upstream did not offer the “earn 100 Credits daily” campaign to this account this round. Whether it is offered depends on the account itself (for example, accounts past their trial stopped receiving credits from 2026-11-19) and has nothing to do with how many accounts this device has signed in — several accounts can each claim on the same day. This is an upstream rule, not a missed check-in, and retrying will not change it; check the official client’s growth page.",
   "qoder.page.accounts.checkin.resultOk": "{n} checked in",
   "qoder.page.accounts.checkin.resultFail": "{n} failed",
   "qoder.page.accounts.refresh.done": "Token refreshed for {name}",
