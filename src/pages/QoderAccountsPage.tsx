@@ -920,6 +920,8 @@ function QoderAccountsPanel({
    *
    * ⚠️ 只跳「确定无效」的：`active === false` 但**仍有活动**（名额锁定 / 待领）的一档
    * 保留尝试 —— 晚些可能恢复。跳过项仍计入「不可签到」，与后端 `disabled` 回执同档。
+   * ⇒ 工具栏「一键签到」的可用性必须跟着这条判据走（见 `checkinHasPending`）：只剩可尝试
+   * 的「不可签到」时按钮仍可点，别把「晚些可能恢复」的账号一起锁死在禁用态。
    */
   const checkinSkipClaim = useCallback(
     (account: QoderAccountView): boolean => {
@@ -2729,8 +2731,9 @@ function QoderAccountsPanel({
     const row = checkinEntryOf(detailLive.uid);
     const display = checkinDisplayOf(detailLive);
     /* 区域级未开放（旧通道 404/405/410）：没有三格数据，但「不可签到」是已知结论，
-       不能落回「签到状态未知」。 */
-    if (display === "unavailable" && (!row || !row.ok)) {
+       不能落回「签到状态未知」。账号级 `active === false` 但缺少 `todayCheckedIn`
+       （字段缺席）时同样如此 —— 已知结论优先于「读不到」。 */
+    if (display === "unavailable" && (!row || !row.ok || row.todayCheckedIn === undefined)) {
       return { todayCheckedIn: false, unavailable: true };
     }
     if (!row || !row.ok || row.todayCheckedIn === undefined) return null;
@@ -2981,7 +2984,14 @@ function QoderAccountsPanel({
   const noRows = rows.length === 0;
   const checkinHasPending = rows.some((row) => {
     const state = checkinDisplayOf(row);
-    return state === "unchecked" || state === "unknown";
+    /* `unavailable` 里有一档不是死路：`active === false` 但仍有活动（名额锁定 / 待领），
+       晚些可能恢复 —— `checkinSkipClaim` 故意保留尝试，这里也必须算作待签；
+       否则「全是不可签到」会把一键入口一并禁用，那条尝试路径永远走不到。 */
+    return (
+      state === "unchecked" ||
+      state === "unknown" ||
+      (state === "unavailable" && !checkinSkipClaim(row))
+    );
   });
   const allCheckinNotStarted =
     rows.length > 0 &&

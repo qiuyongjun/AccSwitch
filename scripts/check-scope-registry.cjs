@@ -9233,6 +9233,24 @@ check("★ Qoder 签到展示态：不可签到独立成态，区域级未开放
   if (!/checkinResult\.disabledMissing === checkinResult\.disabled\.length/.test(page)) {
     throw new Error("结果条原因没有按「全部未下发」判定 —— 混档时会替上游编原因");
   }
+  /* 一键入口的可用性必须与 `checkinSkipClaim` 同源：只剩「可能恢复」的不可签到时仍可点，
+     否则「保留尝试」永远走不到（2026-11-24 审查发现的口径分叉）。
+     抽屉的 `unavailable` 兜底也必须连同「`todayCheckedIn` 字段缺席」一起判，
+     否则已知结论会落回「签到状态未知」。 */
+  if (
+    !/state === "unchecked"[\s\S]{0,160}?state === "unknown"[\s\S]{0,200}?state === "unavailable" && !checkinSkipClaim\(row\)/.test(
+      page,
+    )
+  ) {
+    throw new Error("一键签到没把「可能恢复的不可签到」算作待签 —— 与 `checkinSkipClaim` 的口径分叉");
+  }
+  if (
+    !/display === "unavailable" && \(!row \|\| !row\.ok \|\| row\.todayCheckedIn === undefined\)/.test(
+      page,
+    )
+  ) {
+    throw new Error("抽屉的不可签到兜底漏了「todayCheckedIn 缺席」—— 会落回状态未知");
+  }
 
   const zh = stripComments(
     fs.readFileSync(path.join(ROOT, "src/locales/domains/qoderPages.zh.ts"), "utf8"),
@@ -9240,7 +9258,7 @@ check("★ Qoder 签到展示态：不可签到独立成态，区域级未开放
   if (!/"qoder\.page\.accounts\.chip\.checkinUnavailable": "不可签到"/.test(zh)) {
     throw new Error("徽章词条不是「不可签到」—— 又回到了模糊的旧说法");
   }
-  return "区域结论优先于读取失败 · 账号级判据顺序钉死 · 批量跳过已知无效 · 原因按全量判定";
+  return "区域结论优先于读取失败 · 账号级判据顺序钉死 · 批量跳过已知无效 · 一键入口保留可恢复档 · 原因按全量判定";
 });
 
 console.log(`\n${passed} passed / ${failures.length} failed\n`);
