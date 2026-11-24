@@ -2,13 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    // ★ P15 · 客户端 hook 会在**每次工具调用**时同步执行本二进制来上报一条事件。
-    // 必须在 **GUI 初始化之前**短路掉它：把 Tauri 的窗口、插件、后台循环都拉起来
-    // 会吃掉几百毫秒，直接撞上客户端的 hook 超时（外部实现用 3 s）。
-    // 返回 `None` = 不是 hook 调用 ⇒ 照常启动桌面应用。
+    // 兼容旧版「会话监听」写进客户端配置的 `hook --source ...` 调用：功能已删除，
+    // 这里读掉 stdin（避免客户端写管道触发 EPIPE）后静默退出 —— 绝不能再把 GUI 拉起来。
     let args: Vec<String> = std::env::args().collect();
-    if let Some(code) = buddy_switch_core::modules::agent_hook_rx::try_run_hook_cli(&args) {
-        std::process::exit(code);
+    if args.get(1).map(String::as_str) == Some("hook") {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        std::process::exit(0);
     }
     buddy_switch_rust_lib::run()
 }

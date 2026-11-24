@@ -21,16 +21,8 @@ use buddy_switch_core::modules::product::{
     require_capability, require_qoder_region, require_trae_region, require_wb_region,
     resolve_scope_param, Product,
 };
-use buddy_switch_core::modules::trae::region::TraeRegion;
-// P9 · 悬浮窗**只读**数据模型 + provider（core）。⚠️ 与桌面窗口模块 `crate::companion`
-// **不是一回事**：前者是跨宿主的只读数据模型，后者是 Tauri 的独立窗口实现。
-use buddy_switch_core::modules::companion as companion_state;
-// P15 · 外部 Agent 会话监听（客户端 hook 驱动）—— 悬浮窗的**第二个数据源**。
-use buddy_switch_core::modules::agent_watch;
-// P15 · hook 安装面（写上游客户端配置）。`app_prefs` / `client_settings` 已在文件头
-// 的大括号导入里，此处**不重复引入**。
-use buddy_switch_core::modules::agent_hook_install;
 use buddy_switch_core::modules::proxy;
+use buddy_switch_core::modules::trae::region::TraeRegion;
 use buddy_switch_gateway::{AccountStrategy, GatewayConfig, GatewayStatusView};
 // 统一网关（第三个产品线）：配置 + 命名空间表 + 独立密钥库。
 // ⚠️ 响应体的**形状**由 `unified::admin` 共享构造提供，本文件不再各自拼 JSON。
@@ -134,8 +126,6 @@ fn mismatch_json(mismatch: &auth_file::RegionMismatch) -> Value {
 /// `/api/switch/progress` 同契约）。事件 `switch-progress` 仍照常派发。
 static SWITCH_PROGRESS: Mutex<Option<String>> = Mutex::new(None);
 static SWITCH_RUNNING: Mutex<bool> = Mutex::new(false);
-/// 进行中的切换操作所属 region —— 供悬浮窗快照推导 / `companion_jump` 聚焦来源用。
-static SWITCH_REGION: Mutex<Option<Region>> = Mutex::new(None);
 
 /// 应用状态（序列化为 **camelCase**，与 server `/api/status` 契约一致）。
 #[derive(Serialize)]
@@ -1591,7 +1581,6 @@ pub async fn switch_account(
         }
         *running = true;
         *SWITCH_PROGRESS.lock().unwrap() = Some("开始切换账号…".to_string());
-        *SWITCH_REGION.lock().unwrap() = Some(region);
     }
 
     let progress: switch::ProgressFn = Box::new(move |message| {
@@ -1611,7 +1600,6 @@ pub async fn switch_account(
     .await;
 
     *SWITCH_RUNNING.lock().unwrap() = false;
-    *SWITCH_REGION.lock().unwrap() = None;
 
     result.map_err(|e| e.to_string())?
 }
@@ -2081,12 +2069,7 @@ pub async fn checkin(account_id: String, region: Option<String>) -> Result<Value
 #[tauri::command]
 pub async fn checkin_all(region: Option<String>) -> Value {
     let region = parse_region(region.as_deref());
-    // P15 · 签到进悬浮窗（首尾两条：WB 侧没有逐账号进度事件，见
-    // `observe_workbuddy_checkin_start` 的说明）。
-    let task = observe_workbuddy_checkin_start(region);
-    let result = checkin::run_checkin_all_for(region).await;
-    observe_workbuddy_checkin_end(&task, region, &result);
-    result
+    checkin::run_checkin_all_for(region).await
 }
 
 /// GET /api/checkin/config —— 自动签到配置。
@@ -3546,9 +3529,6 @@ pub async fn trae_checkin(app: tauri::AppHandle, options: Option<Value>) -> Resu
         // 事件名带 `trae-` 前缀：与 WorkBuddy 侧的 `checkin-progress` 区分，
         // 否则 Trae 的进度会被 WorkBuddy 页面消费掉。
         let _ = app.emit("trae-checkin-progress", event.clone());
-        // P15 · **同一份**进度也喂给悬浮窗 —— 两处消费同一个事件，
-        // 不可能出现「页面显示 3/8、窗口显示别的」这种不一致。
-        observe_trae_checkin(event);
     })
     .await;
     Ok(trae::checkin::report_json(&report))
@@ -3987,434 +3967,6 @@ pub fn clear_trae_gateway_logs() -> Value {
     json!({ "ok": true })
 }
 
-// ---------------------------------------------------------------------------
-// 桌面悬浮窗（P9 · T02 只读数据层）
-// ---------------------------------------------------------------------------
-//
-// ★ 只读红线（`PLAN §3.16`「不做的」）：命令面**只有**读 / 显隐 / 聚焦，
-//   **绝不含任何写操作**（账号切换 / 批量 / 删除 / 导出 / 禁用模型 / 置顶…）。
-//   门禁 `scripts/check-scope-registry.cjs` 的「只读红线」条会逐条扫本段命令体。
-//
-// ★ 刷新**全在前端 webview**（`src/lib/companion.ts` 的 20s 轮询 + 既有事件订阅）
-//   ⇒ 本段**不新增任何 Rust 后台循环**，不触碰 `lib.rs` 的 `BackgroundTask` 注册表
-//   （把「任务未登记 ⇒ 永不执行」的风险归零，P9 §1.3 / R9）。
-
-/// 悬浮窗快照的 provider（**只读**，P9 §1.3）。
-///
-/// ## 本期数据源范围（P9 ✅ #2：只做「已有数据源」的来源）
-///
-/// 只接由**现有**进度状态（`switch-progress`）推导出的「进行中操作」。跨来源客户端
-/// （Codex / CodeBuddy 等）与 P8 会话工作台**不在本期** —— 这里**预留**与 P8 同源的
-/// 接口（[`companion_state::LiveOperation`]）但**不依赖**它：P8 就绪时把它的会话状态
-/// 也映射成 `LiveOperation` 即可，本函数与前端**无需改动**。
-///
-/// ## fail-closed，不造假
-///
-/// 无进行中操作 ⇒ 结构化空态（`source: "unavailable"` + `items: []`），
-/// **绝不用演示数据填充**。
-fn companion_snapshot() -> companion_state::CompanionSnapshot {
-    let mut operations: Vec<companion_state::LiveOperation> = Vec::new();
-
-    // WorkBuddy 切换：进行中 ⇒ 一条 running 项（数据源 = 现有 `switch-progress` 状态）。
-    let running = *SWITCH_RUNNING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if running {
-        let region = SWITCH_REGION
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .unwrap_or(Region::Cn);
-        let progress = SWITCH_PROGRESS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-            .unwrap_or_default();
-        operations.push(companion_state::LiveOperation {
-            // id 里带上 region：`companion_jump` 据此聚焦**正在切换的那个**客户端。
-            id: format!("workbuddy:{}:switch", region.as_str()),
-            source: process::region_app_stems(region)[0].to_string(),
-            title: progress,
-            hint: String::new(),
-            state: companion_state::CompanionState::Running,
-        });
-    }
-
-    // ★ P15 · 外部 Agent 会话：由客户端 hook 事件驱动（接收端见 `agent_hook_rx`）。
-    // ★ 零周期任务 —— 过期在 `operations()` 里**读取时惰性判定**（见 `agent_watch` 模块头）。
-    // 两个数据源**合并进同一个快照**：悬浮窗是一个窗口，不是两个（`P15-SPIKE-RESULTS §2 Q1`）。
-    {
-        let watch = agent_watch::shared()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        operations.extend(watch.operations(config::now_ms()));
-    }
-
-    companion_state::snapshot_from_operations(&operations, config::now_ms())
-}
-
-/// GET /api/companion/status —— 悬浮窗的**只读**快照（P9 §1.3）。
-///
-/// **只读**：无参数（app 级聚合，✅ #4）、无副作用、不改任何状态。
-#[tauri::command]
-pub async fn companion_status() -> Result<companion_state::CompanionSnapshot, String> {
-    Ok(companion_snapshot())
-}
-
-/// POST /api/companion/visibility —— 显示 / 隐藏悬浮窗。
-///
-/// ★ 这是可见性的**唯一收敛点**：侧栏图标 / 托盘菜单 / 窗口内关闭按钮都经它改变状态，
-/// 因此「不许出现第二个看起来能切的控件」这条纪律靠它守住（P9 §1.5 / R8）。
-#[tauri::command]
-pub async fn companion_set_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
-    #[cfg(desktop)]
-    {
-        crate::companion::set_visible(&app, visible).map_err(|error| error.to_string())
-    }
-    #[cfg(not(desktop))]
-    {
-        let _ = (app, visible);
-        Err("桌面悬浮窗仅在桌面端可用".to_string())
-    }
-}
-
-/// POST /api/companion/toggle —— 翻转可见性，返回翻转**之后**的状态。
-#[tauri::command]
-pub async fn companion_toggle(app: tauri::AppHandle) -> Result<bool, String> {
-    #[cfg(desktop)]
-    {
-        crate::companion::toggle(&app).map_err(|error| error.to_string())
-    }
-    #[cfg(not(desktop))]
-    {
-        let _ = app;
-        Err("桌面悬浮窗仅在桌面端可用".to_string())
-    }
-}
-
-/// POST /api/companion/jump —— 聚焦 / 唤起来源客户端（P9 ✅ #1）。
-///
-/// ★ **不切账号、不导航主窗口、不删改任何数据** —— 悬浮窗只「把你带到那儿」。
-/// ⚠️ 来源客户端**未运行** ⇒ 返回**可理解的错误**（前端渲染明确反馈），**不静默失败**。
-#[tauri::command]
-pub async fn companion_jump(id: String) -> Result<(), String> {
-    if id.trim().is_empty() {
-        return Err("缺少条目 id".to_string());
-    }
-    // 本期唯一来源 = WorkBuddy（跨来源 Codex / CodeBuddy 不在本期，P9 ✅ #2）。
-    // id 形如 `workbuddy:<region>:switch`：region 决定聚焦**哪一个**客户端。
-    let mut parts = id.split(':');
-    let source = parts.next().unwrap_or_default();
-    let region = parts.next().and_then(Region::parse);
-    if source != "workbuddy" {
-        return Err(format!("未知的来源条目：{id}"));
-    }
-    let Some(region) = region else {
-        return Err(format!("未知的来源条目：{id}"));
-    };
-    // `focus_workbuddy_for` 内部的 `is_workbuddy_running_for` 在 Windows 上会起 tasklist
-    // 子进程 ⇒ 放 blocking 线程，不阻塞 Tauri 主线程（判据见 `get_status` 的注释）。
-    tauri::async_runtime::spawn_blocking(move || process::focus_workbuddy_for(region))
-        .await
-        .map_err(|error| format!("唤起客户端失败: {error}"))?
-}
-
-// ---------------------------------------------------------------------------
-// 外部 Agent 会话监听（P15 · hook 安装面）
-// ---------------------------------------------------------------------------
-//
-// ★ 与 P9 的**只读红线不冲突**：那一条约束的是**悬浮窗**（`companion_*` 命令面）。
-//   本段改的是**上游客户端的配置文件**（装 / 卸 hook），是用户显式同意的动作，
-//   不是窗口上的写操作。两者的可见性开关也各自独立。
-
-/// hook 的安装目标：**只列「机制已取证」的客户端**。
-///
-/// ## 逐个来源为什么在 / 不在表里
-///
-/// | 目标 | 在表里？ | 依据 |
-/// |:---|:---|:---|
-/// | `workbuddy-cn` / `workbuddy-global` | ✅ | `settings.json` 的 `hooks` 键（`client_settings::CLIENT_SLOTS`） |
-/// | `claude`（Claude Code） | ✅ | `~/.claude/settings.json` 的 `hooks` 键 —— **本机实测**（已有一条第三方 hook） |
-/// | `codebuddy`（CodeBuddy CLI） | ✅ | `~/.codebuddy/settings.json` 的 `hooks` 键 —— **本机实测**（已抓过真实 payload） |
-/// | `trae-hooks-cn` / `trae-hooks-global` | ✅ | `~/.trae-cn/hooks.json` / `~/.trae/hooks.json`；结构由 Trae 自带 hook 执行器的 serde 结构取证。★ **文件不存在则不创建**（见 `agent_hook_install::missing_config_message`） |
-/// | `codex` | ❌ | 机制存在（`~/.codex/hooks.json`），但**路径与 schema 未一手取证**（本机未安装） |
-/// | `qoder-*` | ❌ | **对 Qoder 是否有 hooks 机制没有任何取证** |
-///
-/// ⚠️ 未取证的客户端**刻意不进本表**：往一个不存在的机制上写配置，只会污染用户的
-/// 客户端文件 —— 比「暂时不支持」糟得多。它们**仍然是合法的来源**
-/// （`agent_watch::HOOK_SOURCES`），用户自行接好 hook 后悬浮窗照常显示。
-const AGENT_HOOK_TARGETS: &[(&str, &str)] = &[
-    ("workbuddy-cn", agent_watch::SOURCE_WORKBUDDY_CN),
-    ("workbuddy-global", agent_watch::SOURCE_WORKBUDDY_GLOBAL),
-    ("claude", agent_watch::SOURCE_CLAUDE),
-    ("codebuddy", agent_watch::SOURCE_CODEBUDDY),
-    ("trae-hooks-cn", agent_watch::SOURCE_TRAE_CN),
-    ("trae-hooks-global", agent_watch::SOURCE_TRAE_GLOBAL),
-];
-
-/// 组装 hook 安装状态（**只读**，无副作用）。
-///
-/// 每一项都回答「**这个槽位**现在是什么状态」而不是给一个含糊的总开关：
-/// 用户可能只装了国内版、国际版压根没装 —— 那时把「未安装」显示成「已关闭」是误导。
-fn agent_hook_status() -> Value {
-    let exe = std::env::current_exe().ok();
-    let slots: Vec<Value> = AGENT_HOOK_TARGETS
-        .iter()
-        .map(|(slot_key, source)| {
-            let read = client_settings::read_settings(slot_key)
-                .unwrap_or_else(|error| json!({ "error": error }));
-            let values = read.get("values").cloned().unwrap_or(Value::Null);
-            let events = if values.is_null() {
-                Vec::new()
-            } else {
-                agent_hook_install::installed_events_of(
-                    &values,
-                    agent_hook_install::profile_for(slot_key),
-                )
-            };
-            json!({
-                "slot": slot_key,
-                "source": source,
-                "clientInstalled": read.get("installed").and_then(Value::as_bool).unwrap_or(false),
-                // 客户端**正在运行**时改不了它的配置（进程守卫）—— UI 据此提示「请先退出客户端」。
-                "clientRunning": read.get("running").and_then(Value::as_bool).unwrap_or(false),
-                "installed": !events.is_empty(),
-                "events": events,
-                "command": exe.as_deref().map(|exe| agent_hook_install::hook_command(exe, source)),
-            })
-        })
-        .collect();
-
-    json!({
-        "enabled": app_prefs::watch_agent_sessions(),
-        // 接收端端口（排在 UNIFIED-GATEWAY-ARCH §2.2 的端口表末尾，见 `agent_hook_rx::HOOK_PORT`）。
-        "port": buddy_switch_core::modules::agent_hook_rx::HOOK_PORT,
-        "slots": slots,
-    })
-}
-
-/// 装 / 卸 hook，并同步偏好。**先做动作、成功了再改偏好**。
-///
-/// ## 为什么「装不上就不写偏好」
-///
-/// 偏好是「用户希望它开着」的**唯一事实来源**，UI 与后续启动都以它为准。
-/// 若安装全失败却把偏好置成 `true`，用户会看到一个「已开启」的开关，
-/// 而客户端里一条 hook 都没有 —— 那种「两边都以为自己对」的状态最难查。
-/// 反过来，**卸载**是例外：无论成功与否都把偏好置回 `false`，
-/// 因为用户表达的是「别再监听了」，残留的 hook 比一个诚实的「关」更糟。
-fn apply_agent_hook_enabled(enabled: bool) -> Result<Value, String> {
-    let mut errors: Vec<String> = Vec::new();
-    let mut changed: Vec<Value> = Vec::new();
-
-    if enabled {
-        let exe =
-            std::env::current_exe().map_err(|error| format!("取当前程序路径失败：{error}"))?;
-        for (slot_key, source) in AGENT_HOOK_TARGETS {
-            let command = agent_hook_install::hook_command(&exe, source);
-            match agent_hook_install::install(slot_key, &command) {
-                Ok(_) => changed.push(json!({ "slot": slot_key, "ok": true })),
-                Err(error) => errors.push(format!("{slot_key}：{error}")),
-            }
-        }
-        if changed.is_empty() {
-            return Err(format!("没有任何客户端装上 hook —— {}", errors.join("；")));
-        }
-    } else {
-        for (slot_key, _) in AGENT_HOOK_TARGETS {
-            match agent_hook_install::uninstall(slot_key) {
-                Ok(_) => changed.push(json!({ "slot": slot_key, "ok": true })),
-                Err(error) => errors.push(format!("{slot_key}：{error}")),
-            }
-        }
-    }
-
-    let mut prefs = app_prefs::load_app_prefs();
-    prefs["watch_agent_sessions"] = json!(enabled);
-    app_prefs::save_app_prefs(&prefs).map_err(|error| format!("保存偏好失败：{error}"))?;
-
-    Ok(json!({ "enabled": enabled, "changed": changed, "errors": errors }))
-}
-
-/// GET /api/agent-hooks/status —— hook 安装状态（**只读**）。
-///
-/// `async` + `spawn_blocking`：本命令要逐槽位读客户端配置文件、并做**进程探测**
-/// （Windows 上起 `tasklist` 子进程，Trae 槽位还要逐变体探测），实测 0.5–1.1 s。
-/// 同步执行会把这段时长原样压在 Tauri 主线程上 ⇒ 设置页一打开窗口就发灰（issue #48）。
-#[tauri::command]
-pub async fn get_agent_hook_status() -> Value {
-    match tauri::async_runtime::spawn_blocking(agent_hook_status).await {
-        Ok(value) => value,
-        Err(error) => json!({ "error": format!("读取 hook 状态失败: {error}") }),
-    }
-}
-
-/// POST /api/agent-hooks/enabled —— 开启 / 关闭外部 Agent 会话监听。
-///
-/// `async` + `spawn_blocking`：装 hook 要**读写客户端配置文件**（慢 IO），
-/// 不能跑在 Tauri 主线程上（判据见下方 `command_threading_tests`）。
-#[tauri::command]
-pub async fn set_agent_hook_enabled(enabled: bool) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || apply_agent_hook_enabled(enabled))
-        .await
-        .map_err(|error| format!("切换监听失败：{error}"))?
-}
-
-// ---------------------------------------------------------------------------
-// P15 · 把「本工具自己的长操作」也送进悬浮窗（签到）
-// ---------------------------------------------------------------------------
-//
-// ★ 依据是 `P9-ARCH §1.3`：数据源写成「`switch-progress` / `checkin-progress` /
-//   `trae-checkin-progress`」三个，但实现里后两个**长期缺席** ——
-//   `src/lib/companion.ts` 一直在订阅一个**从未被 emit 过的** `checkin-progress`。
-//   本节把签到接上（走 `agent_watch::record_local`，与客户端 hook 共用同一张表）。
-//
-// ★ 「本工具自己的操作」与「客户端里的任务」在窗口里用**不同的来源**区分
-//   （`buddy-switch` vs `workbuddy-cn`），标题也写明是什么操作。
-
-/// Trae 批量签到的进度事件 → 悬浮窗里的一行。
-///
-/// Trae 侧有**逐账号**进度（`start` / `account` / `done`），标题随进度更新。
-fn observe_trae_checkin(event: &Value) {
-    let now = config::now_ms();
-    match event
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-    {
-        "start" => {
-            let total = event.get("total").and_then(Value::as_u64).unwrap_or(0);
-            agent_watch::record_local(
-                "trae-checkin",
-                &format!("Trae 签到（共 {total} 个账号）"),
-                companion_state::CompanionState::Running,
-                now,
-            );
-        }
-        "account" => {
-            let name = event.get("name").and_then(Value::as_str).unwrap_or("账号");
-            let status = match event
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-            {
-                "success" => "成功",
-                "already" => "今日已签",
-                _ => "失败",
-            };
-            agent_watch::record_local(
-                "trae-checkin",
-                &format!("Trae 签到：{name} {status}"),
-                companion_state::CompanionState::Running,
-                now,
-            );
-        }
-        // 终态判定与 webui 侧**共用同一段逻辑**（字段名相同，见 `observe_trae_checkin_summary`）。
-        "done" => observe_trae_checkin_summary("trae-checkin", event),
-        _ => {}
-    }
-}
-
-/// Trae 签到的**汇总**（`{ok, already, failed, total}`）→ 悬浮窗终态。
-///
-/// ⚠️ 与 `crates/buddy-switch-server/src/api.rs` 的同名函数**逐字同款**：
-/// 桌面侧从 `done` 事件取、webui 侧从一次性报告取，**字段名相同** ⇒
-/// 两条通道的终态判定不可能分叉。
-fn observe_trae_checkin_summary(task: &str, summary: &Value) {
-    let ok = summary.get("ok").and_then(Value::as_u64).unwrap_or(0);
-    let already = summary.get("already").and_then(Value::as_u64).unwrap_or(0);
-    let failed = summary.get("failed").and_then(Value::as_u64).unwrap_or(0);
-    let total = summary.get("total").and_then(Value::as_u64).unwrap_or(0);
-    // **计划 0 个** ⇒ 这一行本就不该出现（一个字都没签）：撤掉，
-    // 而不是留下「成功 0 · 已签 0 · 失败 0」这种没信息量的噪音行。
-    if total == 0 {
-        forget_local(task);
-        return;
-    }
-    // **一个都没成**（既没有成功、也没有「今日已签」）才算失败。
-    let state = if ok == 0 && already == 0 {
-        companion_state::CompanionState::Failed
-    } else {
-        companion_state::CompanionState::Done
-    };
-    agent_watch::record_local(
-        task,
-        &format!("Trae 签到：成功 {ok} · 已签 {already} · 失败 {failed}"),
-        state,
-        config::now_ms(),
-    );
-}
-
-/// 撤掉一条「本工具自己的操作」（见 `agent_watch::AgentWatch::forget`）。
-fn forget_local(task: &str) {
-    agent_watch::shared()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .forget(agent_watch::SOURCE_THIS_TOOL, task);
-}
-
-/// WorkBuddy 批量签到的**开始**一条，返回 task id（结束时要用**同一个** id 才能覆盖成终态）。
-///
-/// ⚠️ WB 侧**没有**逐账号进度事件（`run_checkin_all_for` 一次性返回）——
-/// 所以这里只有首尾两条。那是**如实反映客户端能力**，不是漏做。
-fn observe_workbuddy_checkin_start(region: Region) -> String {
-    let task = format!("workbuddy-checkin:{}", region.as_str());
-    agent_watch::record_local(
-        &task,
-        &format!("WorkBuddy 签到（{}）", workbuddy_region_label(region)),
-        companion_state::CompanionState::Running,
-        config::now_ms(),
-    );
-    task
-}
-
-/// 见 [`observe_workbuddy_checkin_start`]。
-fn observe_workbuddy_checkin_end(task: &str, region: Region, result: &Value) {
-    // 带 `status` = 这轮**根本没跑**（`skipped` / `unsupported`）⇒ 把刚写的那行**撤掉**。
-    // 显示成「已完成」或「已中止」都是在编造一件没发生的事。
-    if result.get("status").is_some() {
-        forget_local(task);
-        return;
-    }
-    let accounts = result
-        .get("accounts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let total = accounts.len();
-    // **账号表是空的** ⇒ 同样什么都没发生（撤掉，不留「成功 0 / 共 0」的噪音行）。
-    if total == 0 {
-        forget_local(task);
-        return;
-    }
-    let failed = accounts
-        .iter()
-        .filter(|account| account.get("error").is_some_and(|error| !error.is_null()))
-        .count();
-    let ok = total.saturating_sub(failed);
-    let state = if ok == 0 {
-        companion_state::CompanionState::Failed
-    } else {
-        companion_state::CompanionState::Done
-    };
-    agent_watch::record_local(
-        task,
-        &format!(
-            "WorkBuddy 签到（{}）：成功 {ok} / 共 {total}",
-            workbuddy_region_label(region)
-        ),
-        state,
-        config::now_ms(),
-    );
-}
-
-/// WorkBuddy 区域的展示名（**只用于标题**，不进 `source`）。
-fn workbuddy_region_label(region: Region) -> &'static str {
-    if region == Region::Global {
-        "国际版"
-    } else {
-        "国内版"
-    }
-}
-
 /// 护栏：**慢 IO / 起子进程**的命令必须 `async`（否则阻塞 Tauri 主线程）。
 ///
 /// ## 判据来自本文件自己的约定
@@ -4442,26 +3994,24 @@ mod command_threading_tests {
     /// 2026-10-20 按 issue #48 补齐第二批（S 级清单）：都是「点一下就灰屏」的命令 ——
     /// 起 `tasklist` 子进程、开 SQLite、全量读日志、`spawn explorer`。
     const MUST_BE_ASYNC: &[&str] = &[
-        "import_local",           // 读客户端认证文件
-        "check_auth_permission",  // 写 / 删探针文件
-        "list_sessions",          // 读 workbuddy.db（不可读时降级扫 projects 目录）
-        "get_trae_variants",      // 进程探测（Windows 起 tasklist 子进程）
-        "get_trae_accounts",      // 读账号库 + 快照目录
-        "get_trae_logs",          // 全量读日志文件
-        "set_agent_hook_enabled", // 读写上游客户端 settings.json（P15 · hook 安装面）
+        "import_local",          // 读客户端认证文件
+        "check_auth_permission", // 写 / 删探针文件
+        "list_sessions",         // 读 workbuddy.db（不可读时降级扫 projects 目录）
+        "get_trae_variants",     // 进程探测（Windows 起 tasklist 子进程）
+        "get_trae_accounts",     // 读账号库 + 快照目录
+        "get_trae_logs",         // 全量读日志文件
         // ---- issue #48 第二批 ----
         // 注：本数组的尾部注释**不手工对齐** —— 新版 rustfmt 会按最长项重排，
         // 手工对齐反而会让 `cargo fmt --check` 红（CI 用的是较新的 stable）。
-        "get_agent_hook_status", // 6 槽位读配置 + 逐个 tasklist（0.5–1.1 s）
         "get_trae_gateway_models", // 候选目录 + 开 SQLite + 解析 319 KB JSON
-        "get_trae_client_models", // 同上，且与上一条被 Promise.all 同批打
+        "get_trae_client_models",  // 同上，且与上一条被 Promise.all 同批打
         "get_trae_token_statistics", // 全量读 + 两遍解析网关日志（零缓存）
-        "get_trae_env",          // tasklist + 扫两遍安装候选 + 逐目录 stat
-        "open_data_dir",         // spawn explorer ≈160 ms
-        "open_accounts_dir",     // 建目录 + spawn explorer
+        "get_trae_env",            // tasklist + 扫两遍安装候选 + 逐目录 stat
+        "open_data_dir",           // spawn explorer ≈160 ms
+        "open_accounts_dir",       // 建目录 + spawn explorer
         "open_workbuddy_data_dir", // 同上（WB 别名）
-        "open_trae_data_dir",    // 同上（Trae 别名）
-        "trae_launch_client",    // 起客户端进程
+        "open_trae_data_dir",      // 同上（Trae 别名）
+        "trae_launch_client",      // 起客户端进程
     ];
 
     #[test]

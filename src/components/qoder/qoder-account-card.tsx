@@ -89,7 +89,7 @@ const CHIP_CLASS = "border-0 px-[7px] font-medium";
 /**
  * 来源 id → 词条键（id 是**后端数据**，见 `qoder::account::SOURCE_*`）。
  *
- * ⚠️ 与 `companion-row.tsx` 的 `SOURCE_LABEL_KEY` 同一手法：**表外的新取值原样显示**，
+ * ⚠️ 与其它「来源 id → 展示名」表同一手法：**表外的新取值原样显示**，
  * 不隐藏也不猜 —— 后端加了新来源时，界面宁可显示 `mystery-source` 也不要显示空白。
  */
 const SOURCE_LABEL_KEY: Record<string, TranslationKey> = {

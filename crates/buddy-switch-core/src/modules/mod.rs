@@ -3,17 +3,12 @@ pub mod account;
 // 放在 `account` 之后、`activity` 之前：它只依赖 std，被各账号模块引用。
 pub mod accounts_txn;
 pub mod activity;
-// P15 · 外部 Agent 会话监听：`hook 事件 → 会话状态` 的纯状态机 —— 悬浮窗的**第二个数据源**
-// （第一个是 `companion.rs` 消费的自家切换进度）。**零周期任务**：过期靠读取时惰性判定。
-pub mod agent_watch;
-// P15 · hook 的本地接收端（只绑 127.0.0.1）+ 客户端 hook 调用的 `hook` 子命令。
-pub mod agent_hook_rx;
-// P15 · 往客户端 `settings.json` 装 / 卸本工具的 hook（复用 `client_settings` 的
-// 备份 / 进程守卫 / 格式保持，**不新造写入路径**）。
-pub mod agent_hook_install;
 // L0 应用级偏好里**宿主也要读**的那一类（如「关闭窗口是否隐藏到托盘」）——
 // 纯渲染层的偏好留在 `localStorage`，别搬进来（见模块头）。
 pub mod app_prefs;
+// 旧版「会话监听」（P15，已删除）残留 hook 的一次性清理：客户端配置里的
+// `... hook --source ...` 若不剔除，每次工具调用都会把本程序拉起来。
+pub mod agent_hook_cleanup;
 pub mod at_rest;
 pub mod auth_file;
 pub mod backup;
@@ -37,8 +32,6 @@ pub mod client_settings;
 pub mod cloud_sync;
 pub mod codebuddy_cli;
 pub mod codebuddy_cn_ide;
-// P9 · 桌面悬浮窗的**只读**数据模型 + provider（跨来源的会话 / 任务状态）。
-pub mod companion;
 pub mod config;
 pub mod connector;
 // Q1 · 诊断包导出（只读、复用备份的凭据剥离键集；不含会话正文与路径）。

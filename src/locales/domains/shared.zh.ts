@@ -321,68 +321,6 @@ export const zh = {
   "shared.clipboard.copied": "已复制",
   "shared.clipboard.failed": "复制失败，请手动选择后复制",
 
-  // =====================================================================
-  // ---- 桌面悬浮窗（components/companion/，独立窗口）----
-  // ⚠️ 这里**不要**写 `companion/*` 这种通配：`check-scope-registry.cjs` 的 `stripComments`
-  //   是**朴素正则**（`/\/\*[\s\S]*?\*\//`），行注释里的 `/*` 会被当成块注释起点，
-  //   一直吞到文件里**下一个 `*/`** —— 实测因此丢掉过 250 行词条（门禁报「词条缺 …」）。
-  //   词条文件里任何注释都别出现裸 `/*`。
-  // =====================================================================
-  // 悬浮窗是**独立 webview**（`?window=companion`，见 `main.tsx` 的入口分流），
-  // 与主窗口共用同一份词表。四态文案 / 只读脚注 / 空态 / 无障碍标签由 T03 补；
-  // T01 只放骨架**实际引用**的标题键（本仓没有「未使用键」检查，多余键会静默腐坏）。
-  "shared.companion.title": "会话状态",
-  // 侧栏左下角入口（`App.tsx` 的 `CompanionToggle`）：tooltip + 无障碍标签。
-  // 它与托盘菜单项是**同一开关的两面**（都经 `companion_set_visible` 收敛），故与托盘同名。
-  "shared.companion.entry": "会话悬浮窗",
-  // 头部徽标：仅当有「待确认」项时出现（计数由快照数据决定，前端不臆断）。
-  "shared.companion.badge.waiting": "{count} 待确认",
-  // 只读脚注：三件事——只读、点击语义、标题默认隐藏的原因。
-  "shared.companion.footnote": "只读 · 点击回到原会话 · 标题悬停显示",
-  // 窗口内关闭按钮（关闭 = 隐藏，可从侧栏 / 托盘重开）。
-  "shared.companion.close": "隐藏悬浮窗",
-  // 四态文案（与后端 `CompanionState` 的 lowercase 序列化一一对应）。
-  "shared.companion.state.running": "运行中",
-  "shared.companion.state.waiting": "待确认",
-  "shared.companion.state.done": "已完成",
-  "shared.companion.state.failed": "失败",
-  // 来源 id → 展示名（id 是**后端数据**，见 companion-row 的 SOURCE_LABEL_KEY）。
-  // ★ 必须覆盖 `agent_watch::HOOK_SOURCES` 的每一项，门禁 `check-agent-sources.cjs` 会校验。
-  "shared.companion.source.workbuddyCn": "WorkBuddy 国内版",
-  "shared.companion.source.workbuddyGlobal": "WorkBuddy 国际版",
-  "shared.companion.source.claude": "Claude Code",
-  "shared.companion.source.codebuddy": "CodeBuddy",
-  "shared.companion.source.codex": "Codex",
-  "shared.companion.source.traeCn": "Trae 国内版",
-  "shared.companion.source.traeGlobal": "Trae 国际版",
-  "shared.companion.source.qoderCn": "Qoder 国内版",
-  "shared.companion.source.qoderGlobal": "Qoder 国际版",
-  // 本工具自己的长操作（签到等，`agent_watch::SOURCE_THIS_TOOL`）—— 与客户端来源分开。
-  "shared.companion.source.thisTool": "本工具",
-  // 会话没有标题时的兜底（客户端只在部分事件里带标题，空标题是常态）。
-  "shared.companion.untitled": "未命名会话",
-  // ★ 无障碍描述：**脱敏**——只报来源 / 状态 / 时间，**不含标题**
-  //（标题是敏感字段，默认不进 DOM；不能因为读屏就把明文塞回去，见 P9 ✅ #3）。
-  "shared.companion.row.aria": "{source} · {state} · {hint}",
-  // 悬停信息卡的两个字段标签（标题本身即信息卡主体，不设标签）。
-  "shared.companion.info.source": "来源",
-  "shared.companion.info.time": "时间",
-  // 点击条目后的**明确反馈**（不静默失败；来源未运行 ⇒ 可读错误）。
-  "shared.companion.jump.ok": "已聚焦「{source}」",
-  "shared.companion.jump.failed": "无法聚焦来源：{message}",
-  // 空态四要素（含出口「刷新」）——只读刷新，与轮询走同一条路径。
-  "shared.companion.empty.title": "暂无会话",
-  // ⚠️ 这句话必须与**实际数据源**相符：窗口只显示「切号进度」与「已开启监听的客户端会话」，
-  //    它**不会**自动读取客户端里的历史任务。此前这里写「在客户端发起任务后，状态会显示
-  //    在这里」，而当时的实现里客户端任务根本进不来（provider 只读 `SWITCH_RUNNING`）——
-  //    那是一句**没实现就写下的承诺**，照着它排查会白费功夫。
-  "shared.companion.empty.description":
-    "这里显示正在进行的账号切换，以及在「设置 → 客户端」开启会话监听后、客户端里发起的任务。",
-  "shared.companion.empty.refresh": "刷新",
-  // 读取失败的空态（区别于「确实没有会话」）。
-  "shared.companion.error.title": "读取会话状态失败",
-  // 首次加载的读屏提示（视觉上是骨架屏）。
-  "shared.companion.loading": "正在读取会话状态",
 
   // ---- 演示模式遮罩（demo-action.tsx） ----
   "shared.demo.unavailable": "演示模式下不可操作",

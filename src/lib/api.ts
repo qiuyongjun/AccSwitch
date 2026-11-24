@@ -127,9 +127,6 @@ import type {
   TraeVariantId,
   TraeVariantsStatus,
 } from "./trae-types";
-// P9 · 悬浮窗只读快照的类型（**type-only**：`companion.ts` 反向引用本模块的 `call`，
-// 用 `import type` 把运行期依赖收成单向，避免循环导入）。
-import type { CompanionSnapshot } from "./companion";
 // Qoder 网关配置的**写回形状**（snake_case）—— 同样是 type-only（`qoder-gateway.ts`
 // 不依赖本模块，这里只是复用它的形状定义，避免两处各写一份会漂移的接口）。
 import type { QoderGatewayConfigRaw } from "./qoder-gateway";
@@ -212,14 +209,6 @@ const DEMO_READ_COMMANDS = new Set([
   "get_trae_settings", "get_trae_gateway_config", "trae_gateway_status",
   "get_trae_gateway_models", "get_trae_client_models", "list_trae_api_keys",
   "get_trae_gateway_logs",
-  // P9 · 悬浮窗只读快照（演示站需返回虚构数据，否则 build:demo 报错）。
-  // ⚠️ 只登记**只读**命令：`companion_set_visible` / `companion_toggle` / `companion_jump`
-  // 是显隐 / 聚焦（非只读），一律不进这里。
-  "companion_status",
-  // P15 · 外部 Agent 会话监听（**只读**状态）：演示站需返回虚构数据，否则 build:demo 报错。
-  // ⚠️ `set_agent_hook_enabled` 是**写**（会改上游客户端配置），一律不进这里 ——
-  // 演示环境绝不能出现「点了开关就改本机客户端配置」的假动作。
-  "get_agent_hook_status",
   // P7 全局备份**只读**命令（导出 / 自动备份列表 / 自动备份配置）。
   // 预览 / 导入 / 恢复 / 保存配置是**动作**，一律不进这里（由页面侧处理不可用）。
   "export_backup", "list_auto_backups", "get_auto_backup_config",
@@ -638,17 +627,6 @@ const ROUTES: Record<string, Route> = {
   delete_qoder_api_key: { method: "POST", path: "/api/qoder/gateway/keys/delete" },
   get_qoder_gateway_logs: { method: "GET", path: "/api/qoder/gateway/logs" },
   clear_qoder_gateway_logs: { method: "POST", path: "/api/qoder/gateway/logs/clear" },
-  // ---- 桌面悬浮窗（P9 · 只读 + 显隐 + 聚焦；与 src-tauri commands.rs / server api.rs 一一对应）----
-  companion_status: { method: "GET", path: "/api/companion/status" },
-  companion_set_visible: { method: "POST", path: "/api/companion/visibility" },
-  companion_toggle: { method: "POST", path: "/api/companion/toggle" },
-  companion_jump: { method: "POST", path: "/api/companion/jump" },
-  // ---- 外部 Agent 会话监听（P15 · hook 安装面；两宿主同源）----
-  // ⚠️ `set_agent_hook_enabled` 会**写上游客户端的 settings.json**（装 / 卸 hook），
-  // 那是用户显式同意的动作，**不是**悬浮窗的写操作 —— P9 的只读红线仍然成立
-  // （`companion_*` 命令面依旧无任何写操作）。
-  get_agent_hook_status: { method: "GET", path: "/api/agent-hooks/status" },
-  set_agent_hook_enabled: { method: "POST", path: "/api/agent-hooks/enabled" },
 };
 
 /**
@@ -4198,112 +4176,6 @@ export interface QoderImportOutcome {
   failed?: Array<{ uid: string; kind: string; error: string }>;
 }
 
-// ---------------------------------------------------------------------------
-// 桌面悬浮窗（P9 · 只读 + 显隐 + 聚焦）
-// ---------------------------------------------------------------------------
-//
-// ★ 只读红线（`PLAN §3.16`）：命令面**只有**读 / 显隐 / 聚焦，**无任何写操作**。
-//   尤其 `companionJump` **不切账号、不导航主窗口** —— 它只「把你带到来源客户端」。
-//
-// ★ 悬浮窗本体是**桌面端**的独立窗口：webui（浏览器）没有它，`set_visible` /
-//   `toggle` / `jump` 在 webui 会返回结构化「仅桌面端可用」。故这三条**不**进
-//   `DEMO_READ_COMMANDS`（演示模式统一提示不可操作）。
-
-/** 读取悬浮窗的**只读**快照（app 级聚合，无 scope 参数）。 */
-export function companionStatus(): Promise<CompanionSnapshot> {
-  return call<CompanionSnapshot>("companion_status");
-}
-
-/** 显示 / 隐藏悬浮窗（可见性的**唯一收敛点**：侧栏图标 / 托盘 / 窗口内关闭按钮都走它）。 */
-export function companionSetVisible(visible: boolean): Promise<void> {
-  return call<void>("companion_set_visible", { visible });
-}
-
-/** 翻转悬浮窗可见性，返回翻转**之后**的状态。 */
-export function companionToggle(): Promise<boolean> {
-  return call<boolean>("companion_toggle");
-}
-
-/**
- * 聚焦 / 唤起**来源客户端**（P9 ✅ #1）。
- *
- * ★ **不切账号、不导航主窗口、不删改任何数据**。来源客户端未运行 ⇒ 后端返回
- * **可理解的错误**，调用方须渲染成明确反馈（**不静默失败**）。
- */
-export function companionJump(id: string): Promise<void> {
-  return call<void>("companion_jump", { id });
-}
-
-// ---------------------------------------------------------------------------
-// 外部 Agent 会话监听（P15 · hook 安装面）
-// ---------------------------------------------------------------------------
-//
-// ★ 这与悬浮窗的**只读红线不冲突**：那一条约束的是**窗口**（`companion_*`）。
-//   本段改的是**上游客户端的配置文件**（装 / 卸 hook），必须是用户显式动作，
-//   且默认关（`app_prefs.watch_agent_sessions = false`）。
-//
-// ★ 装 / 卸**不新造写入路径**：一律走 `client_settings` 的补丁 ——
-//   它自带格式保持、写前备份、**进程守卫**（客户端在运行就拒写，会被它的内存态覆盖）。
-
-/** 单个客户端的 hook 安装状态。 */
-export interface AgentHookSlot {
-  /** `client_settings` 的槽位键（如 `workbuddy-cn`）。 */
-  slot: string;
-  /** 会话来源 id（同时是 hook 命令 `--source` 的取值）。 */
-  source: string;
-  /** 该客户端**是否安装**（未安装的槽位不会被写配置）。 */
-  clientInstalled: boolean;
-  /**
-   * 该客户端**是否正在运行**。
-   *
-   * ⚠️ 运行中改不了它的配置（进程守卫）⇒ 这一位为 `true` 时开启会失败，
-   * 调用方必须提示用户「先退出客户端」，**不能只说一句失败**。
-   */
-  clientRunning: boolean;
-  /** 是否已装了我们**至少一条** hook。 */
-  installed: boolean;
-  /** 已装了哪些事件（空数组 = 一条都没有）。 */
-  events: string[];
-  /** 装出去的那条命令（诊断用；取不到当前程序路径时为 `null`）。 */
-  command: string | null;
-}
-
-/** hook 安装状态（**只读**）。 */
-export interface AgentHookStatus {
-  /** 用户偏好里的开关（**唯一事实来源**）。 */
-  enabled: boolean;
-  /** 接收端端口。 */
-  port: number;
-  slots: AgentHookSlot[];
-}
-
-/** 读取 hook 安装状态（**只读**）。 */
-export function getAgentHookStatus(): Promise<AgentHookStatus> {
-  return call<AgentHookStatus>("get_agent_hook_status");
-}
-
-/** 开启 / 关闭外部 Agent 会话监听的结果。 */
-export interface AgentHookToggleResult {
-  enabled: boolean;
-  /** 真正改动的槽位。 */
-  changed: Array<{ slot: string; ok: boolean }>;
-  /**
-   * 失败原因（**逐槽位**）。
-   *
-   * ★ 部分成功是常态（国内版装了、国际版没装，或某个客户端正在运行）——
-   * 调用方必须把 `errors` 如实呈现，**不静默失败**。
-   */
-  errors: string[];
-}
-
-/**
- * 开启 / 关闭外部 Agent 会话监听。
- *
- * ⚠️ 开启会**往上游客户端 `settings.json` 写 hook 配置**（默认关，须用户显式同意）。
- */
-export function setAgentHookEnabled(enabled: boolean): Promise<AgentHookToggleResult> {
-  return call<AgentHookToggleResult>("set_agent_hook_enabled", { enabled });
-}
 
 export type { TraeGatewayLogEntry, TraeGatewayStatus };
 

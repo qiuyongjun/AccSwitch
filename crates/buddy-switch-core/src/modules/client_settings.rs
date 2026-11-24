@@ -188,7 +188,7 @@ pub const CLIENT_SLOTS: &[ClientSlot] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// hook 安装目标槽位（CLI 系客户端）
+// CLI 系客户端的 hooks 文件槽位（保留读 / 写原语，供旧版 hook 清理与手工托管）
 // ---------------------------------------------------------------------------
 
 /// Claude Code（`~/.claude/settings.json` 的 command hooks）。
@@ -215,7 +215,7 @@ const CODEBUDDY: ClientSlot = ClientSlot {
     }),
 };
 
-/// **只服务 hook 安装**的槽位表（CLI 系客户端 + Trae 的 hooks 文件）。
+/// CLI 系客户端 + Trae hooks 文件的槽位表（**不托管代理设置**）。
 ///
 /// ## 为什么与 [`CLIENT_SLOTS`] 分开
 ///
@@ -229,7 +229,7 @@ const CODEBUDDY: ClientSlot = ClientSlot {
 ///
 /// 本表只影响「哪些槽位**存在**」；读 / 写 / 备份 / 进程守卫 / 格式指纹保持
 /// 全部复用本模块同一套原语（[`read_settings`] / [`patch_settings`] / [`patch_at`]）。
-/// 换言之：**分开的是「表」，不是「写入路径」**（`P15-SPIKE-RESULTS §6 D41` 那条纪律）。
+/// 换言之：**分开的是「表」，不是「写入路径」**。
 pub const HOOK_FILE_SLOTS: &[ClientSlot] = &[CLAUDE, CODEBUDDY, TRAE_HOOKS_CN, TRAE_HOOKS_GLOBAL];
 
 /// Trae 的 **产品数据目录名**（客户端 `product.json` 的 `dataFolderName`）。
@@ -340,7 +340,7 @@ impl ClientSlot {
 
 /// 按 key 查槽位；未知返回 `None`。
 ///
-/// ⚠️ **两张表都查**：[`CLIENT_SLOTS`]（代理设置槽位）+ [`HOOK_FILE_SLOTS`]（hook 安装槽位）。
+/// ⚠️ **两张表都查**：[`CLIENT_SLOTS`]（代理设置槽位）+ [`HOOK_FILE_SLOTS`]（CLI 系 hooks 文件）。
 /// 这样 `read_settings` / `patch_settings` / 备份 / 进程守卫对 CLI 系槽位**原样生效** ——
 /// 写入路径只有一条，不因为多了一张表就分叉。
 pub fn slot_by_key(key: &str) -> Option<&'static ClientSlot> {
@@ -348,20 +348,6 @@ pub fn slot_by_key(key: &str) -> Option<&'static ClientSlot> {
         .iter()
         .chain(HOOK_FILE_SLOTS.iter())
         .find(|slot| slot.key == key)
-}
-
-/// 该槽位是不是 **Trae 的 hooks 文件**。
-///
-/// 唯一用途：`agent_hook_install::profile_for` 据此选格式档位（Trae 的事件集与
-/// handler 字段与 Claude 系**不同**，见 `HookProfile` 的表）。
-///
-/// ⚠️ 判据落在**槽位的实现维度**上（`SlotKind`），而不是让调用方再抄一份槽位 key 列表 ——
-/// 抄一份就会在两处漂移（新增 Trae 槽位时漏掉一处 ⇒ 用错格式档位 ⇒ 写出客户端不认的字段）。
-pub fn is_trae_hooks_slot(key: &str) -> bool {
-    matches!(
-        slot_by_key(key).map(|slot| slot.kind),
-        Some(SlotKind::TraeHooks(_))
-    )
 }
 
 // ---------------------------------------------------------------------------

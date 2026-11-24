@@ -297,54 +297,6 @@ export const en = {
   "shared.clipboard.copied": "Copied",
   "shared.clipboard.failed": "Copy failed — select the text and copy it manually",
 
-  // ---- Desktop companion window (components/companion/, a separate window) ----
-  // ⚠️ Do NOT write a bare `/*` in a comment here: the scope gate strips comments with a
-  //   naive regex, so `companion/*` inside a line comment swallows everything up to the next
-  //   `*/` (it once dropped 250 lines of entries).
-  // The companion is a separate webview (`?window=companion`, see the entry split in
-  // `main.tsx`) sharing this word list. State labels / read-only footnote / empty state /
-  // a11y labels come in T03; T01 only adds the title key the skeleton actually uses.
-  "shared.companion.title": "Session status",
-  // Sidebar entry (App.tsx `CompanionToggle`): tooltip + accessible label.
-  // It is one of the two faces of the same switch as the tray item (both converge on
-  // `companion_set_visible`), so it shares the tray's wording.
-  "shared.companion.entry": "Session companion",
-  "shared.companion.badge.waiting": "{count} awaiting",
-  "shared.companion.footnote": "Read-only · Click to return to the session · Hover to reveal the title",
-  "shared.companion.close": "Hide the companion window",
-  "shared.companion.state.running": "Running",
-  "shared.companion.state.waiting": "Awaiting",
-  "shared.companion.state.done": "Done",
-  "shared.companion.state.failed": "Failed",
-  // Source id → display name (ids are backend data; see SOURCE_LABEL_KEY in companion-row).
-  // ★ Must cover every entry of `agent_watch::HOOK_SOURCES`; enforced by check-agent-sources.cjs.
-  "shared.companion.source.workbuddyCn": "WorkBuddy (CN)",
-  "shared.companion.source.workbuddyGlobal": "WorkBuddy (Global)",
-  "shared.companion.source.claude": "Claude Code",
-  "shared.companion.source.codebuddy": "CodeBuddy",
-  "shared.companion.source.codex": "Codex",
-  "shared.companion.source.traeCn": "Trae (CN)",
-  "shared.companion.source.traeGlobal": "Trae (Global)",
-  "shared.companion.source.qoderCn": "Qoder (CN)",
-  "shared.companion.source.qoderGlobal": "Qoder (Global)",
-  // This tool's own long-running operations (check-in etc., `agent_watch::SOURCE_THIS_TOOL`).
-  "shared.companion.source.thisTool": "This tool",
-  // Fallback when a session has no title (clients only send one on some events).
-  "shared.companion.untitled": "Untitled session",
-  "shared.companion.row.aria": "{source} · {state} · {hint}",
-  "shared.companion.info.source": "Source",
-  "shared.companion.info.time": "Time",
-  "shared.companion.jump.ok": "Focused {source}",
-  "shared.companion.jump.failed": "Couldn't focus the source: {message}",
-  "shared.companion.empty.title": "No sessions",
-  // ⚠️ Must match the ACTUAL data sources: this window shows account-switch progress plus
-  //    sessions from clients you explicitly enabled monitoring for. It does NOT read a
-  //    client's past tasks on its own (the previous wording promised exactly that).
-  "shared.companion.empty.description":
-    "Shows account switches in progress, plus tasks from clients once you turn on session monitoring in Settings → Clients.",
-  "shared.companion.empty.refresh": "Refresh",
-  "shared.companion.error.title": "Couldn't load session status",
-  "shared.companion.loading": "Loading session status",
 
   // ---- Demo mode guard (demo-action.tsx) ----
   "shared.demo.unavailable": "Not available in demo mode",

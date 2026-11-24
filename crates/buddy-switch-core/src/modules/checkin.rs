@@ -20,8 +20,7 @@ use crate::modules::account::{
     account_display_name, build_auth_headers, envelope_token_error, load_accounts_for,
 };
 use crate::modules::config::{
-    add_checkin_log, http_request, load_checkin_config, load_checkin_logs, now_ms, RunFlagGuard,
-    CHECKIN_API_PREFIX,
+    add_checkin_log, http_request, load_checkin_config, now_ms, RunFlagGuard, CHECKIN_API_PREFIX,
 };
 use crate::modules::refresh::{ensure_fresh_token_for, refresh_account_token_for};
 use crate::modules::region::{region_spec, Region};
@@ -501,22 +500,6 @@ pub async fn run_checkin_cycle_for(region: Region, _mode: CheckinCycleMode) -> V
         }));
     }
     summary
-}
-
-/// True when every stored account has a today's log of `success` or `already`（CN）。
-pub fn all_accounts_checked_in_today() -> bool {
-    all_accounts_checked_in_today_for(Region::Cn)
-}
-
-/// 按 region 判断是否全部账号今日已签到。
-///
-/// Empty account list is false so the tray keeps offering 一键签到.
-pub fn all_accounts_checked_in_today_for(region: Region) -> bool {
-    accounts_checked_in_today(
-        &load_accounts_for(region),
-        &load_checkin_logs(),
-        &date_str(None),
-    )
 }
 
 pub fn accounts_checked_in_today(accounts: &[Value], logs: &[Value], today: &str) -> bool {

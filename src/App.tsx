@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ComponentType, type ElementType } from "react";
 import { BrowserRouter, HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowUp, GitBranch, MessagesSquare, Monitor, Server, Settings, User } from "lucide-react";
+import { ArrowUp, GitBranch, MessagesSquare, Server, Settings, User } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import * as api from "@/lib/api";
@@ -24,7 +24,6 @@ import { useShortcutsEnabled } from "@/lib/shortcut-preference";
 import { AUTO_CHECK_UPDATE_INTERVAL_MS, currentSeenUpdateVersion, shouldAutoShowNotes, useAutoCheckUpdate } from "@/lib/update-preference";
 import { normalizeReleaseNotes } from "@/lib/release-notes";
 import { useScopeStatus } from "@/lib/use-scope-status";
-import { useCompanionVisibility } from "@/lib/use-companion-visibility";
 import { TRAE_VARIANTS_KEY, loadTraeVariantStatuses } from "@/lib/trae-variant-status";
 import type { TraeVariantStatus } from "@/lib/trae-types";
 
@@ -316,62 +315,6 @@ function useTraeVariantRunning(active: boolean): Record<string, boolean> {
 }
 
 /**
- * 侧栏左下角的「会话悬浮窗」入口（P9 · T04）。
- *
- * ## 为什么是**开关**，而不是第二个切换器
- *
- * 可见性**只有**三处：侧栏（本组件）/ 托盘菜单项 / 窗口内关闭按钮。三者经
- * `companion_set_visible` 收敛到**同一份**偏好（`useCompanionVisibility`），
- * 因此本组件是「同一状态的一面」，**不**再摆下拉 / Tab 之类「看起来能切」的控件
- * （P9 §1.5 / R8）。它**不占侧栏 5 项** —— 位置在侧栏左下角（与原型 `index.html:67`
- * 的 `.mini-btn` 同位，即版本行里的 mini 图标按钮）。
- *
- * ## 入口不是一次性的
- *
- * 悬浮窗「关闭 = 隐藏」（**不销毁**，见 `companion.rs` 的 `CloseRequested`）⇒ 关掉后
- * 仍能从**这里**或托盘重开（P9 B4）。默认隐藏，需手动打开。
- *
- * ## 状态自明
- *
- * `aria-pressed` + 视觉明暗反映**当前可见性** —— 读的是与托盘 / 关闭按钮同一份状态，
- * 不会各说各话。仅在**桌面端**渲染：webui / 移动端没有悬浮窗，摆一个点不动的按钮
- * 就是「看起来能切」的假控件。
- */
-function CompanionToggle() {
-  const t = useT();
-  const [visible, setVisible] = useCompanionVisibility();
-  const label = t("shared.companion.entry");
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          /* 几何与原型 `.mini-btn`（`buddy-switch-prototype.html:188-192`）一致：20px、**圆角 999（胶囊）**、图标 11px。
-             颜色**保留开关语义**（开=实心 primary，与原型静止态一致；关=弱化），
-             —— 原型那两枚是普通动作按钮，这一枚是「显示/隐藏悬浮窗」的开关，
-             若一律涂成实心就丢掉了开关状态这个信号。 */
-          className={cn(
-            "size-5 shrink-0 rounded-full p-0",
-            visible
-              ? "bg-primary text-primary-foreground hover:bg-primary/90"
-              : "text-sidebar-foreground/40 hover:text-sidebar-foreground/70",
-          )}
-          aria-label={label}
-          aria-pressed={visible}
-          onClick={() => setVisible(!visible)}
-        >
-          <Monitor className="size-[11px]" aria-hidden="true" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
  * 侧栏底部的应用信息。
  *
  * 这里展示的是**本应用**（AccSwitch）的版本，而不是所管理客户端的版本：
@@ -501,9 +444,6 @@ function AppFooter({
             v{version || "?"}
           </span>
           <div className="flex shrink-0 items-center gap-1.5">
-            {/* P9 T04：会话悬浮窗入口（桌面端；与原型版本行的 `.mini-btn` 同位）。
-                它是**可见性开关**，与托盘 / 窗口内关闭按钮收敛到同一份偏好 —— 不新增第二个切换器。 */}
-            {api.isDesktop() ? <CompanionToggle /> : null}
             {hasUpdate && (
               <Tooltip>
                 <TooltipTrigger asChild>

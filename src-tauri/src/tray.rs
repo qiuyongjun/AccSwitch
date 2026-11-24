@@ -1,32 +1,21 @@
-//! Desktop tray: menu-bar icon, dock visibility, lightweight mode, and check-in.
+//! Desktop tray: menu-bar icon, dock visibility, and the main-window / quit entries.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-
-use buddy_switch_core::modules::{app_prefs, checkin, update};
-use serde_json::Value;
-use tauri::menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem};
+use buddy_switch_core::modules::app_prefs;
+use tauri::menu::{Menu, MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{
-    AppHandle, Emitter, Listener, Manager, RunEvent, Runtime, WebviewWindowBuilder, Window,
-    WindowEvent,
-};
-use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_opener::OpenerExt;
+use tauri::{AppHandle, Emitter, Manager, Runtime, Window, WindowEvent};
 
 const TRAY_ID: &str = "main-menu-bar";
 const MAIN_WINDOW_LABEL: &str = "main";
 /// 展示名统一为 `AccSwitch`；构建标识仍是 `AccSwitch`
 /// （productName / .app / 安装包文件名）。
 const DEFAULT_TOOLTIP: &str = "AccSwitch";
-const CHECKIN_TOOLTIP_RESTORE_SECS: u64 = 8;
 
 /// 系统自启注册的启动参数：仅携带该精确参数的启动进入静默托盘模式。
 pub const SILENT_STARTUP_ARG: &str = "--hidden";
 
-static LIGHTWEIGHT_MODE: AtomicBool = AtomicBool::new(false);
-static CHECKIN_BUSY: AtomicBool = AtomicBool::new(false);
-static TOOLTIP_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 static DOCK_ICON_GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -61,50 +50,20 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open-main-window" => show_main_window(app),
-            "open-github" => open_github(app),
-            "checkin-all" => start_checkin_all(app),
-            "lightweight-mode" => toggle_lightweight(app),
-            "toggle-companion" => toggle_companion(app),
             "quit-app" => app.exit(0),
             _ => {}
         })
         .build(app)?;
-
-    // P9 · T04：悬浮窗可见性的**勾选态同步**。
-    //
-    // 托盘项是 `CheckMenuItem`，勾选态读的是 companion 窗口的**真实可见性**
-    // （`build_tray_menu` 里的 `companion::is_visible`）。但侧栏图标 / 窗口内关闭按钮
-    // 改可见性时**不经托盘菜单** —— 若不重建菜单，勾选态会**停在旧值**、与真实状态漂移。
-    //
-    // 这里监听可见性事件：任何一处改可见性都重建菜单，让勾选态跟随真实状态。
-    // 与 `toggle_companion`（托盘自身点击后刷新）互补：那条覆盖「从托盘点」，
-    // 本条覆盖「从侧栏 / 窗口内关闭按钮改」。
-    let menu_refresh_handle = app.handle().clone();
-    app.handle()
-        .listen(crate::companion::VISIBILITY_EVENT, move |_event| {
-            refresh_tray_menu(&menu_refresh_handle);
-        });
 
     Ok(())
 }
 
 /// 主窗口的关闭请求 —— **由应用级偏好决定去向**（`app_prefs::close_to_tray`）。
 ///
-/// ## 两条路
-///
 /// - `close_to_tray = true`（默认，也是改这个设置之前的行为）：拦下关闭、隐藏窗口、
 ///   收起 Dock / 任务栏入口，进程留在托盘里继续跑。
-/// - `close_to_tray = false`：**放行并显式退出**。
-///
-/// ## 为什么是 `app.exit(0)` 而不是「不拦 + 让 `on_run_event` 自己退出」
-///
-/// 不拦关闭时，窗口销毁 ⇒ 运行时会发 `ExitRequested { code: None }`，而
-/// [`should_keep_tray_alive`] 对 `None` 一律 `prevent_exit()`（这是**轻量模式**赖以
-/// 存活的前提：`enter_lightweight` 主动 `destroy()` 窗口后进程必须还在）。
-/// 若改成「让 `should_keep_tray_alive` 去查偏好」，轻量模式在偏好为 false 时会把
-/// 整个应用一起带走 —— 把两件不相关的事绑在同一个判据上。
-/// 所以这里用**显式退出**：`app.exit(0)` ⇒ `ExitRequested { code: Some(0) }` ⇒
-/// `should_keep_tray_alive(Some(0))` 为 false ⇒ 正常退出，轻量模式的判据一个字没动。
+/// - `close_to_tray = false`：**放行并显式退出**（`app.exit(0)` ⇒
+///   `ExitRequested { code: Some(0) }`，退出意图明确，不依赖运行时的零窗口推断）。
 pub fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if window.label() != MAIN_WINDOW_LABEL {
         return;
@@ -137,7 +96,7 @@ pub fn is_silent_startup(args: impl IntoIterator<Item = impl AsRef<str>>) -> boo
 /// - 普通启动（无 `--hidden`）：走既有 `show_main_window` 路径，
 ///   先恢复 Regular / Dock，再 show / unminimize / focus。
 /// - 静默启动（`--hidden`）：窗口保持隐藏，隐藏 Dock / 任务栏入口，
-///   只保留托盘；不设置 `LIGHTWEIGHT_MODE`（WebView 仍然存在）。
+///   只保留托盘（WebView 仍然存在）。
 ///
 /// 之后从托盘「打开主界面」仍走 `show_main_window`，与隐藏窗口完全一致。
 pub fn setup_startup_visibility<R: Runtime>(app: &AppHandle<R>, silent: bool) {
@@ -153,35 +112,11 @@ fn emit_main_window_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
     let _ = app.emit("main-window-visible", visible);
 }
 
-/// Keep the tray process alive when the last window is destroyed (lightweight mode).
-///
-/// `code == None` is Tauri's runtime exit after zero windows remain.
-/// `code == Some(_)` is an explicit `app.exit()` / restart — let those through.
-pub fn on_run_event(event: RunEvent) {
-    if let RunEvent::ExitRequested { api, code, .. } = event {
-        if should_keep_tray_alive(code) {
-            api.prevent_exit();
-        }
-    }
-}
-
-fn should_keep_tray_alive(code: Option<i32>) -> bool {
-    code.is_none()
-}
-
 /// 把主窗口带到前台（托盘「打开主界面」与**单实例回调**共用）。
 ///
 /// 单实例回调走这里而不是直接 `show()`：用户第二次双击 exe 时，主窗口可能处于
-/// 隐藏到托盘（关闭按钮）或已被销毁（轻量模式）两种状态，只有这条路径两种都能恢复。
+/// 隐藏到托盘（关闭按钮）的状态，只有这条路径能一并恢复。
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    // Recreate if the WebView is gone even when the flag is already false
-    // (e.g. destroy() completed after a failed lightweight toggle).
-    if LIGHTWEIGHT_MODE.load(Ordering::Acquire)
-        || app.get_webview_window(MAIN_WINDOW_LABEL).is_none()
-    {
-        exit_lightweight(app);
-        return;
-    }
     apply_dock_visible(app, true);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = window.show();
@@ -237,7 +172,7 @@ fn restore_macos_dock_icon<R: Runtime>(app: &AppHandle<R>) {
     apply_macos_app_icon();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         if DOCK_ICON_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
@@ -303,220 +238,12 @@ fn app_bundle_path_from_exe(exe: &std::path::Path) -> Option<&std::path::Path> {
     (bundle.extension()?.to_str()? == "app").then_some(bundle)
 }
 
-fn toggle_lightweight<R: Runtime>(app: &AppHandle<R>) {
-    if LIGHTWEIGHT_MODE.load(Ordering::Acquire) {
-        exit_lightweight(app);
-    } else {
-        enter_lightweight(app);
-    }
-}
-
-fn enter_lightweight<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        if window.destroy().is_err() {
-            // CheckMenuItem may have already toggled visually; restore it.
-            refresh_tray_menu(app);
-            return;
-        }
-    }
-    apply_dock_visible(app, false);
-    LIGHTWEIGHT_MODE.store(true, Ordering::Release);
-    refresh_tray_menu(app);
-}
-
-fn exit_lightweight<R: Runtime>(app: &AppHandle<R>) {
-    // Regular / dock first so a from_config window is not created while Accessory.
-    apply_dock_visible(app, true);
-    if app.get_webview_window(MAIN_WINDOW_LABEL).is_none() {
-        let Some(config) = app
-            .config()
-            .app
-            .windows
-            .iter()
-            .find(|window| window.label == MAIN_WINDOW_LABEL)
-            .cloned()
-        else {
-            apply_dock_visible(app, false);
-            refresh_tray_menu(app);
-            return;
-        };
-        if WebviewWindowBuilder::from_config(app, &config)
-            .and_then(|builder| builder.build())
-            .is_err()
-        {
-            apply_dock_visible(app, false);
-            refresh_tray_menu(app);
-            return;
-        }
-    }
-    // Window exists now: Windows skip_taskbar was a no-op before recreate.
-    apply_dock_visible(app, true);
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-    emit_main_window_visible(app, true);
-    LIGHTWEIGHT_MODE.store(false, Ordering::Release);
-    refresh_tray_menu(app);
-}
-
-/// 托盘「会话悬浮窗」：翻转悬浮窗可见性，并重建菜单让勾选态跟随真实状态。
-///
-/// `CheckMenuItem` 会在点击时先自行翻转视觉状态，因此这里必须 `refresh_tray_menu`
-/// 用**真实状态**重建（与 `toggle_lightweight` 同款），否则失败路径下勾选态会撒谎。
-fn toggle_companion<R: Runtime>(app: &AppHandle<R>) {
-    let _ = crate::companion::toggle(app);
-    refresh_tray_menu(app);
-}
-
-fn open_github<R: Runtime>(app: &AppHandle<R>) {
-    let url = format!(
-        "https://github.com/{}/{}",
-        update::GITHUB_OWNER,
-        update::GITHUB_REPO
-    );
-    let _ = app.opener().open_url(url, None::<&str>);
-}
-
-struct CheckinBusyGuard<R: Runtime> {
-    app: AppHandle<R>,
-}
-
-impl<R: Runtime> Drop for CheckinBusyGuard<R> {
-    fn drop(&mut self) {
-        CHECKIN_BUSY.store(false, Ordering::Release);
-        refresh_tray_menu(&self.app);
-    }
-}
-
-fn start_checkin_all<R: Runtime>(app: &AppHandle<R>) {
-    if crate::is_screenshot_demo() {
-        set_tray_tooltip(app, "README 截图演示模式");
-        return;
-    }
-    if CHECKIN_BUSY
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    bump_tooltip_generation();
-    refresh_tray_menu(app);
-    set_tray_tooltip(app, "正在签到…");
-
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let _busy = CheckinBusyGuard { app: app.clone() };
-        let payload = checkin::run_checkin_all().await;
-        let text = format_checkin_tooltip(&payload);
-        if checkin_succeeded(&payload) {
-            notify_checkin(&app, &text);
-        } else {
-            let generation = bump_tooltip_generation();
-            set_tray_tooltip(&app, &text);
-            restore_tooltip_after(app, generation);
-        }
-    });
-}
-
-fn notify_checkin<R: Runtime>(app: &AppHandle<R>, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title(DEFAULT_TOOLTIP)
-        .body(body)
-        .show();
-}
-
-fn checkin_succeeded(value: &Value) -> bool {
-    let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
-        return false;
-    };
-    !accounts.is_empty()
-        && accounts.iter().all(|account| {
-            matches!(
-                account.get("result").and_then(Value::as_str),
-                Some("success" | "already")
-            )
-        })
-}
-
-fn restore_tooltip_after<R: Runtime>(app: AppHandle<R>, generation: u64) {
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(CHECKIN_TOOLTIP_RESTORE_SECS)).await;
-        if TOOLTIP_GENERATION.load(Ordering::Acquire) == generation {
-            set_tray_tooltip(&app, DEFAULT_TOOLTIP);
-        }
-    });
-}
-
-fn bump_tooltip_generation() -> u64 {
-    TOOLTIP_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
-}
-
-fn set_tray_tooltip<R: Runtime>(app: &AppHandle<R>, text: &str) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(text));
-    }
-}
-
-fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) {
-    let Ok(menu) = build_tray_menu(app) else {
-        return;
-    };
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_menu(Some(menu));
-    }
-}
-
 fn build_tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
     let open_item = MenuItem::with_id(app, "open-main-window", "打开主界面", true, None::<&str>)?;
-    let github_item = MenuItem::with_id(app, "open-github", "打开 GitHub", true, None::<&str>)?;
-    let checked_in = checkin::all_accounts_checked_in_today();
-    let (checkin_label, checkin_enabled) = if CHECKIN_BUSY.load(Ordering::Acquire) {
-        ("一键签到", false)
-    } else if checked_in {
-        ("已签到", false)
-    } else {
-        ("一键签到", true)
-    };
-    let checkin_item = MenuItem::with_id(
-        app,
-        "checkin-all",
-        checkin_label,
-        checkin_enabled,
-        None::<&str>,
-    )?;
-    let lightweight_item = CheckMenuItem::with_id(
-        app,
-        "lightweight-mode",
-        "轻量模式",
-        true,
-        LIGHTWEIGHT_MODE.load(Ordering::Acquire),
-        None::<&str>,
-    )?;
-    // 「会话悬浮窗」：勾选态 = 悬浮窗当前可见（与 `lightweight-mode` 同款）。
-    // 勾选态读的是 companion 窗口的**真实可见性**（`is_visible`），不是本地镜像 ——
-    // 侧栏 / 托盘 / 窗口内关闭按钮三处入口因此收敛到同一状态，不会各说各话。
-    let companion_item = CheckMenuItem::with_id(
-        app,
-        "toggle-companion",
-        "会话悬浮窗",
-        true,
-        crate::companion::is_visible(app),
-        None::<&str>,
-    )?;
     let quit_item = MenuItem::with_id(app, "quit-app", "退出应用", true, None::<&str>)?;
 
     MenuBuilder::new(app)
         .item(&open_item)
-        .item(&github_item)
-        .item(&checkin_item)
-        .separator()
-        .item(&lightweight_item)
-        .item(&companion_item)
-        .separator()
         .item(&quit_item)
         .build()
 }
@@ -556,50 +283,13 @@ fn color_icon() -> tauri::image::Image<'static> {
     tauri::image::Image::new(COLOR_ICON, 32, 32)
 }
 
-fn format_checkin_tooltip(value: &Value) -> String {
-    if value.get("status").and_then(Value::as_str) == Some("skipped")
-        && value.get("reason").and_then(Value::as_str) == Some("already_running")
-    {
-        return "签到任务正在进行，请稍后再试".to_string();
-    }
-    let Some(accounts) = value.get("accounts").and_then(Value::as_array) else {
-        return "没有可签到的账号".to_string();
-    };
-    if accounts.is_empty() {
-        return "没有可签到的账号".to_string();
-    }
-
-    let mut ok = 0;
-    let mut already = 0;
-    let mut err = 0;
-    for account in accounts {
-        match account.get("result").and_then(Value::as_str) {
-            Some("success") => ok += 1,
-            Some("already") => already += 1,
-            Some("error") => err += 1,
-            _ => {}
-        }
-    }
-    format!("签到完成：成功 {ok}，已签 {already}，失败 {err}")
-}
-
 #[cfg(test)]
 mod tests {
     // `chunks_exact(4)` 在这里是「按 RGBA 四字节分组」的直白写法；
     // `as_chunks::<4>()` 需要 turbofish + 解构 `.0`，反而更难读。
     #![allow(clippy::chunks_exact_to_as_chunks)]
 
-    use super::{
-        color_icon, format_checkin_tooltip, is_silent_startup, menu_bar_icon,
-        should_keep_tray_alive,
-    };
-    use serde_json::json;
-
-    #[test]
-    fn runtime_exit_with_no_code_keeps_tray() {
-        assert!(should_keep_tray_alive(None));
-        assert!(!should_keep_tray_alive(Some(0)));
-    }
+    use super::{color_icon, is_silent_startup, menu_bar_icon};
 
     #[test]
     fn menu_bar_icon_has_transparency_and_antialiasing() {
@@ -660,62 +350,6 @@ mod tests {
     }
 
     #[test]
-    fn tooltip_when_no_accounts() {
-        assert_eq!(
-            format_checkin_tooltip(&json!({"accounts": []})),
-            "没有可签到的账号"
-        );
-    }
-
-    #[test]
-    fn tooltip_when_accounts_missing() {
-        assert_eq!(format_checkin_tooltip(&json!({})), "没有可签到的账号");
-    }
-
-    #[test]
-    fn tooltip_reports_overlapping_checkin_as_busy() {
-        assert_eq!(
-            format_checkin_tooltip(&json!({
-                "accounts": [],
-                "status": "skipped",
-                "reason": "already_running"
-            })),
-            "签到任务正在进行，请稍后再试"
-        );
-    }
-
-    #[test]
-    fn tooltip_summarizes_success_already_error() {
-        let payload = json!({
-            "accounts": [
-                {"result": "success"},
-                {"result": "success"},
-                {"result": "already"},
-                {"result": "error"},
-                {"result": "error"},
-                {"result": "error"}
-            ]
-        });
-        assert_eq!(
-            format_checkin_tooltip(&payload),
-            "签到完成：成功 2，已签 1，失败 3"
-        );
-    }
-
-    #[test]
-    fn checkin_succeeded_requires_all_ok() {
-        use super::checkin_succeeded;
-        assert!(!checkin_succeeded(&json!({})));
-        assert!(!checkin_succeeded(&json!({"accounts": []})));
-        assert!(checkin_succeeded(&json!({
-            "accounts": [{"result": "success"}, {"result": "already"}]
-        })));
-        assert!(!checkin_succeeded(&json!({
-            "accounts": [{"result": "success"}, {"result": "error"}]
-        })));
-    }
-
-    #[test]
     fn app_bundle_path_from_packaged_exe() {
         use std::path::Path;
         let exe = Path::new("/Applications/AccSwitch.app/Contents/MacOS/buddy-switch-rust");
@@ -737,20 +371,5 @@ mod tests {
             "/Applications/AccSwitch.app/Contents/Resources/icon.icns"
         ))
         .is_none());
-    }
-
-    #[test]
-    fn tooltip_ignores_unknown_results() {
-        let payload = json!({
-            "accounts": [
-                {"result": "success"},
-                {"result": "skipped"},
-                {"result": null}
-            ]
-        });
-        assert_eq!(
-            format_checkin_tooltip(&payload),
-            "签到完成：成功 1，已签 0，失败 0"
-        );
     }
 }

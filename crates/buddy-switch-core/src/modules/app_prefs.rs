@@ -36,12 +36,8 @@ pub fn app_prefs_file() -> PathBuf {
 /// `close_to_tray = true` 是**改设置之前就有的行为**（`tray.rs` 里
 /// `CloseRequested` 一律 `prevent_close` + `hide`）—— 默认值必须与它逐字一致，
 /// 否则升级后所有老用户的「点关闭」行为会**静默改变**。
-///
-/// `watch_agent_sessions = false`：P15 的外部 Agent 会话监听**默认关**。
-/// 开启它要**往别的客户端写 hook 配置**，属于必须由用户显式同意的动作
-/// （`P15-SPIKE-RESULTS §6 D41`）—— 默认开等于替用户改了别人的配置。
 pub fn default_app_prefs() -> Value {
-    json!({ "close_to_tray": true, "watch_agent_sessions": false })
+    json!({ "close_to_tray": true })
 }
 
 /// 归一化：只认已知键；值必须是布尔，否则回落默认值；未知键丢弃。
@@ -95,17 +91,6 @@ pub fn close_to_tray() -> bool {
         .unwrap_or(true)
 }
 
-/// 宿主专用：是否开启外部 Agent 会话监听（即「给客户端装 hook」）。
-///
-/// 与 [`close_to_tray`] 同款：每次读盘、不缓存 —— 它只在「装 / 卸 hook」这个
-/// 用户显式动作上被读，读一个小 JSON 的成本可以忽略。
-pub fn watch_agent_sessions() -> bool {
-    load_app_prefs()
-        .get("watch_agent_sessions")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,13 +105,8 @@ mod tests {
             "老行为，必须与升级前逐字一致"
         );
         assert_eq!(
-            d["watch_agent_sessions"],
-            json!(false),
-            "要写别的客户端配置的动作，必须默认关"
-        );
-        assert_eq!(
             d.as_object().unwrap().len(),
-            2,
+            1,
             "每加一个键都要同步这条断言"
         );
     }
@@ -141,7 +121,7 @@ mod tests {
         assert_eq!(stringy["close_to_tray"], json!(true));
         // 未知键丢弃（防止把别的模块的配置误存进来）
         let extra = normalize_app_prefs(&json!({ "close_to_tray": false, "theme": "dark" }));
-        assert_eq!(extra.as_object().unwrap().len(), 2, "只认已知的两个键");
+        assert_eq!(extra.as_object().unwrap().len(), 1, "只认已知的键");
         assert!(extra.get("theme").is_none());
         // 非对象输入 ⇒ 全默认
         assert_eq!(normalize_app_prefs(&json!("nope")), default_app_prefs());
@@ -164,30 +144,6 @@ mod tests {
                 .get("close_to_tray")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            assert_eq!(got, want, "输入 {input} 应得 {want}");
-        }
-    }
-
-    /// `watch_agent_sessions()` 真值表：默认**关**，脏值一律回落到关。
-    ///
-    /// 这条比 `close_to_tray` 更要紧：它是「要不要去动**别人客户端的**配置文件」的判据，
-    /// 任何一格错成 `true` 都意味着**用户没同意就被写了 hook**。
-    ///
-    /// 可证伪性：把 `unwrap_or(false)` 改成 `unwrap_or(true)` ⇒ 后三格变红。
-    #[test]
-    fn watch_agent_sessions_真值表() {
-        let cases: [(Value, bool); 5] = [
-            (json!({ "watch_agent_sessions": true }), true),
-            (json!({ "watch_agent_sessions": false }), false),
-            (json!({ "watch_agent_sessions": "true" }), false), // 字符串不是布尔 ⇒ 关
-            (json!({}), false),                                 // 缺字段 ⇒ 关
-            (json!([]), false),                                 // 非对象 ⇒ 关
-        ];
-        for (input, want) in cases {
-            let got = normalize_app_prefs(&input)
-                .get("watch_agent_sessions")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
             assert_eq!(got, want, "输入 {input} 应得 {want}");
         }
     }

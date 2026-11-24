@@ -14,8 +14,6 @@ mod trae_gateway;
 #[cfg(desktop)]
 mod autostart;
 #[cfg(desktop)]
-mod companion;
-#[cfg(desktop)]
 mod tray;
 mod unified_gateway;
 
@@ -276,14 +274,10 @@ async fn refresh_trae_credits() {
     }
 }
 
-/// 应用级窗口事件转发：主窗口（托盘）与悬浮窗（companion）各按自己的 label 短路。
-///
-/// 两个处理器都注册在**同一条** `on_window_event` 上 —— Tauri 的 Builder 只接受一个
-/// 全局窗口事件回调，因此这里做一次分发，而不是让其中一方去「顺带」处理另一方的事件。
+/// 应用级窗口事件转发：目前只有主窗口（托盘）需要处理。
 #[cfg(desktop)]
 fn on_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
     tray::on_window_event(window, event);
-    companion::on_window_event(window, event);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -311,7 +305,6 @@ pub fn run() {
     let mut builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init());
 
     #[cfg(desktop)]
@@ -358,6 +351,11 @@ pub fn run() {
             // README 截图模式只渲染前端虚构数据，禁止读取账号后执行签到、轮换或保活。
             if !is_screenshot_demo() {
                 spawn_background_loops();
+                // 旧版「会话监听」曾往客户端配置写 `... hook --source ...`；功能已删除，
+                // 这里在后台清掉残留（幂等，客户端运行中会被进程守卫拒绝、下次启动再试）。
+                tauri::async_runtime::spawn_blocking(
+                    modules::agent_hook_cleanup::cleanup_installed,
+                );
                 // ★ Qoder 首开预热：签到链路要先跑本机 `runtime-info` 组件取机器身份
                 //   （冷启动约 3.7s，结果按区域缓存 30 分钟）。启动时先在后台跑一次，
                 //   把这段等待从账号页首屏挪走；没有账号 / 没装客户端时立即返回。
@@ -368,17 +366,6 @@ pub fn run() {
                         {
                             let _ = modules::qoder::native::cached_identity(region, &uid, false);
                         }
-                    }
-                });
-                // P15 · 外部 Agent hook 的本地接收端：只绑 `127.0.0.1`。
-                //
-                // ★ **它不是后台任务**：`serve()` 是事件驱动的常驻 accept，没有周期动作
-                //   ⇒ 不进 `background.rs` 的 `TASKS` 注册表（`P15-SPIKE-RESULTS §2 Q2`）。
-                // ★ 绑定失败（端口被占 / 沙箱限制）**不阻断启动**：这是可选能力，
-                //   宿主照常可用；用户从哪里看得到？——设置页的监听开关会显示连接不上。
-                tauri::async_runtime::spawn(async {
-                    if let Err(error) = buddy_switch_core::modules::agent_hook_rx::serve().await {
-                        host_log(runtime_log::Level::Error, "agent-hook", error.to_string());
                     }
                 });
                 // 按配置启动 API 网关独立监听（默认关闭；默认 127.0.0.1:57891）。
@@ -758,22 +745,11 @@ pub fn run() {
             commands::delete_qoder_api_key,
             commands::get_qoder_gateway_logs,
             commands::clear_qoder_gateway_logs,
-            // P9 T02 · 桌面悬浮窗**只读数据层**（命令面只有读 / 显隐 / 聚焦，无写操作）。
-            commands::companion_status,
-            commands::companion_set_visible,
-            commands::companion_toggle,
-            commands::companion_jump,
-            // P15 · 外部 Agent 会话监听：hook 安装状态（只读）+ 开关（写客户端配置）。
-            commands::get_agent_hook_status,
-            commands::set_agent_hook_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|_app_handle, event| {
-        #[cfg(desktop)]
-        tray::on_run_event(event);
-    });
+    app.run(|_app_handle, _event| {});
 }
 
 #[cfg(test)]

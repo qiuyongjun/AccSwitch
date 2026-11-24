@@ -36,8 +36,7 @@ import type {
 import { demoModeEnabled } from "./demo-mode";
 import { t } from "./i18n";
 import type { TranslationKey } from "@/locales/zh";
-import type { CompanionSnapshot } from "./companion";
-import type { AgentHookStatus, CheckinStatusEntry } from "./api";
+import type { CheckinStatusEntry } from "./api";
 import type { QoderGatewayConfigRaw } from "./qoder-gateway";
 
 export const screenshotDemoEnabled = demoModeEnabled;
@@ -3236,25 +3235,6 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_trae_client_models": return demoTraeClientModels(args);
     case "list_trae_api_keys": return demoTraeApiKeys();
     case "get_trae_gateway_logs": return demoTraeGatewayLogs();
-    /* P9 · 悬浮窗**只读**快照。
-       ⚠️ 演示数据**如实**反映「本期只接已有数据源的来源」：演示时没有进行中的操作 ⇒
-       **结构化空态**（`items: []` + `source: "unavailable"`），由 T03 渲染空态四要素。
-       **绝不**为「看起来丰富」塞演示行（P9 §1.3 / §6 R7）——真实 provider 同款
-       （见 `src-tauri/src/commands.rs::companion_snapshot`）。 */
-    case "companion_status": return {
-      items: [],
-      source: "unavailable",
-      updated_at: Date.now(),
-    } satisfies CompanionSnapshot;
-    /* P15 · 外部 Agent 会话监听状态（**只读**）。
-       ⚠️ 演示站**必须**如实反映「默认关、什么都没装」：`enabled: false` + 空 `slots`。
-       演示环境绝不能出现「看起来已经装了 hook」的假象 —— 那会让读者以为本工具
-       会偷偷改客户端配置（真实实现是默认关 + 用户显式同意，见 P15 决策 D41）。 */
-    case "get_agent_hook_status": return {
-      enabled: false,
-      port: 57893,
-      slots: [],
-    } satisfies AgentHookStatus;
     /* Qoder（第三个平台）· 只读两条 —— 与 `DEMO_READ_COMMANDS` 的登记一一对应
        （门禁 `check-api-contract.cjs` 校验 case 存在，缺了演示模式会抛
        「演示模式缺少只读数据」）。 */

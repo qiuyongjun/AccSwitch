@@ -439,11 +439,10 @@ fn refuse_when_home_override_is_invalid(cmd: &str) {
 /// [`refuse_when_home_override_is_invalid`] 的**纯决策**部分（入参即取值，可并行单测）。
 ///
 /// `None` = 放行。两种放行情形：
-/// 1. **不碰 store** 的命令（版本号查询、`hook` 转发）不该被环境变量拦住 ——
-///    `hook` 只把 stdin 转给本地接收端，读不到任何账号 / 会话数据；
+/// 1. **不碰 store** 的命令（版本号查询）不该被环境变量拦住；
 /// 2. 环境变量未设置 / 空白 / 合法。
 fn home_override_problem(cmd: &str, value: Option<&str>) -> Option<String> {
-    if matches!(cmd, "version" | "--version" | "-V" | "hook") {
+    if matches!(cmd, "version" | "--version" | "-V") {
         return None;
     }
     buddy_switch_core::modules::config::home_override_refusal(value)
@@ -452,6 +451,12 @@ fn home_override_problem(cmd: &str, value: Option<&str>) -> Option<String> {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // 旧版「会话监听」写入客户端配置的 `hook --source ...` 调用：读掉 stdin 后静默退出，
+    // 不能落到 `serve`（否则每次客户端工具调用都会尝试起一份 webui 服务）。
+    if args.get(1).map(String::as_str) == Some("hook") {
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        std::process::exit(0);
+    }
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("serve");
     refuse_when_home_override_is_invalid(cmd);
     match cmd {
@@ -459,11 +464,6 @@ async fn main() {
         "version" | "--version" | "-V" => {
             println!("AccSwitch {}", env!("CARGO_PKG_VERSION"));
         }
-        // P15 · 客户端 hook 调用的入口（与桌面宿主 `src-tauri/src/main.rs` 同一份实现）。
-        // 走 core 的 `try_run_hook_cli` ⇒ 两个宿主的 hook 行为不可能分叉。
-        "hook" => std::process::exit(
-            buddy_switch_core::modules::agent_hook_rx::try_run_hook_cli(&args).unwrap_or(0),
-        ),
         _ => serve(&args).await,
     }
 }
@@ -530,16 +530,8 @@ async fn serve(args: &[String]) {
 
     spawn_background_loops();
 
-    // P15 · 外部 Agent hook 接收端（与桌面宿主 `src-tauri/src/lib.rs` 同款）。
-    // ★ 只绑 `127.0.0.1:57893`，**事件驱动**（不是周期任务 ⇒ 不进 `background.rs` 的注册表）。
-    // ★ 起不来（端口被占 / 桌面版已持有）**不阻断 webui** —— 两者同时跑时只有一处能收，
-    //   而「客户端 hook 指向哪一个」由用户最后装的 hook 决定。
-    tokio::spawn(async {
-        if let Err(error) = buddy_switch_core::modules::agent_hook_rx::serve().await {
-            eprintln!("[agent-hook] {error}");
-            runtime_log::error("agent-hook", error.to_string());
-        }
-    });
+    // 旧版「会话监听」残留 hook 的清理（与桌面宿主同一实现；幂等，失败不阻断服务）。
+    tokio::task::spawn_blocking(buddy_switch_core::modules::agent_hook_cleanup::cleanup_installed);
 
     // 按配置启动 API 网关独立监听（默认关闭；默认 127.0.0.1:57891）。
     match gateway_host::apply().await {

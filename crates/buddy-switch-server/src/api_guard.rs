@@ -16,8 +16,7 @@
 //!
 //! DNS rebinding 下 `Origin` 与 `Host` **是同源的**（都是 `attacker.com`），
 //! 所以「Origin 与 Host 同源」这条**挡不住它**；唯一有效的是**要求 Host 本身可信**。
-//! 这与本仓 `agent_hook_rx::validate`（issue 前身的安全基线）用的是同一套判据，
-//! 那边注释已经写明「Host 校验是 DNS rebinding 的唯一防线」。
+//! 这条判据在本仓的安全基线里已经写明：「Host 校验是 DNS rebinding 的唯一防线」。
 //!
 //! ## 对既有部署的影响
 //!
@@ -91,7 +90,7 @@ fn host_name_of(host: &str) -> &str {
 
 /// `Host` 是否指向本机回环。
 ///
-/// 判据与 `agent_hook_rx` 的同名函数一致（`127.0.0.1` / `localhost` / `::1`）；
+/// 只认回环字面量（`127.0.0.1` / `localhost` / `::1`）；
 /// 刻意**不含** `0.0.0.0` —— 它不是一个可以被解析的「本机地址」，
 /// 浏览器把 `0.0.0.0:port` 当 Host 发出来时，那也不是用户应有的访问方式。
 fn host_is_loopback(host: &str) -> bool {
@@ -139,8 +138,8 @@ impl Deny {
 
 /// 四条校验的**唯一**收敛点（纯函数，好单测）。
 ///
-/// 抽成纯函数的原因与 `agent_hook_rx::validate` 相同：安全校验最容易在
-/// 「加一条新规则」时被顺手改坏，而它的症状是**静默放开**（不报错、只是不再拦）。
+/// 抽成纯函数：安全校验最容易在「加一条新规则」时被顺手改坏，
+/// 而它的症状是**静默放开**（不报错、只是不再拦）。
 pub fn judge(
     policy: &Policy,
     method: &Method,
