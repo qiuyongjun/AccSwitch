@@ -224,9 +224,17 @@ export const en = {
   // identical to "you forgot to check in" — the badge alone cannot say which it is.
   // 2026-11-20 correction: the cause is on the **account** side (trial / plan eligibility),
   // not "one per device per round" — two accounts on one device can each claim the same day.
+  // 2026-11-24 (user request): this state now renders as its own "Check-in unavailable"
+  // badge instead of "Not checked in"; this string is that badge's tooltip. Same day the
+  // user asked to shorten the copy: the badge keeps only the conclusion; the drawer /
+  // result bar carry the reason and the pointer.
   "qoder.page.accounts.chip.notCheckedInMissingTip":
-    "Upstream did not offer the check-in campaign to this account this round (it is outside the credit-issuing scope, e.g. its trial has ended) — refreshing will not change that",
+    "Upstream issued no check-in campaign to this account (e.g. its trial has ended)",
+  // "Check-in unavailable" = the official client has no check-in entry for this account
+  // (no campaign issued or nothing to claim); retrying never helps.
   "qoder.page.accounts.chip.checkinUnavailable": "Check-in unavailable",
+  "qoder.page.accounts.chip.checkinUnavailableTip":
+    "Official check-in is not open for this account; check the official client",
   "qoder.page.accounts.metric.credits": "Credits",
   // 2026-10-26: `{remaining} / {total}` removed — card and table render
   // `<b>remaining</b>/total` separately (thousands via `formatCredits`), matching WB.
@@ -300,16 +308,18 @@ export const en = {
     "{n} more already checked in today (not claimed again)",
   "qoder.page.accounts.checkin.batchPartial": "{ok} succeeded, {fail} failed",
   "qoder.page.accounts.checkin.failed": "Check-in failed for {name}",
-  // “Channel unavailable” = upstream publishes no check-in activity for this account:
+  // "Check-in unavailable" = upstream publishes no check-in activity for this account:
   // neither failure nor success, and retrying never helps.
-  "qoder.page.accounts.checkin.disabled": "Check-in channel unavailable",
+  "qoder.page.accounts.checkin.disabled": "Check-in unavailable",
   "qoder.page.accounts.checkin.disabledPart": "{n} unavailable",
-  // 2026-11-19: the long explanation for the drawer / batch result bar (the badge tooltip
-  // uses the shorter `chip.notCheckedInMissingTip` above).
-  // 2026-11-20 correction: eligibility is decided per **account** (trial / plan), not per
-  // device — see docs/specs/QODER-PLATFORM.md §4.
+  // Legacy-channel DISABLED has no `campaignMissing` fact — don't claim "not issued".
+  "qoder.page.accounts.checkin.disabledHint":
+    "Official check-in is not open; retrying will not help. Check the official client.",
+  // The one-line reason shared by the drawer / batch result bar (the badge tooltip above
+  // is even shorter). 2026-11-24: user found the old version too long — keep only
+  // conclusion → retry is useless → where to look (details: docs/specs/QODER-PLATFORM.md §4).
   "qoder.page.accounts.checkin.missingHint":
-    "Upstream did not offer the “earn 100 Credits daily” campaign to this account this round. Whether it is offered depends on the account itself (for example, accounts past their trial stopped receiving credits from 2026-11-19) and has nothing to do with how many accounts this device has signed in — several accounts can each claim on the same day. This is an upstream rule, not a missed check-in, and retrying will not change it; check the official client’s growth page.",
+    "Upstream issued no check-in campaign (e.g. the account’s trial has ended); retrying will not help. Check the official client.",
   "qoder.page.accounts.checkin.resultOk": "{n} checked in",
   "qoder.page.accounts.checkin.resultFail": "{n} failed",
   "qoder.page.accounts.refresh.done": "Token refreshed for {name}",
@@ -325,6 +335,10 @@ export const en = {
   "qoder.page.accounts.toolbar.checkinBucket.unknown": "Check-in state unknown",
   "qoder.page.accounts.toolbar.checkinNotStarted":
     "Today’s check-in has not started yet (opens at 10:00, or the campaign has not refreshed)",
+  // Nothing to run and some accounts are unavailable (no campaign issued / region not
+  // open): the button is disabled, but the reason is not “all checked in today”.
+  "qoder.page.accounts.toolbar.checkinUnavailable":
+    "No account can check in right now (official check-in is not open)",
 
   "qoder.page.pending.title": "This page is not wired for Qoder yet",
   "qoder.page.pending.description":

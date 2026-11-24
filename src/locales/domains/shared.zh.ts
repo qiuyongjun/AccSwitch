@@ -595,8 +595,8 @@ export const zh = {
   "shared.cardMenu.done": "已更新",
   "shared.cardMenu.checkinDone": "今日已签到",
   "shared.cardMenu.checkinNeedsLogin": "需先登录",
-  "shared.cardMenu.checkinUnavailable": "通道未开放",
-  "shared.cardMenu.checkinUnavailableHint": "上游签到通道已关停，重试无效 —— 去客户端活动页领取",
+  "shared.cardMenu.checkinUnavailable": "不可签到",
+  "shared.cardMenu.checkinUnavailableHint": "官方未开放签到，重试无效；可到官方客户端查看",
   "shared.cardMenu.checkinNotStarted": "10:00 后开放",
   "shared.cardMenu.checkinNotStartedHint": "Qoder 每日签到 10:00 开放，到点再来即可",
   "shared.cardMenu.checkinRefreshing": "活动刷新中",
@@ -742,6 +742,8 @@ export const zh = {
   "shared.drawer.checkin.notStartedTip": "今日签到 {time} 开放",
   "shared.drawer.checkin.refreshing": "活动刷新中",
   "shared.drawer.checkin.refreshingAction": "稍后再试",
+  // 官方没给该账号下发签到活动（Qoder `active === false`）：不是漏签，也刷不出来。
+  "shared.drawer.checkin.unavailable": "不可签到",
   // 三列横排的另外两格。上游 `streak_days` 实际可能与签到日期列表的断档不一致
   // （21 天却有多处未签），因此只称「签到天数」，不使用「连签」这种连续性表述。
   "shared.drawer.checkin.statStreak": "签到天数",
@@ -827,8 +829,8 @@ export const zh = {
   // 只剩「未处理」项时的重试出口文案：这些账号**没失败过**（请求根本没发出），
   // 沿用「重试失败项」会让用户以为是自己漏看的失败。
   "shared.checkinResult.retryPending": "重试未完成项",
-  "shared.checkinResult.summary4": "成功 {ok} · 未开放 {skip} · 失败 {fail}",
-  "shared.checkinResult.skippedNames": "以下账号的签到通道未开放（桌面端网页活动页才可领）：{names}",
+  "shared.checkinResult.summary4": "成功 {ok} · 不可签到 {skip} · 失败 {fail}",
+  "shared.checkinResult.skippedNames": "以下账号不可签到：{names}",
   "shared.checkinResult.notStartedBadge": "未到时间 {n}",
   // 「今日已签、本轮未实际领取」的单独一档：不能并进「成功 N」（会让人误读成本轮领到）。
   "shared.checkinResult.alreadyBadge": "今日已签 {n}",

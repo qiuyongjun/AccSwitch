@@ -240,7 +240,7 @@ export function CheckinResultBar({
         {hasFail
           ? t("shared.checkinResult.failedNames", { names: failedNames.join(t("shared.punct.comma")) })
           : hasSkipped
-            ? /* ⚠️ 只说「未开放」+ 原因，**不给重试出口**（重试永远不会成功）。
+            ? /* ⚠️ 只说「不可签到」+ 原因，**不给重试出口**（重试永远不会成功）。
                  账号逐个 toasting 会刷屏，批量场景一律留在这条汇总里。 */
               t("shared.checkinResult.skippedNames", {
                 names: skipped.join(t("shared.punct.comma")),

@@ -234,12 +234,19 @@ export const zh = {
   "qoder.page.accounts.chip.refreshing": "签到刷新中",
   "qoder.page.accounts.chip.refreshingTip": "今日窗口已开放，官方活动尚未刷新出来 —— 稍后点刷新重试",
   // ★ 2026-11-19：`campaignMissing`（上游本轮没下发签到活动）与「漏签」同形不同因。
-  //   徽章只写「今日未签」会把上游规则说成用户/工具的问题，故这里单给一句短解释（tooltip）。
+  //   徽章只写「今日未签」会把上游规则说成用户/工具的问题。
   // ★ 2026-11-20 纠正：成因在**账号**侧（试用 / 套餐资格），不是「同一设备每轮只有一份」
   //   —— 同一设备同日两个账号可各自领到（docs/specs/QODER-PLATFORM.md §4）。
+  // ★ 2026-11-24（用户要求）：这一档不再画成「今日未签」，改画独立的「不可签到」态；
+  //   本句成为该徽章的 tooltip。同日用户反馈「太长」：徽章只留一句结论，
+  //   更长的原因与去处放抽屉 / 批量结果条。
   "qoder.page.accounts.chip.notCheckedInMissingTip":
-    "上游本轮没有向该账号下发签到活动（该账号不在积分发放范围，例如已过试用期）—— 再刷新也不会变",
-  "qoder.page.accounts.chip.checkinUnavailable": "签到不可用",
+    "官方未向该账号下发签到活动（如已过试用期）",
+  // 「不可签到」= 官方客户端里根本没有该账号的签到入口（上游没下发活动 / 当前无可领项）。
+  // 与「今日未签」是两件事：用户做什么都不会变，别让他反复点签到。
+  "qoder.page.accounts.chip.checkinUnavailable": "不可签到",
+  "qoder.page.accounts.chip.checkinUnavailableTip":
+    "官方暂未向该账号开放签到；可到官方客户端查看",
   "qoder.page.accounts.metric.credits": "积分",
   // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
   //   `<b>剩余</b>/总额`（千分位走 `formatCredits`），斜杠两侧不带空格，与 WB 的
@@ -313,19 +320,19 @@ export const zh = {
   "qoder.page.accounts.checkin.batchAlreadyPart": "另有 {n} 个今日已签到（未重复领取）",
   "qoder.page.accounts.checkin.batchPartial": "成功 {ok} 个，失败 {fail} 个",
   "qoder.page.accounts.checkin.failed": "{name} 签到失败",
-  // 「通道未开放」= 上游没给这个号下发签到活动（不是失败，也不是成功），点重试无用。
-  "qoder.page.accounts.checkin.disabled": "签到通道未开放",
-  "qoder.page.accounts.checkin.disabledPart": "{n} 个通道未开放",
+  // 「不可签到」= 官方没给这个号下发签到活动（不是失败，也不是成功），重试无用。
+  "qoder.page.accounts.checkin.disabled": "不可签到",
+  "qoder.page.accounts.checkin.disabledPart": "{n} 个不可签到",
+  /** legacy 通道的 DISABLED（没有 `campaignMissing` 事实）用它，别硬说成「未下发」。 */
+  "qoder.page.accounts.checkin.disabledHint": "官方未开放签到，重试无效；可到官方客户端查看。",
   /**
-   * ★ 2026-11-19：抽屉 / 批量结果条用的**长解释**（徽章 tooltip 用上面那条短的）。
+   * 抽屉 / 批量结果条共用的一句原因（徽章 tooltip 用上面那条更短的）。
    *
-   * 必须写清三件事，否则用户会继续反复点签到：
-   * ① 这是**上游没下发**，不是漏签、不是工具坏了；② 判据在**账号**自身资格
-   * （试用 / 套餐）—— 与这台设备登了几个账号**无关**（2026-11-20 实测纠正，
-   * 见 docs/specs/QODER-PLATFORM.md §4）；③ 能查的地方是官方客户端的成长页，不是这里。
+   * ★ 2026-11-24 用户反馈旧版太长：只留「结论 → 重试无效 → 去哪儿核对」，
+   *   不再展开设备数 / 规则生效时间等细节（归因见 docs/specs/QODER-PLATFORM.md §4）。
    */
   "qoder.page.accounts.checkin.missingHint":
-    "本轮官方没有向该账号下发「每天领 100 Credits」活动：发不发由账号自身资格决定（例如已过试用期的账号自 2026-11-19 起不再发放积分），与这台设备上登了几个账号无关 —— 同一天可以有多个账号各自领到。这是上游规则（不是漏签），再点签到不会改变结果；可在官方客户端成长页核对。",
+    "官方未下发签到活动（如账号已过试用期），重试无效；可到官方客户端查看。",
   "qoder.page.accounts.checkin.resultOk": "签到成功 {n} 个",
   "qoder.page.accounts.checkin.resultFail": "签到失败 {n} 个",
   "qoder.page.accounts.refresh.done": "{name} 的令牌已刷新",
@@ -339,6 +346,9 @@ export const zh = {
   "qoder.page.accounts.toolbar.checkinBucket.notCheckedIn": "今日未签",
   "qoder.page.accounts.toolbar.checkinBucket.unknown": "签到状态未知",
   "qoder.page.accounts.toolbar.checkinNotStarted": "今日签到暂未开始（10:00 开放 / 活动未刷新）",
+  // 没有任何可签账号、且其中有「不可签到」（账号未下发 / 整区未开放）：按钮禁用，
+  // 但原因不是「今日已全部签到」—— 批量签到后「已签 + 不可签到」的混合最常见。
+  "qoder.page.accounts.toolbar.checkinUnavailable": "没有可签到的账号（官方未开放签到）",
 
   "qoder.page.pending.title": "这个页面尚未接入 Qoder",
   "qoder.page.pending.description":

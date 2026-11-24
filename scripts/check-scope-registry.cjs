@@ -9660,6 +9660,115 @@ check("★ 2026-10-28 签到进度事件的区域由后端直传（前端不复�
   return "后端携带 region（`region()` 唯一映射）· 前端优先读它 · 前缀判断仅作老版本兜底";
 });
 
+check("★ Qoder 签到展示态：不可签到独立成态，区域级未开放不得落回未签 / 读取失败", () => {
+  /* 2026-11-24：把「官方没有签到入口」从「今日未签」里独立出来，来源有两级：
+     ① 行 `unavailable: true`（旧通道 404/405/410 的区域级结论，**先于** `ok:false`）；
+     ② 账号级 `active === false`（上游没下发活动 / 当前无可领项）。
+     第二级必须在窗口未开 / 已签 / 刷新中之后，否则「10 点前」或「刚签过」会被误画成
+     不可签到。无前端测试框架，这条静态契约就是判据的唯一护栏。
+     变异：删掉任一分支 / 把 `unavailable` 排在 `stale` 之前 / 把区域结论判在
+     `ok:false` 之后（菜单会说「读取失败」）⇒ 本条变红。 */
+  const page = readCode("src/pages/QoderAccountsPage.tsx");
+  const card = readCode("src/components/qoder/qoder-account-card.tsx");
+
+  const displayStart = page.indexOf("const checkinDisplayOf = useCallback(");
+  const displayEnd = page.indexOf("const checkinCampaignMissing = useCallback(");
+  if (displayStart < 0 || displayEnd <= displayStart) {
+    throw new Error("找不到 `checkinDisplayOf` 的实现块");
+  }
+  const display = page.slice(displayStart, displayEnd);
+  const anchors = [
+    'if (!entry) return checkinUnavailable ? "unavailable" : "unknown";',
+    'if (entry.unavailable === true) return "unavailable";',
+    'if (!entry.ok) return checkinUnavailable ? "unavailable" : "unknown";',
+    'if (entry.windowOpen === false) return "notStarted";',
+    'if (entry.todayCheckedIn === true) return "checked";',
+    'if (entry.status === "NONE" && entry.stale === true) return "refreshing";',
+    'if (entry.active === false) return "unavailable";',
+    'return "unchecked";',
+  ];
+  let last = -1;
+  for (const anchor of anchors) {
+    const at = display.indexOf(anchor);
+    if (at < 0) throw new Error(`checkinDisplayOf 缺少判据：${anchor}`);
+    if (at < last) throw new Error(`checkinDisplayOf 判据顺序变了（提前了）：${anchor}`);
+    last = at;
+  }
+
+  const stateStart = page.indexOf("function checkinStateOf(");
+  const stateEnd = page.indexOf("function renderAccountMenu(", stateStart);
+  if (stateStart < 0 || stateEnd <= stateStart) {
+    throw new Error("找不到 `checkinStateOf` 的实现块");
+  }
+  const stateOf = page.slice(stateStart, stateEnd);
+  const regionAt = stateOf.indexOf("if (entry.unavailable === true)");
+  const unreadableAt = stateOf.indexOf('kind: "unreadable"');
+  if (regionAt < 0) {
+    throw new Error("菜单判据没有处理行 `unavailable` —— 区域未开放会被说成「签到状态读取失败」");
+  }
+  if (unreadableAt >= 0 && regionAt > unreadableAt) {
+    throw new Error("区域级 `unavailable` 判在读取失败之后 —— 已知结论又被盖成「读不到」");
+  }
+  if (!/if \(!entry\.ok\) \{[\s\S]{0,260}?checkinUnavailable/.test(stateOf)) {
+    throw new Error("单账号读失败没有让区域「不可签到」优先 —— 手动刷新会把徽章翻回未知");
+  }
+  if (!/reason: t\("shared\.stat\.checkinUnavailable"\)/.test(stateOf)) {
+    throw new Error("区域级不可签到没有给出「本区域未开放」的原因");
+  }
+
+  if (!/export type QoderCheckinDisplay =[\s\S]{0,320}?\|\s*"unavailable"/.test(card)) {
+    throw new Error("`QoderCheckinDisplay` 缺少 `unavailable` —— 不可签到没有独立展示态");
+  }
+  if (!/if \(checkin === "unavailable"\)/.test(card) || !/chip\.checkinUnavailable/.test(card)) {
+    throw new Error("卡片 / 表格徽章没有渲染「不可签到」分支");
+  }
+  if (!/unavailable: display === "unavailable"/.test(page)) {
+    throw new Error("抽屉签到区没有把 `unavailable` 传给共享抽屉（按钮不会禁用）");
+  }
+  if (!/return \{ todayCheckedIn: false, unavailable: true \}/.test(page)) {
+    throw new Error("区域级未开放没有给抽屉一个「不可签到」的最小对象（会落回「签到状态未知」）");
+  }
+
+  /* 批量：已知领取无效的账号**不发起 claim**（campaignMissing / 区域未开放）。
+     `active === false` 但仍有活动（名额锁定）的一档必须保留尝试，不能一并跳过。 */
+  const skipStart = page.indexOf("const checkinSkipClaim = useCallback(");
+  if (skipStart < 0) throw new Error("缺少 `checkinSkipClaim` —— 批量仍会对无入口账号发写请求");
+  const skipEnd = page.indexOf("const checkinHintOf", skipStart);
+  const skip = page.slice(skipStart, skipEnd);
+  if (!/entry\?\.unavailable === true/.test(skip) || !/checkinCampaignMissing\(account\)/.test(skip)) {
+    throw new Error("`checkinSkipClaim` 没覆盖「区域未开放 / 上游未下发」两种确定无效");
+  }
+  if (/entry\.active === false/.test(skip)) {
+    throw new Error("`checkinSkipClaim` 把「名额锁定」也跳过了 —— 晚些可能恢复，必须保留尝试");
+  }
+  if (!/const skippedTargets = targets\.filter\(/.test(page) || !/!skippedTargets\.includes\(account\)/.test(page)) {
+    throw new Error("`runCheckin` 没有把已知无效的账号从 runnable 里排除");
+  }
+  if (!/const skippedTargets = targets\.filter\([\s\S]{0,240}?checkinSkipClaim\(account\)/.test(page)) {
+    throw new Error("`skippedTargets` 的过滤没有调用 `checkinSkipClaim` —— 跳过名单与实际判据不同源");
+  }
+  if (!/const disabled: FailedItem\[\] = skippedTargets\.map/.test(page)) {
+    throw new Error("跳过项没有计入「不可签到」桶 —— 回执会漏报这些账号");
+  }
+  if (!/disabledMissing = skippedTargets\.filter\(checkinCampaignMissing\)\.length/.test(page)) {
+    throw new Error("跳过项没有参与「全部未下发」判定 —— 原因会指错");
+  }
+  if (!/disabledMissing === disabled\.length/.test(page)) {
+    throw new Error("toast 原因没有按「全部未下发」判定 —— 混档时会替上游编原因");
+  }
+  if (!/checkinResult\.disabledMissing === checkinResult\.disabled\.length/.test(page)) {
+    throw new Error("结果条原因没有按「全部未下发」判定 —— 混档时会替上游编原因");
+  }
+
+  const zh = stripComments(
+    fs.readFileSync(path.join(ROOT, "src/locales/domains/qoderPages.zh.ts"), "utf8"),
+  );
+  if (!/"qoder\.page\.accounts\.chip\.checkinUnavailable": "不可签到"/.test(zh)) {
+    throw new Error("徽章词条不是「不可签到」—— 又回到了模糊的旧说法");
+  }
+  return "区域结论优先于读取失败 · 账号级判据顺序钉死 · 批量跳过已知无效 · 原因按全量判定";
+});
+
 console.log(`\n${passed} passed / ${failures.length} failed\n`);
 if (failures.length) {
   for (const f of failures) console.error(" - " + f);

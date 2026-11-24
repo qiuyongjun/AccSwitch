@@ -122,6 +122,8 @@ export function qoderAccountName(account: QoderAccountView): string {
  * Qoder 的「今天」是 UTC+8 10:00 起的窗口，不是自然日：
  * - 窗口未开（00:00–09:59）时上游的 `CLAIMED` 属于**上一轮**，不能画成「今日已签」；
  * - 窗口刚开但官方活动还没刷新出来（列表为空）时，也不能直接画成「未签」。
+ * - 上游没有向该账号下发签到活动（官方客户端也就没有入口）时，是**不可签到**，
+ *   不是「你忘了签」—— 再刷新 / 再点签到都不会变。
  * ⇒ 卡片 / 表格 / 菜单都从这一个枚举取值，避免各处各自把布尔解释成不同的话。
  */
 export type QoderCheckinDisplay =
@@ -129,6 +131,7 @@ export type QoderCheckinDisplay =
   | "unchecked"
   | "notStarted"
   | "refreshing"
+  | "unavailable"
   | "unknown";
 
 /**
@@ -138,7 +141,7 @@ export type QoderCheckinDisplay =
  * 凭据坏了的账号，「今天签没签到」是次要信息 —— 它根本调不动上游；反过来，
  * 把「今日未签」盖在「无可用凭据」上会让用户去点一个必然失败的签到按钮。
  *
- * ⚠️ `checkin` 的五态必须区分（见 {@link QoderCheckinDisplay}）：`unknown` 落回
+ * ⚠️ `checkin` 的六态必须区分（见 {@link QoderCheckinDisplay}）：`unknown` 落回
  * 「凭据可用」而不是硬报「今日未签」—— 后者是**把未知说成已知**。
  */
 export function QoderStatusChips({
@@ -148,10 +151,10 @@ export function QoderStatusChips({
   onOpenTab,
 }: {
   account: QoderAccountView;
-  /** 五态：已签 / 未签 / 未开始 / 刷新中 / 未知。 */
+  /** 六态：已签 / 未签 / 未开始 / 刷新中 / 不可签到 / 未知。 */
   checkin?: QoderCheckinDisplay;
   /**
-   * 「今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 用通用两态 tooltip）。
+   * 「不可签到 / 今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 用通用 tooltip）。
    *
    * ★ 2026-11-19（用户报障「一键签到显示成功，刷新又显示未签」）：
    *   这一档的真实含义常常不是「你忘了签」，而是**上游本轮没有向该账号下发签到活动**。
@@ -159,7 +162,9 @@ export function QoderStatusChips({
    *   又在往上叠可疑信号。
    *   ★ 2026-11-20 纠正：成因在账号侧（已过试用期不再发放积分等），**不是**同机多号的
    *   设备限额 —— 同一设备同日两个账号可各自领到（`docs/specs/QODER-PLATFORM.md` §4）。
-   *   只覆盖 `unchecked`：`notStarted` / `refreshing` 各有自己的解释，别抢它们的词。
+   *   ★ 2026-11-24（用户要求）：这一档不再画成「今日未签」，而是单独的「不可签到」态
+   *   —— 官方客户端没有入口时，用户再努力也不会有结果。
+   *   只覆盖 `unavailable` / `unchecked`：`notStarted` / `refreshing` 各有自己的解释。
    */
   checkinHint?: string;
   /** 标签直达详情页签（R10）：凭据类 → 凭据；签到类 → 签到。 */
@@ -236,9 +241,10 @@ export function QoderStatusChips({
       tab: "credential",
     });
   }
-  /* ★ Qoder 的签到是**五态**（见 {@link QoderCheckinDisplay}）：窗口未开放 / 活动刷新中
-     都不是「未签」，用中性底色而不是 warning —— 那是「现在没事可做」，不是「你忘了签」。
-     两态（已签 / 未签）仍共用 `CheckinIcon`：状态由文字与底色区分，与 WB / Trae 一致。 */
+  /* ★ Qoder 的签到是**六态**（见 {@link QoderCheckinDisplay}）：窗口未开放 / 活动刷新中 /
+     不可签到都不是「未签」，用中性底色而不是 warning —— 那是「现在没事可做」，
+     不是「你忘了签」。两态（已签 / 未签）仍共用 `CheckinIcon`：状态由文字与底色区分，
+     与 WB / Trae 一致。 */
   if (checkin === "notStarted") {
     return chip({
       variant: "outline",
@@ -272,6 +278,21 @@ export function QoderStatusChips({
         </>
       ),
       tip: t("qoder.page.accounts.chip.refreshingTip"),
+      tab: "checkin",
+    });
+  }
+  if (checkin === "unavailable") {
+    /* ★ 2026-11-24（用户要求）：官方没给该账号下发签到活动（`active === false`）时
+       不画「今日未签」—— 用户无从操作，反复点签到只会命中同一条上游规则。
+       中性底色 + 明确结论「不可签到」，原因放在 tooltip / 抽屉里。 */
+    return chip({
+      variant: "outline",
+      content: (
+        <>
+          <CheckinIcon /> {t("qoder.page.accounts.chip.checkinUnavailable")}
+        </>
+      ),
+      tip: checkinHint ?? t("qoder.page.accounts.chip.checkinUnavailableTip"),
       tab: "checkin",
     });
   }
@@ -378,9 +399,9 @@ export interface QoderAccountCardProps {
   credits?: QoderCardCredits | null;
   /** 是否为积分优先级最高的账号（指标行「优先」，与 WorkBuddy 同一口径）。 */
   creditPriority?: boolean;
-  /** 今日签到五态（`unknown` = 未知，落回凭据徽章）。 */
+  /** 今日签到六态（`unknown` = 未知，落回凭据徽章）。 */
   checkin?: QoderCheckinDisplay;
-  /** 「今日未签」的原因说明（`campaignMissing` 时由页面装配；不传 ⇒ 通用 tooltip）。 */
+  /** 「不可签到 / 今日未签」的原因说明（`campaignMissing` 时由页面装配；不传 ⇒ 通用 tooltip）。 */
   checkinHint?: string;
   /**
    * 程序位状态（只读）。

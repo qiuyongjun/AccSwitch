@@ -1695,7 +1695,7 @@ export type CheckinStatusEntry = {
   source?: "upstream" | "ledger";
   /** ★ Qoder 专有：上游原始状态词（`CLAIMABLE` / `CLAIMED` / `DISABLED`）。 */
   status?: string;
-  /** ★ Qoder 专有：活动是否活跃（`false` ⇒ 本区域未开放，前端据此换文案）。 */
+  /** ★ Qoder 专有：活动是否活跃（`false` ⇒ 当前没有可领 / 已领项：上游没下发活动或名额未开放）。 */
   active?: boolean;
   /**
    * ★ Qoder 专有：**今日签到窗口是否已开放**（每日 UTC+8 10:00 起算）。
@@ -1720,10 +1720,18 @@ export type CheckinStatusEntry = {
    * ★ Qoder 专有：上游 200 正常答复，但列表里**没有**积分类签到活动
    * （实测常见：只剩「首次订阅福利」这类 `VIEW_DETAILS`）。
    *
-   * 这一档**不是**「还没刷新完」：再刷新也不会变，界面按「今日未签」呈现。
+   * 这一档**不是**「还没刷新完」：再刷新也不会变，界面按「不可签到」呈现
+   * （官方客户端也没有该账号的签到入口），不再画成「今日未签」。
    * 见 `crates/buddy-switch-core/src/modules/qoder/checkin.rs` 模块头那张表。
    */
   campaignMissing?: boolean;
+  /**
+   * ★ Qoder 专有：**区域级**未开放（旧通道 404/405/410）—— 整区没有签到入口。
+   *
+   * 这不是「读取失败」：结论已知，重试也不会出现入口 ⇒ 界面写「不可签到」，
+   * 不再落回「凭据可用」或「签到状态读取失败」。
+   */
+  unavailable?: boolean;
   raw?: unknown;
 };
 
@@ -3591,7 +3599,7 @@ export interface QoderCheckinRow {
   nextWindowText?: string;
   /** 列表落后于时钟（上游还没切到新一轮）—— 只有这一档才是「签到刷新中」。 */
   stale?: boolean;
-  /** 上游答复里**没有**今日签到活动 ⇒ 按「今日未签」呈现（再刷新也不会变）。 */
+  /** 上游答复里**没有**今日签到活动 ⇒ 按「不可签到」呈现（重试不会改变结果）。 */
   campaignMissing?: boolean;
   streakDays?: number;
   totalClaimDays?: number;

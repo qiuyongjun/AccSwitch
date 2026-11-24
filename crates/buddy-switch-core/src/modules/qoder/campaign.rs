@@ -157,13 +157,13 @@ impl CampaignItem {
 /// | 位置 | 旧判据 | 后果 |
 /// |:--|:--|:--|
 /// | [`window_from_items`] | 积分类 且 非 View | 正确 |
-/// | `checkin::campaign_entry` | 积分类 且 非 View | 正确（画「今日未签」） |
+/// | `checkin::campaign_entry` | 积分类 且 非 View | 正确（画「不可签到」） |
 /// | **`checkin_for`（领取路径）** | **只看积分类** | **假成功** |
 ///
 /// 真机形态：国内版列表里只剩「首次订阅福利」（`kind` 空 / `CREDITS`、金额 0、
 /// `actionType=VIEW_DETAILS`），它是「积分类」但**不是签到活动**。领取路径据此认定
 /// 「有活动」⇒ `ok:true`（`earned:0`、什么都没领）⇒ 前端弹「已签到 N 个账号」，
-/// 而状态路径同一份数据得出「今日未签」⇒ 同一屏两种说法，用户反复点签到。
+/// 而状态路径同一份数据得出「不可签到」⇒ 同一屏两种说法，用户反复点签到。
 ///
 /// 可证伪：把 [`has_checkin_activity`] 的 `classify != View` 去掉 ⇒
 /// `view_only_list_is_not_a_success` 立即变红。
@@ -400,7 +400,7 @@ fn placements_text(placements: Option<&Value>) -> (String, String, String, Strin
 ///
 /// 上游的「每日领取」在 10:00 才切到新一天：00:00–09:59 列表里的 `CLAIMED` 属于
 /// **上一窗口**，直接当作「今日已签」是假阳性；10:00 后新活动还没刷出来时列表为空，
-/// 直接当作「今日未签」又是假阴性。签到状态因此必须带上「窗口是否开放」这个事实。
+/// 直接当作「不可签到」又是假阴性。签到状态因此必须带上「窗口是否开放」这个事实。
 ///
 /// 10:00 整点算开放（`>=`），与 [`next_checkin_window`] 的边界口径一致。
 pub fn checkin_window_open(now: i64) -> bool {
@@ -1230,8 +1230,8 @@ pub async fn checkin_for(region: QoderRegion, uid: &str) -> Result<Value, String
     // ★ 2026-11-19（用户报障「一键签到显示成功，刷新又显示未签」）：这里此前写的是
     //   `items.any(is_credit_kind)` —— 把「首次订阅福利」这类 `VIEW_DETAILS` + 0 元的
     //   积分类活动也算成「有活动」，于是一份**无可领项**的答复被判成 `ok:true`：
-    //   toast 弹「已签到 N 个账号」，`lastCheckin` 没盖章，刷新后卡片如实写「今日未签」。
-    //   判据必须与 `checkin::campaign_entry`（画「今日未签」的那一处）**同源**，
+    //   toast 弹「已签到 N 个账号」，`lastCheckin` 没盖章，刷新后卡片如实写「不可签到」。
+    //   判据必须与 `checkin::campaign_entry`（画「不可签到」的那一处）**同源**，
     //   即 [`has_checkin_activity`]。可证伪：改回 `is_credit_kind` ⇒
     //   `view_only_list_is_not_a_success` 变红。
     let has_benefit = has_checkin_activity(&snapshot.items);
@@ -1848,7 +1848,7 @@ mod tests {
     ///
     /// 此前 `checkin_for` 用 `items.any(is_credit_kind)` 当 `ok` 判据 ⇒ `ok:true`、
     /// `earned:0`、什么都没领，前端弹「已签到 N 个账号」；同一份答复在状态路径
-    /// （`checkin::campaign_entry`）却是 `campaignMissing` ⇒ 卡片写「今日未签」。
+    /// （`checkin::campaign_entry`）却是 `campaignMissing` ⇒ 卡片写「不可签到」。
     /// 用户看到的就是「提示成功，刷新又显示未签」。
     ///
     /// 可证伪：把 [`is_checkin_item`] 里的 `classify(item) != View` 去掉 ⇒

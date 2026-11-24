@@ -389,7 +389,7 @@ function QoderAccountsPanel({
    */
   const [renewingUids, setRenewingUids] = useState<ReadonlySet<string>>(() => new Set());
   /** 批量签到结果条（含失败项，可只重试失败项）。`null` = 不渲染。 */
-  /* 五档：成功数 / 通道未开放 / **未到签到时间** / 失败 / 未处理（协作式取消后没发出的）。 */
+  /* 五档：成功数 / 不可签到 / **未到签到时间** / 失败 / 未处理（协作式取消后没发出的）。 */
   const [checkinResult, setCheckinResult] = useState<{
     /** 本次**真领到**的账号数（不含「今日已签、此前领过」那一档）。 */
     okCount: number;
@@ -398,6 +398,8 @@ function QoderAccountsPanel({
     /** 本次**真领到**的额度合计（活动通道；只作展示，不参与成败判定）。 */
     earned: number;
     disabled: FailedItem[];
+    /** `disabled` 中由「上游未下发活动」构成的条数（等于总数才讲资格原因）。 */
+    disabledMissing: number;
     /** 每日 10:00 窗口还没开 / 活动尚未刷新：跳过且不发起领取，既不是成功也不是失败。 */
     notStarted: FailedItem[];
     failed: FailedItem[];
@@ -855,27 +857,42 @@ function QoderAccountsPanel({
    * 积分类签到活动（只剩「首次订阅福利」这类详情活动）时也是 `NONE`，而这一档
    * 再刷新一百次也不会变。此前两者共用「刷新中」，用户看到的是一个永不结束的转圈态，
    * 而详情页签（按 `todayCheckedIn` 渲染）写的是「未签到」—— 同一份数据两种说法。
-   * ⇒ 只有 `stale` 才是「刷新中」；`NONE` 的其余情况如实写「今日未签」。
+   * ⇒ 只有 `stale` 才是「刷新中」；`NONE` 的其余情况按 `active` 分档（见下一条）。
+   *
+   * ★ 2026-11-24（用户要求）：上游 **`active === false`**（没向该账号下发签到活动 /
+   * 当前没有可领项 ⇒ 官方客户端也没有入口）不再画成「今日未签」，而是 `unavailable`
+   * （「不可签到」）。原因：这一档用户做什么都不会变，画成「漏签」等于把上游规则
+   * 说成用户的失误。`checked` 仍优先：本地台账补正过的「今天已签」不能被它盖掉；
+   * `stale` 也先判 —— 落后于时钟的列表 `active` 同样是 `false`，但那是「刷新中」。
+   * ★ 同日补齐**区域级**：旧通道 404/405/410 时行上带 `unavailable: true`（缺行时用
+   * 页面布尔兜底）—— 同样写「不可签到」，不再落回「凭据可用」/「读取失败」。
    */
   const checkinDisplayOf = useCallback(
     (account: QoderAccountView): QoderCheckinDisplay => {
       const entry = checkinEntryOf(account.uid);
-      if (!entry || !entry.ok) return "unknown";
+      if (!entry) return checkinUnavailable ? "unavailable" : "unknown";
+      if (entry.unavailable === true) return "unavailable";
+      /* 单账号刷新在整区未开放时会落一条 `ok:false`（不带行级标志）——
+         区域结论优先：仍是「不可签到」，不能翻回「未知 / 正常」。 */
+      if (!entry.ok) return checkinUnavailable ? "unavailable" : "unknown";
       if (entry.windowOpen === false) return "notStarted";
       if (entry.todayCheckedIn === true) return "checked";
       if (entry.status === "NONE" && entry.stale === true) return "refreshing";
+      if (entry.active === false) return "unavailable";
       return "unchecked";
     },
-    [checkinEntryOf],
+    [checkinEntryOf, checkinUnavailable],
   );
 
   /**
-   * 「今日未签」是否由**上游本轮没有下发签到活动**导致（`campaignMissing`）。
+   * 「不可签到」是否由**上游本轮没有下发签到活动**导致（`campaignMissing`）。
    *
    * ★ 2026-11-19（用户报障「一键签到显示成功，刷新又显示未签」）：这一档在界面上
    * 与「你忘了签」长得一模一样，但用户做什么都没用 —— 上游本轮没向该账号下发这条活动。
    * ★ 2026-11-20 纠正：下发按**账号**资格（试用 / 套餐状态）决定，与设备数无关；
    * 同一设备同日两个账号可各自领到（`docs/specs/QODER-PLATFORM.md` §4）。
+   * ★ 2026-11-24：这一档现在**单独画成「不可签到」**；本函数只用于装配 tooltip /
+   * 抽屉里的原因说明。
    * ⇒ 只有**同时满足**「上游答了 ok」「窗口已开」「列表不落后」「确实缺这条」才是它：
    *   - `windowOpen === false` ⇒ 是「未开始」，有自己的提示；
    *   - `stale === true`        ⇒ 是「刷新中」，再刷可能变；
@@ -896,7 +913,25 @@ function QoderAccountsPanel({
     [checkinEntryOf],
   );
 
-  /** 卡片 / 表格徽章的 tooltip（**短句**：标签悬停只讲这一档的结论）。 */
+  /**
+   * 领取**已知无效**、批量时**不发起 claim** 的账号：
+   * - 账号级 `campaignMissing`（上游本轮没下发活动，重试永远不变）；
+   * - 区域级 `unavailable`（旧通道 404/405/410，整区没有入口）。
+   *
+   * ⚠️ 只跳「确定无效」的：`active === false` 但**仍有活动**（名额锁定 / 待领）的一档
+   * 保留尝试 —— 晚些可能恢复。跳过项仍计入「不可签到」，与后端 `disabled` 回执同档。
+   */
+  const checkinSkipClaim = useCallback(
+    (account: QoderAccountView): boolean => {
+      const entry = checkinEntryOf(account.uid);
+      if (entry?.unavailable === true) return true;
+      if (!entry || !entry.ok) return checkinUnavailable;
+      return checkinCampaignMissing(account);
+    },
+    [checkinEntryOf, checkinUnavailable, checkinCampaignMissing],
+  );
+
+  /** 卡片 / 表格徽章（「不可签到」/「今日未签」）的 tooltip（**短句**：只讲这一档的结论）。 */
   const checkinHintOf = useCallback(
     (account: QoderAccountView): string | undefined =>
       checkinCampaignMissing(account)
@@ -924,12 +959,14 @@ function QoderAccountsPanel({
    *
    * ⚠️ 只在**上游读数缺席**（台账兜底 / 读取失败 / 没有条目）时才发；失败**不写** map、
    * 也**不记账** —— 「暂时读不到」不能被固化成结论，下次打开抽屉再试。
+   * ⚠️ 本区域未开放签到（`checkinUnavailable`）⇒ 不发：结论已知（不可签到），
+   * 逐账号再问一遍只会得到同一条区域原因。
    * ⚠️ 在途期间用户手动刷新 / 签到成功 ⇒ 写入序号已前进，这份旧响应必须丢弃。
    */
   const checkinAutoFetched = useRef<Set<string>>(new Set());
   const checkinAutoFetching = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!detail || !checkinLoaded) return;
+    if (!detail || !checkinLoaded || checkinUnavailable) return;
     const uid = detail.uid;
     const entry = checkinEntryOf(uid);
     if (entry?.ok && entry.source !== "ledger") return;
@@ -951,7 +988,7 @@ function QoderAccountsPanel({
       .finally(() => {
         checkinAutoFetching.current.delete(uid);
       });
-  }, [detail, checkinLoaded, checkinEntryOf, scope]);
+  }, [detail, checkinLoaded, checkinUnavailable, checkinEntryOf, scope]);
 
   /**
    * 首屏**补齐**：区域快照落地后，对**仍没有上游读数**的账号补一次逐账号查询。
@@ -1484,7 +1521,7 @@ function QoderAccountsPanel({
    * （批量操作必然可能部分失败，不能让「批量签到」看起来永远 100% 成功）。
    * `baseOk` 用于「只重试失败项」时把上一轮的成果累计进去。
    *
-   * ★ **四档**：成功（含 `already`）/ 通道未开放（`disabled`，重试永远无效）/ 失败 /
+   * ★ **四档**：成功（含 `already`）/ 不可签到（`disabled`，重试永远无效）/ 失败 /
    * **未处理**（用户取消、请求根本没发出 —— 它既不是成功也不是失败）。
    */
   async function runCheckin(
@@ -1501,31 +1538,45 @@ function QoderAccountsPanel({
       const state = checkinDisplayOf(account);
       return state === "notStarted" || state === "refreshing";
     });
-    const runnable = targets.filter((account) => !notStartedTargets.includes(account));
-    if (runnable.length === 0) {
+    /* ★ 2026-11-24：**已知领取无效**的账号不发起 claim（上游没下发活动 / 整区未开放），
+       直接计入「不可签到」；与后端 `disabled` 回执同档，不重试、不浪费一次写请求。 */
+    const skippedTargets = targets.filter(
+      (account) => !notStartedTargets.includes(account) && checkinSkipClaim(account),
+    );
+    const runnable = targets.filter(
+      (account) => !notStartedTargets.includes(account) && !skippedTargets.includes(account),
+    );
+    if (runnable.length === 0 && skippedTargets.length === 0) {
       toast.info(t("qoder.page.accounts.checkin.notStartedToast"));
       return;
     }
     setBusy(true);
     try {
-      const outcomes = await runBatch(runnable, async (account) => {
-        try {
-          return { result: await api.qoderCheckinClaim(scope, account.uid) };
-        } catch (e) {
-          /* 错误文本要留着：只报「失败」不给原因，用户不知道是该重试还是该去客户端。 */
-          return { error: api.asError(e) };
-        }
-      });
+      const outcomes =
+        runnable.length > 0
+          ? await runBatch(runnable, async (account) => {
+              try {
+                return { result: await api.qoderCheckinClaim(scope, account.uid) };
+              } catch (e) {
+                /* 错误文本要留着：只报「失败」不给原因，用户不知道是该重试还是该去客户端。 */
+                return { error: api.asError(e) };
+              }
+            })
+          : [];
       const failed: FailedItem[] = [];
-      const disabled: FailedItem[] = [];
+      const disabled: FailedItem[] = skippedTargets.map((account) => ({
+        uid: account.uid,
+        name: qoderAccountName(account),
+      }));
       const notStarted: FailedItem[] = notStartedTargets.map((account) => ({
         uid: account.uid,
         name: qoderAccountName(account),
       }));
       const unprocessed: FailedItem[] = [];
       const checkedUids: string[] = [];
-      /** 「未开放」里有多少是**上游本轮没下发**（`campaignMissing`）—— 决定回执怎么说。 */
-      let disabledMissing = 0;
+      /** `disabled` 中由 `campaignMissing` 构成的条数：等于总数时才讲「官方未下发」。
+       */
+      let disabledMissing = skippedTargets.filter(checkinCampaignMissing).length;
       let ok = baseOk;
       let alreadyCount = baseAlready;
       let earned = baseEarned;
@@ -1597,6 +1648,7 @@ function QoderAccountsPanel({
           alreadyCount,
           earned,
           disabled,
+          disabledMissing,
           notStarted,
           failed,
           unprocessed,
@@ -1616,7 +1668,7 @@ function QoderAccountsPanel({
           t("qoder.page.accounts.checkin.batchAlreadyPart", { n: String(roundAlready) }),
         );
       }
-      if (disabled.length > 0) {
+      if (disabled.length > 0 && targets.length > 1) {
         extras.push(t("qoder.page.accounts.checkin.disabledPart", { n: String(disabled.length) }));
       }
       if (notStarted.length > 0) {
@@ -1628,13 +1680,18 @@ function QoderAccountsPanel({
       const description =
         [...extras, ...(firstError ? [firstError] : [])].join(t("shared.punct.comma")) || undefined;
       /* 「部分成功 + 其余未下发」是最常见的一屏（2026-11-19 本机三个账号即 1 成功 2 未下发）：
-         成功回执的 description 里必须带原因，否则那句「2 个通道未开放」仍像接口故障。 */
-      const descriptionWithMissing =
-        disabledMissing > 0
-          ? [t("qoder.page.accounts.checkin.missingHint"), description]
-              .filter(Boolean)
-              .join(t("shared.punct.comma"))
-          : description;
+         成功回执的 description 里必须带原因，否则那句「2 个不可签到」仍像接口故障。
+         ⚠️ 只有 disabled **全部**是 `campaignMissing` 才讲「官方未下发活动」；混入
+         legacy DISABLED / 区域未开放时用通用一句，别替上游编原因。 */
+      const disabledReason =
+        disabled.length > 0
+          ? disabledMissing === disabled.length
+            ? t("qoder.page.accounts.checkin.missingHint")
+            : t("qoder.page.accounts.checkin.disabledHint")
+          : null;
+      const descriptionWithReason = [disabledReason, description]
+        .filter(Boolean)
+        .join(t("shared.punct.comma")) || undefined;
       if (single) {
         const name = qoderAccountName(single);
         if (roundAlready > 0) {
@@ -1650,32 +1707,32 @@ function QoderAccountsPanel({
         } else if (disabled.length > 0) {
           /* ★ 2026-11-19：单条回执也要讲原因 —— 用户点的是这一个账号，结果条不会出现。 */
           toast.warning(t("qoder.page.accounts.checkin.disabled"), {
-            description: descriptionWithMissing,
+            description: descriptionWithReason,
           });
         }
         /* `notStarted` / `refreshing` 的**单条**情形已在上方「全部跳过」分支提示过，不重复弹。 */
       } else if (okThisRound > 0 && failed.length === 0 && unprocessed.length === 0) {
         toast.success(t("qoder.page.accounts.checkin.batchDone", { n: String(okThisRound) }), {
-          description: descriptionWithMissing,
+          description: descriptionWithReason,
         });
       } else if (roundAlready > 0 && failed.length === 0 && unprocessed.length === 0) {
         /* 本轮没有**新**领取，只是确认「今日已签」：单独一句话，不能混进「成功 N 个」。 */
         toast.success(t("qoder.page.accounts.checkin.batchAlready", { n: String(roundAlready) }), {
-          description: descriptionWithMissing,
+          description: descriptionWithReason,
         });
       } else if (failed.length > 0) {
         /* 一个都没签上 ⇒ error；部分成功 ⇒ warning。用同一句话报数量，不谎报成功。 */
         const args = { ok: String(okThisRound), fail: String(failed.length) };
         const text = t("qoder.page.accounts.checkin.batchPartial", args);
         /* 失败与「未下发」可能同屏出现 ⇒ 描述统一带上原因（`extras` 里还有未开放计数）。 */
-        if (okThisRound === 0) toast.error(text, { description: descriptionWithMissing });
-        else toast.warning(text, { description: descriptionWithMissing });
+        if (okThisRound === 0) toast.error(text, { description: descriptionWithReason });
+        else toast.warning(text, { description: descriptionWithReason });
       } else if (disabled.length > 0) {
         /* 全部「通道未开放」：既不是成功也不是失败，如实说清。
            ★ 2026-11-19：若成因是「上游本轮没下发」，把规则讲在前面 —— 否则「通道未开放」
            听起来像接口故障，用户会一直重试。 */
         toast.warning(t("qoder.page.accounts.checkin.disabled"), {
-          description: descriptionWithMissing,
+          description: descriptionWithReason,
         });
       } else if (unprocessed.length > 0) {
         toast.info(t("shared.batch.cancelled", { n: String(unprocessed.length) }));
@@ -2073,24 +2130,46 @@ function QoderAccountsPanel({
   }
 
   /**
-   * 签到状态的**显式取值**（菜单与卡片共用同一个判据）。
-   * 未知 / 读取失败 / 未开放各自成态，绝不把「不知道」画成「未签到」。
+   * 签到状态的**显式取值**（菜单用；与卡片 / 表格的 `checkinDisplayOf` 同一口径）。
+   * 未知 / 读取失败 / 不可签到各自成态，绝不把「不知道」画成「未签到」。
    */
   function checkinStateOf(account: QoderAccountView): AccountCheckinState {
     const entry = checkinEntryOf(account.uid);
     if (!entry) {
-      /* 通道未开放 ⇒ 明说「未开放」（重试永远不会成功）；否则才是「还没查」= 未知。 */
-      return checkinUnavailable ? { kind: "unavailable" } : { kind: "unknown" };
+      /* 通道未开放 ⇒ 明说「不可签到」（重试永远不会成功）；否则才是「还没查」= 未知。 */
+      return checkinUnavailable
+        ? { kind: "unavailable", reason: t("shared.stat.checkinUnavailable") }
+        : { kind: "unknown" };
     }
-    if (!entry.ok) return { kind: "unreadable", reason: entry.error };
+    /* 区域级结论（旧通道 404/405/410，行上带 `unavailable: true`）：
+       这不是「读取失败」—— 结论已知，再试也不会出现入口。 */
+    if (entry.unavailable === true) {
+      return { kind: "unavailable", reason: t("shared.stat.checkinUnavailable") };
+    }
+    if (!entry.ok) {
+      /* 单账号刷新在整区未开放时会落一条不带行级标志的 `ok:false` ——
+         区域结论优先，别把它说成「读取失败」。 */
+      return checkinUnavailable
+        ? { kind: "unavailable", reason: t("shared.stat.checkinUnavailable") }
+        : { kind: "unreadable", reason: entry.error };
+    }
     /* 窗口未开（每日 10:00 前）：上游的 CLAIMED 属于上一轮 —— 到点再签，不是「未签」。 */
     if (entry.windowOpen === false) return { kind: "notStarted" };
     if (entry.todayCheckedIn) return { kind: "checked" };
     /* 窗口已开但列表还是上一轮（`stale`）：不是「未签」，稍后刷新即可。
        ⚠️ 只认 `stale` —— `status === "NONE"` 还包含「上游没下发签到活动」那一档，
-       它再刷新也不会变，必须落到 `unchecked`（见 `checkinDisplayOf` 的注释）。 */
+       它再刷新也不会变，落到下面的 `unavailable`（见 `checkinDisplayOf` 的注释）。 */
     if (entry.status === "NONE" && entry.stale === true) return { kind: "refreshing" };
-    if (entry.active === false) return { kind: "unavailable" };
+    if (entry.active === false) {
+      /* 「不可签到」：上游没下发活动（官方客户端也没有入口）。菜单别用通用那句
+         「官方未开放签到」—— 区域通道是好的，缺的是这个账号的资格 / 可领项。 */
+      return {
+        kind: "unavailable",
+        reason: checkinCampaignMissing(account)
+          ? t("qoder.page.accounts.chip.notCheckedInMissingTip")
+          : t("qoder.page.accounts.chip.checkinUnavailableTip"),
+      };
+    }
     return { kind: "unchecked" };
   }
 
@@ -2288,20 +2367,32 @@ function QoderAccountsPanel({
   /**
    * 「今日签到」的展示词 —— 概览信息行与顶部指标块共用，避免同屏两种说法
    * （上游读失败时，两处各写一遍三元链会出现「指标块说读不到、概览说未签到」）。
+   *
+   * ★ 2026-11-24：逐档对齐 `checkinDisplayOf` —— 未开始 / 刷新中 / 不可签到各有
+   * 自己的词。区域级未开放与账号级未下发**统一写「不可签到」**（不再用
+   * 「本区域未开放」或「未签到」两套说法）。
    */
   const detailCheckinText = useMemo(() => {
     if (!detailLive) return "—";
     const entry = checkinEntryOf(detailLive.uid);
+    const state = checkinDisplayOf(detailLive);
+    /* 区域级未开放 / 账号未下发：结论已知 ⇒ 不可签到（优先于「读不到」）。 */
+    if (state === "unavailable") return t("qoder.page.accounts.chip.checkinUnavailable");
     if (entry && !entry.ok) return t("shared.stat.checkinUnreadable");
-    if (entry) {
-      return entry.todayCheckedIn
-        ? t("shared.stat.checkedIn")
-        : entry.active === false
-          ? t("shared.stat.checkinUnavailable")
-          : t("shared.stat.notCheckedIn");
+    if (!entry) return "—";
+    switch (state) {
+      case "checked":
+        return t("shared.stat.checkedIn");
+      case "notStarted":
+        return t("shared.drawer.checkin.notStarted");
+      case "refreshing":
+        return t("shared.drawer.checkin.refreshing");
+      case "unchecked":
+        return t("shared.stat.notCheckedIn");
+      default:
+        return "—";
     }
-    return "—";
-  }, [detailLive, checkinEntryOf, t]);
+  }, [detailLive, checkinEntryOf, checkinDisplayOf, t]);
 
   /**
    * 概览只留「账号信息」一块 —— 与 WorkBuddy 同构（身份 / 元数据 / 今日签到）。
@@ -2636,6 +2727,12 @@ function QoderAccountsPanel({
     /* 与卡片 / 表格 / 指标块**同一来源**（`checkinEntryOf`）：否则单账号刷新后
        卡片已是「已签到」，签到页签还停在区域快照的「未签到」。 */
     const row = checkinEntryOf(detailLive.uid);
+    const display = checkinDisplayOf(detailLive);
+    /* 区域级未开放（旧通道 404/405/410）：没有三格数据，但「不可签到」是已知结论，
+       不能落回「签到状态未知」。 */
+    if (display === "unavailable" && (!row || !row.ok)) {
+      return { todayCheckedIn: false, unavailable: true };
+    }
     if (!row || !row.ok || row.todayCheckedIn === undefined) return null;
     return {
       todayCheckedIn: row.todayCheckedIn === true,
@@ -2644,14 +2741,17 @@ function QoderAccountsPanel({
       windowOpen: row.windowOpen !== false,
       /* 窗口已开但上游列表还是上一轮 ⇒ 抽屉写「活动刷新中」，按钮禁用。
          ⚠️ 只有 `stale` 才算 —— 「上游没下发签到活动」那一档不是刷新中，
-         它按「未签到」渲染（与卡片 / 表格同一口径，见 `checkinDisplayOf`）。 */
+         它按「不可签到」渲染（与卡片 / 表格同一口径，见 `checkinDisplayOf`）。 */
       refreshing: row.windowOpen !== false && row.status === "NONE" && row.stale === true,
+      /* ★ 2026-11-24：官方没给该账号下发活动（`active === false`）⇒ 签到按钮换成
+         「不可签到」并禁用 —— 点下去只会命中同一条上游规则。 */
+      unavailable: display === "unavailable",
       nextWindowText: row.nextWindowText ?? null,
       todayCredit: row.todayCredit ?? null,
       streakDays: row.streakDays ?? null,
       totalCredits: row.totalCredits ?? null,
     };
-  }, [detailLive, checkinEntryOf]);
+  }, [detailLive, checkinEntryOf, checkinDisplayOf]);
 
   /**
    * 抽屉动作基于**活账号**（当前账号集合里的那一条），不是打开时的快照：
@@ -2889,6 +2989,12 @@ function QoderAccountsPanel({
       const state = checkinDisplayOf(row);
       return state === "notStarted" || state === "refreshing";
     });
+  /* 有任何「不可签到」（官方没下发活动）：没有待签账号时，禁用原因不能说成
+     「今日已全部签到」—— 那会把上游规则说成用户已经完成。「已签 + 不可签到」的
+     混合在批量签到后最常见（用户截图：成功 2 + 未开放 1）。 */
+  const checkinHasUnavailable = rows.some(
+    (row) => checkinDisplayOf(row) === "unavailable",
+  );
   const quickBlocked = busy || quickBusy !== null;
 
   const productLabel = t(platformDescriptor(product).labelKey);
@@ -2952,7 +3058,9 @@ function QoderAccountsPanel({
                 : !checkinHasPending
                   ? allCheckinNotStarted
                     ? t("qoder.page.accounts.toolbar.checkinNotStarted")
-                    : t("shared.toolbar.quickCheckinNone")
+                    : checkinHasUnavailable
+                      ? t("qoder.page.accounts.toolbar.checkinUnavailable")
+                      : t("shared.toolbar.quickCheckinNone")
                   : undefined
             }
             onClick={() => void quickCheckinAll()}
@@ -3037,13 +3145,15 @@ function QoderAccountsPanel({
                 okCount: checkinResult.okCount,
                 alreadyCount: checkinResult.alreadyCount,
                 failedNames: checkinResult.failed.map((item) => item.name),
-                /* ⚠️ 「通道未开放」单独一档：不算成功、也不进重试桶。 */
+                /* ⚠️ 「不可签到」单独一档：不算成功、也不进重试桶。 */
                 skippedNames: checkinResult.disabled.map((item) => item.name),
-                /* ★ 2026-11-19：这一档现在主要是「上游本轮没向该账号下发签到活动」，
-                   只说「通道未开放」会把上游规则说成接口故障 —— 补一句原因。 */
+                /* 只有「不可签到」**全部**由 `campaignMissing` 构成才说「官方未下发活动」；
+                   混入 legacy DISABLED / 区域未开放时用通用一句，避免结果条替上游编原因。 */
                 skippedHint:
                   checkinResult.disabled.length > 0
-                    ? t("qoder.page.accounts.checkin.missingHint")
+                    ? checkinResult.disabledMissing === checkinResult.disabled.length
+                      ? t("qoder.page.accounts.checkin.missingHint")
+                      : t("qoder.page.accounts.checkin.disabledHint")
                     : undefined,
                 /* 「未到签到时间 / 活动未刷新」单独一档：跳过了、没发请求，也不是失败。 */
                 notStartedNames: checkinResult.notStarted.map((item) => item.name),
@@ -3322,11 +3432,14 @@ function QoderAccountsPanel({
         refreshingKinds={detail ? refreshPartBusy.kindsOf(detail.uid) : []}
         onRefreshPart={detailLive ? (kind) => void onRefreshPart(detailLive, kind) : undefined}
         checkin={detailCheckin}
-        /* 未签的**原因**（上游本轮未下发）：抽屉是用户点进来找解释的地方。 */
+        /* 「不可签到 / 未签」的**原因**：抽屉是用户点进来找解释的地方。
+           下发缺失 → 长解释；其余 `active === false`（如名额未开放）→ 短句。 */
         checkinHint={
           detailLive && checkinCampaignMissing(detailLive)
             ? t("qoder.page.accounts.checkin.missingHint")
-            : undefined
+            : detailLive && checkinDisplayOf(detailLive) === "unavailable"
+              ? t("qoder.page.accounts.chip.checkinUnavailableTip")
+              : undefined
         }
         credential={detailCredential}
         /* ★ 2026-10-27（R10）：与卡片 / 表格同一判据的「当前登录」徽章。 */

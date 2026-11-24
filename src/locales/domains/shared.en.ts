@@ -532,8 +532,8 @@ export const en = {
   "shared.cardMenu.done": "Updated",
   "shared.cardMenu.checkinDone": "Checked in today",
   "shared.cardMenu.checkinNeedsLogin": "Sign in first",
-  "shared.cardMenu.checkinUnavailable": "Channel unavailable",
-  "shared.cardMenu.checkinUnavailableHint": "The upstream check-in channel is shut down; retrying will not help",
+  "shared.cardMenu.checkinUnavailable": "Check-in unavailable",
+  "shared.cardMenu.checkinUnavailableHint": "Official check-in is not open; retrying will not help — check the official client",
   "shared.cardMenu.checkinNotStarted": "Opens at 10:00",
   "shared.cardMenu.checkinNotStartedHint": "Qoder opens today’s check-in at 10:00; come back after that",
   "shared.cardMenu.checkinRefreshing": "Refreshing campaign",
@@ -658,6 +658,9 @@ export const en = {
   "shared.drawer.checkin.notStartedTip": "Today’s check-in opens at {time}",
   "shared.drawer.checkin.refreshing": "Refreshing campaign",
   "shared.drawer.checkin.refreshingAction": "Try again later",
+  // Upstream offered no check-in campaign to this account (Qoder `active === false`):
+  // not a missed check-in, and retrying never helps.
+  "shared.drawer.checkin.unavailable": "Check-in unavailable",
   // Upstream `streak_days` can disagree with gaps in `checkin_dates`, so avoid claiming continuity.
   "shared.drawer.checkin.statStreak": "Check-in days",
   "shared.drawer.checkin.statTotal": "Credits earned",
@@ -715,7 +718,7 @@ export const en = {
   "shared.checkinResult.retryFailed": "Retry failed",
   "shared.checkinResult.retryPending": "Retry remaining",
   "shared.checkinResult.summary4": "{ok} ok · {skip} unavailable · {fail} failed",
-  "shared.checkinResult.skippedNames": "Check-in channel unavailable for: {names}",
+  "shared.checkinResult.skippedNames": "Cannot check in: {names}",
   "shared.checkinResult.notStartedBadge": "{n} not started",
   "shared.checkinResult.alreadyBadge": "{n} already signed today",
   "shared.checkinResult.notStartedNames":

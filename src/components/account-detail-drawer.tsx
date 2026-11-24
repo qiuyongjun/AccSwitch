@@ -350,6 +350,14 @@ export interface AccountDetailDrawerProps {
     windowOpen?: boolean;
     /** 窗口已开但上游活动列表还是上一轮（Qoder）：稍后刷新，不是失败。 */
     refreshing?: boolean;
+    /**
+     * 本账号**不可签到**（Qoder：上游没下发签到活动 / 当前没有可领项）。
+     *
+     * 与「今日未签」是两件事：这一档用户做什么都不会变，按钮必须禁用并写
+     * 「不可签到」—— 画成漏签会让用户反复点一个注定失败的按钮。
+     * 缺省 = 其它平台 / 正常账号 ⇒ 渲染与原来逐字一致。
+     */
+    unavailable?: boolean;
     /** 下一个签到窗口的可读文本（`MM-DD HH:mm`），未开始时用于提示。 */
     nextWindowText?: string | null;
     dailyCredit?: number | null;
@@ -366,7 +374,7 @@ export interface AccountDetailDrawerProps {
     statsScope?: "upstream" | "local";
   } | null;
   /**
-   * 「今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 不渲染）。
+   * 「不可签到 / 今日未签」的**原因说明**（由页面按上游事实装配；不传 ⇒ 不渲染）。
    *
    * ★ 2026-11-19：Qoder 的 `campaignMissing`（上游本轮没下发签到活动）与「你忘了签」
    *   在界面上长得一模一样。抽屉是用户点进来找原因的地方，没有这句话，他只能看到三个
@@ -1147,6 +1155,7 @@ export function AccountDetailDrawer({
                             checkin.todayCheckedIn ||
                             checkin.windowOpen === false ||
                             checkin.refreshing ||
+                            checkin.unavailable ||
                             !actions.showCheckin
                           }
                           onClick={actions.onCheckin}
@@ -1156,9 +1165,11 @@ export function AccountDetailDrawer({
                             ? t("shared.drawer.checkin.notStartedAction")
                             : checkin.refreshing
                               ? t("shared.drawer.checkin.refreshingAction")
-                              : checkin.todayCheckedIn
-                                ? t("shared.drawer.checkin.done")
-                                : t("shared.drawer.checkin.action")}
+                              : checkin.unavailable
+                                ? t("shared.drawer.checkin.unavailable")
+                                : checkin.todayCheckedIn
+                                  ? t("shared.drawer.checkin.done")
+                                  : t("shared.drawer.checkin.action")}
                         </Button>
                       ) : null}
                     </div>
@@ -1183,8 +1194,11 @@ export function AccountDetailDrawer({
                             t("shared.drawer.checkin.notStarted")
                           : checkin.refreshing
                             ? t("shared.drawer.checkin.refreshing")
-                            : !checkin.todayCheckedIn
-                              ? t("shared.drawer.checkin.notCheckedIn")
+                            : checkin.unavailable
+                              ? /* 官方没下发活动：不是漏签，写「不可签到」，按钮同步禁用。 */
+                                t("shared.drawer.checkin.unavailable")
+                              : !checkin.todayCheckedIn
+                                ? t("shared.drawer.checkin.notCheckedIn")
                               : /* 金额未知（上游只回了「已签到」/ 台账兜底）⇒ 写「已签到」，**不补成 +0**
                                    —— 补零会让用户以为确实领到 0 积分；写「—」又会和上方指标块的
                                    「已签到」打架（2026-10-29 用户报障「卡片说已签、签到页一片 —」）。 */
