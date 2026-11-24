@@ -161,7 +161,7 @@ src-tauri/
 crates/
   buddy-switch-core/    # 核心逻辑：account/auth_file/oauth/process/switch/session/checkin/refresh/update/config
                         # 另有 product.rs（Product/Scope 唯一事实来源）、gateway_namespace.rs（统一入口命名空间）、
-                        # trae/（变体、区域、OAuth、快照迁移）、agent_watch.rs（外部会话监听状态机）等
+                        # trae/（变体、区域、OAuth、快照迁移）、agent_hook_cleanup.rs（旧 hook 残留清理）等
   buddy-switch-gateway/ # OpenAI / Anthropic 兼容网关 —— **三套产品线**：WB / Trae / 统一入口，
                         # 共用 GatewayHost 与 pool/（账号池、选号策略 entry_like.rs）
   buddy-switch-server/  # HTTP server + CLI：axum API + rust-embed 前端；三个网关宿主各一份
@@ -184,7 +184,7 @@ docs/
 | `57890` | webui 界面本体 | `buddy-switch serve --port` 可改 |
 | `57891` | WorkBuddy 网关 | 默认关；`~/.buddy-switch/gateway_config.json` |
 | `57892` | **统一入口**（跨产品线） | 默认关；`~/.buddy-switch/gateway_unified.json` + `gateway_unified_keys.json` |
-| `57893` | 客户端会话监听的 hook 接收端 | 需在「设置 → 客户端」显式开启 |
+| `57893` | ~~客户端会话监听的 hook 接收端~~ | **已下线（2026-11-24）**，端口已释放；旧 hook 残留由启动清理任务剔除 |
 | `57894` | Trae 网关 | 默认关（原 `7864`） |
 | `57895` | Qoder 网关 | 默认关（原 `7865`） |
 | `8899` | Trae 本地 MITM 代理 | 登录态捕获依赖它（**不是网关**） |

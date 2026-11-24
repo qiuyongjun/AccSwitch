@@ -935,7 +935,7 @@ mod tests {
             57890u16, // 界面本体
             57891,    // WorkBuddy 网关
             57892,    // 统一网关
-            57893,    // 客户端会话监听 hook
+            57893,    // 原会话监听 hook（已下线；端口保留避让）
             crate::qoder::QODER_DEFAULT_API_PORT,
             8899, // Trae 登录代理
         ] {

@@ -44,7 +44,7 @@
 
 | 文档 | 内容 | 状态 |
 |:--|:--|:--|
-| [`PLAN.md`](specs/PLAN.md) | 架构与交互重构总方案 v2.8（P0–P16 分期表、交互规范、Playbook） | 现行 · P0–P16 已落地 |
+| [`PLAN.md`](specs/PLAN.md) | 架构与交互重构总方案 v2.8（P0–P16 分期表、交互规范、Playbook） | 现行 · P0–P16 已落地（P9/P15 于 2026-11-24 下线） |
 | [`DECISIONS.md`](specs/DECISIONS.md) | 决策清单 D1–D56，逐条有结论 | 现行 · 已拍板 |
 | [`VOCABULARY.md`](specs/VOCABULARY.md) | 词汇表（P0 冻结）。**新代码只许用「新词汇」** | 现行 · 冻结 |
 | [`COVERAGE-REPORT.md`](specs/COVERAGE-REPORT.md) | 原型 112 条行为 vs 真实应用的覆盖度实测 | 现行 · 随原型更新 |
@@ -64,15 +64,15 @@
 | [`P6-ARCH.md`](specs/P6-ARCH.md) | 加速器：⌘K 命令面板 / 动态快捷键 / 撤销 toast / 首次引导 |
 | [`P7-ARCH.md`](specs/P7-ARCH.md) | 全局备份与恢复（envelope 契约） |
 | [`P8-ARCH.md`](specs/P8-ARCH.md) | 会话工作台（树 / 关联图 / 状态筛选） |
-| [`P9-ARCH.md`](specs/P9-ARCH.md) | 桌面悬浮窗（独立窗口 + 托盘 + 只读订阅） |
-| [`P9-KEYBOARD-CHECKLIST.md`](specs/P9-KEYBOARD-CHECKLIST.md) | 悬浮窗键盘可达性手测清单（独立窗口不能复用主窗口） |
+| [`P9-ARCH.md`](specs/P9-ARCH.md) | 桌面悬浮窗（独立窗口 + 托盘 + 只读订阅）—— **已下线 2026-11-24，仅存档** |
+| [`P9-KEYBOARD-CHECKLIST.md`](specs/P9-KEYBOARD-CHECKLIST.md) | 悬浮窗键盘可达性手测清单 —— **已下线 2026-11-24，仅存档** |
 | [`P10-ARCH.md`](specs/P10-ARCH.md) | 网关接入与模型自动识别（三级来源 / 三陷阱） |
 | [`P11-ARCH.md`](specs/P11-ARCH.md) | 模型禁用与接入说明；错误信封按类别分流 |
 | [`P12-ARCH.md`](specs/P12-ARCH.md) | 请求代理与无缝切号（改走本地路由） |
 | [`P12-SPIKE-RESULTS.md`](specs/P12-SPIKE-RESULTS.md) | P12 技术可行性结论（A/C 两路出局的过程记录） |
 | [`P13-REFERENCE-PARITY.md`](specs/P13-REFERENCE-PARITY.md) | 参考实现对齐：把可纳入的能力排进期次 |
 | [`P14-TASKS.md`](specs/P14-TASKS.md) | 会话跨客户端 + 关联表升级（取证版任务拆分） |
-| [`P15-SPIKE-RESULTS.md`](specs/P15-SPIKE-RESULTS.md) | 外部 Agent 会话监听 spike 结论（S1–S4 已落地） |
+| [`P15-SPIKE-RESULTS.md`](specs/P15-SPIKE-RESULTS.md) | 外部 Agent 会话监听 spike 结论 —— **已下线 2026-11-24，仅存档** |
 | [`GROWTH-TASKS.md`](specs/GROWTH-TASKS.md) | 成长任务中心：客户端指纹矩阵 / 逐任务判据 / 点亮→回读→领奖流程 |
 
 ### 产品线与平台

@@ -107,7 +107,8 @@ Trae 设备身份自举：自建 EC P-256 密钥对 → 找到并走通上游设
 - **2026-10-20** 前端落地（WB / Trae / Qoder 三平台的授权弹窗、空态、细条、网关条、抽屉不再置灰）。
   新增依赖 `qrcode@1.5.4` + `@types/qrcode`（纯 JS，无原生模块，仅用于把授权链接渲成二维码）。
   验收：`tsc --noEmit` 对本次改动文件零报错；`vite build` 通过；`check:api` / `check:docker` /
-  `check:store-selectors` / `check:npm-platforms` / `check:agent-sources` / `check:pages-base` 全绿；
+  `check:store-selectors` / `check:npm-platforms` / `check:pages-base` 全绿（`check:agent-sources`
+  已于 2026-11-24 随 P15 下线删除）；
   原型门禁 `verify-clientless.cjs` 18/18 + 3 变异。
   未做：`npm run build` 整体无法通过 —— 工作区里另一位并发作者的 `cache-section.tsx` 引用了
   `api.cacheScan` / `api.cacheClear` 而 `api.ts` 尚未落地，与本改动无关。

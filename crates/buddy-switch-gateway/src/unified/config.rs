@@ -27,7 +27,8 @@ use buddy_switch_core::modules::config as core_config;
 use buddy_switch_core::modules::gateway_namespace::{self, NamespaceSpec};
 
 /// 默认监听端口。`5789x` 一段的分配：57890 界面本体 · 57891 WB 网关 · **57892 本入口** ·
-/// 57893 hook · 57894 Trae 网关 · 57895 Qoder 网关；另有 8899 Trae 登录代理。
+/// 57894 Trae 网关 · 57895 Qoder 网关；另有 8899 Trae 登录代理。
+/// （57893 原会话监听 hook，已随该能力下线释放。）
 pub const DEFAULT_UNIFIED_PORT: u16 = 57892;
 /// 请求体上限默认值（MB）—— 与 [`crate::state::GatewayConfig`] 同值。
 pub const DEFAULT_MAX_BODY_MB: usize = 8;

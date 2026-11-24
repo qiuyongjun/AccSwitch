@@ -55,7 +55,8 @@ use crate::{body_limit_bytes, GatewayProduct};
 /// Qoder 网关默认端口。
 ///
 /// ★ 2026-10-17 由 `7865` 改为 `57895`：四条网关统一落在 `5789x` 一段
-/// （界面 57890 · WB 57891 · 统一 57892 · hook 57893 · Trae 57894 · **Qoder 57895**）。
+/// （界面 57890 · WB 57891 · 统一 57892 · Trae 57894 · **Qoder 57895**；
+/// 57893 原会话监听 hook，已随该能力下线释放）。
 /// 只改默认值：已落盘的 `qoder/gateway_config.json` 里写着 `port` 的保持原端口。
 pub const QODER_DEFAULT_API_PORT: u16 = 57895;
 
@@ -718,9 +719,9 @@ mod tests {
             57890u16,                                                // 界面本体
             57891,                                                   // WorkBuddy 网关
             57892,                                                   // 统一网关
-            57893,                                                   // 客户端会话监听 hook
+            57893, // 原会话监听 hook（已下线；端口保留避让）
             buddy_switch_core::modules::trae::TRAE_DEFAULT_API_PORT, // Trae 网关
-            8899,                                                    // Trae 登录代理
+            8899,  // Trae 登录代理
         ] {
             assert_ne!(config.port, taken, "不得与既有端口 {taken} 撞车");
         }

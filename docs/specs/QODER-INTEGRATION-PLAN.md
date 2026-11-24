@@ -199,7 +199,7 @@ Qoder 的 cn/global 会与 WB/Trae **共用同一把键**。方案：把键从 `
 | **L2** gateway 产品线 | ⛔ **未接入**（刻意） | 统一网关的 `RelayTarget::Qoder` 给**可诊断 501**（`namespace_product_line_not_wired`）——不静默借用 WB 的池；模型清单给 `source: "unavailable"` + note。**不 merge router**（独立端口）待做 |
 | **L3** 两处宿主 | ◐ **账号命令完成** | 6 条命令 × 四处同步（ROUTES / `call()` / `generate_handler!` / `.route` + 命令本体），`check:api` 实测 `参数化=16` 全绿；两宿主未接入的旧端点对 Qoder 作用域**拒绝且可诊断**（`qoder_scope_not_applicable`）；`spawn_background_task` 穷尽分支已补（当前不可达） |
 | **L4** 前端 | ◐ **4 个目的地真实 + 2 个诚实空态** | **账号页 = 原型工作台同构**（2026-10-15 二轮，用户要求「严格按 `buddy-switch-prototype.html` 1:1」）：复用 `AccountWorkbench` / `AccountToolbar`（搜索·排序·分组·视图·全选·`+ 添加账号`）/ `AccountDetailDrawer`（**备注在抽屉里编辑**，卡上不再堆按钮）/ `AddAccountDrawer`（`ways` 收窄到已落地子集：从本机导入 + 粘贴 PAT；OAuth / 备份不摆空卡）；**批量条只出删除**（缺的动作不渲染）；**硬删除必确认**（弹层明说「没有回收站」）；卡片四块同形（头像 / 状态槽「凭据可用」/ 来源徽章 / 凭据摘要 + 掩码）、表卡双视图、`/` 聚焦搜索、`?q=` 一次性种子。**真实**（其余）：概览（账号数 + 客户端四态 + 域名 + `—` 表未知）、设置（子导航收窄到有内容的分区）、平台图标（`QoderMark` 字标 + `Record<Product,…>` 查找表）。**诚实空态**：用量 / 网关。**待做**：网关三卡（keys/pool/logs）、程序位胶囊（等切换能力落地） |
-| **L5** 门禁同步 | ✅ 完成 | `check:api` / `check:scope` / `check:docker` / `check:store-selectors` / `check:npm-platforms` / `check:agent-sources` 全跑过；`check:scope` 的「4 作用域」→ 6、「每 dest 2 次」→ 3、「恰 10 条参数化」→ 16、备份 4×3 → 6×3 已同步 |
+| **L5** 门禁同步 | ✅ 完成 | `check:api` / `check:scope` / `check:docker` / `check:store-selectors` / `check:npm-platforms` 全跑过（`check:agent-sources` 已于 2026-11-24 随 P15 下线删除）；`check:scope` 的「4 作用域」→ 6、「每 dest 2 次」→ 3、「恰 10 条参数化」→ 16、备份 4×3 → 6×3 已同步 |
 | 附加 | ✅ | 作用域快捷键上限 **5 → 9**（PLAN §3.1 v2.8 修订）——否则 6 个作用域会把既有用户的 `⌘1..⌘4` 一起关掉 |
 
 > ★ 2026-10-28（用户要求，三平台同批）：**卡片 / 列表身份行不再显示 UID，改显示备注**

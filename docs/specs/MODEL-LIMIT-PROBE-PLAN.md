@@ -491,7 +491,7 @@ Trae 现在没有模型级冷却。三选一：
 | 隔离 | 探测账号 A 不影响账号 B 的池状态；探测**不产生**任何冷却（未开回填时） | 探测路径误调 `apply_*` ⇒ 红 |
 | e2e | mock 上游构造 200 / 429(6004) / 429(无标记) / 402 / 11102；断言矩阵单元格 | Qoder 已有 `state.upstream_override` 挂载点（`qoder/routes.rs:364`）；**WB/Trae 需确认是否有等价挂载点（未核实）** |
 | 接线 | 两宿主注册点存在性 | 照搬 `catalog_probe::both_hosts_wire_the_catalog_probe` 写法 |
-| 门禁 | `tsc` · `check:api` · `check:scope` · `check:store-selectors` · `check:agent-sources`（若动来源表） | — |
+| 门禁 | `tsc` · `check:api` · `check:scope` · `check:store-selectors` | — |
 
 ---
 
