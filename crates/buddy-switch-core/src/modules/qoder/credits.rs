@@ -235,12 +235,26 @@ where
                     "remaining": quota.remaining,
                     "used": quota.used,
                     "total": quota.total,
+                    /* 套餐与资源包**分开下发**：两者的到期口径不同（套餐在账期结束时刷新，
+                       资源包逐包独立到期）。前端据此分两组展示，不把顶层 `expiresAt`
+                       套在包含资源包的聚合余额上。上游缺失某个键 ⇒ null（不编 0/0 桶）。 */
+                    "planQuota": quota.plan.map(|bucket| json!({
+                        "remaining": bucket.remaining,
+                        "used": bucket.used,
+                        "total": bucket.total,
+                    })),
+                    "addOnQuota": quota.add_on.map(|bucket| json!({
+                        "remaining": bucket.remaining,
+                        "used": bucket.used,
+                        "total": bucket.total,
+                    })),
                     "isExceeded": quota.is_exceeded,
-                    /* 当前套餐/额度的到期时刻（Unix **毫秒**；缺值 ⇒ null，前端据此不渲染到期）。
-                       聚合后的 remaining 与这一个时刻一起到期（userQuota / addOnQuota 无各自到期时间）。
-                       `expiresForever`：上游哨兵「9999-12-31」= **不过期**（`expiresAt` 此时为 null）
-                       ⇒ 前端写「长期有效」，不把哨兵渲染成日期（2026-10-29 用户报障）。 */
+                    /* 套餐的**刷新**时刻（Unix **毫秒**；缺值 ⇒ null，前端据此不渲染刷新日）。
+                       ⚠️ 它只描述 `planQuota`：资源包（`addOnQuota`）在聚合接口里没有到期时间，
+                       逐包到期只在网页会话通道；不要把它套在聚合余额上。 */
                     "expiresAt": quota.expires_at,
+                    /* 上游哨兵「9999-12-31」= **不过期**（此时 `expiresAt` 为 null）
+                       ⇒ 前端写「长期有效」，不把哨兵渲染成日期（2026-10-29 用户报障）。 */
                     "expiresForever": quota.expires_forever,
                     "plan": plan,
                     "raw": quota.raw,
@@ -289,6 +303,12 @@ mod tests {
             remaining,
             used: 0,
             total: remaining,
+            plan: Some(api::QuotaBucket {
+                remaining,
+                used: 0,
+                total: remaining,
+            }),
+            add_on: None,
             is_exceeded: false,
             expires_at: None,
             expires_forever: false,
@@ -324,6 +344,52 @@ mod tests {
         assert_eq!(accounts[3]["plan"], "plan-3");
         assert_eq!(view["summary"]["okAccounts"], 6);
         assert_eq!(view["summary"]["remaining"], 0 + 1 + 2 + 3 + 4 + 5);
+    }
+
+    /// 套餐与资源包必须**分开**出现在行结果里：前端要分别渲染（套餐在账期结束时刷新，
+    /// 资源包逐包独立到期），不能把套餐的 `expiresAt` 套在含资源包的聚合余额上。
+    #[tokio::test]
+    async fn rows_expose_plan_and_add_on_buckets_separately() {
+        let targets = vec![target("u0", Some("t"))];
+        let view = region_view_for_targets(
+            QoderRegion::Cn,
+            targets,
+            test_gate(),
+            |_uid, _| async move {
+                Ok((
+                    api::QuotaView {
+                        remaining: 2_337,
+                        used: 963,
+                        total: 3_300,
+                        plan: Some(api::QuotaBucket {
+                            remaining: 137,
+                            used: 163,
+                            total: 300,
+                        }),
+                        add_on: Some(api::QuotaBucket {
+                            remaining: 2_200,
+                            used: 800,
+                            total: 3_000,
+                        }),
+                        is_exceeded: false,
+                        expires_at: Some(1_790_000_000_000),
+                        expires_forever: false,
+                        raw: json!({}),
+                    },
+                    None,
+                ))
+            },
+        )
+        .await;
+
+        let row = &view["accounts"][0];
+        assert_eq!(row["planQuota"]["remaining"], 137);
+        assert_eq!(row["planQuota"]["total"], 300);
+        assert_eq!(row["addOnQuota"]["remaining"], 2_200);
+        assert_eq!(row["addOnQuota"]["total"], 3_000);
+        // 聚合值保持不变（统计页 / 表格主列仍可用），但到期时刻只属于套餐桶。
+        assert_eq!(row["remaining"], 2_337);
+        assert_eq!(row["expiresAt"], 1_790_000_000_000i64);
     }
 
     /// 10 个账号、每个 20ms：确认确实并发，且活跃流水线不超过 4。

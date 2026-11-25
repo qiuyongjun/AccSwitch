@@ -1752,10 +1752,27 @@ function demoQoderAccounts(scope: string): unknown {
 function demoQoderCredits(scope: string, accountIds?: string[]): unknown {
   const global = scope.endsWith("global");
   const all = global
-    ? [{ uid: "qg1", name: t("shared.demo.qoder.name.intl"), remaining: 320, total: 500 }]
+    ? [
+        {
+          uid: "qg1",
+          name: t("shared.demo.qoder.name.intl"),
+          plan: { remaining: 320, total: 500 },
+          packs: null as { remaining: number; total: number } | null,
+        },
+      ]
     : [
-        { uid: "q1", name: t("shared.demo.qoder.name.jackey"), remaining: 558, total: 700 },
-        { uid: "q2", name: t("shared.demo.qoder.name.team"), remaining: 80, total: 100 },
+        {
+          uid: "q1",
+          name: t("shared.demo.qoder.name.jackey"),
+          plan: { remaining: 258, total: 300 },
+          packs: { remaining: 490, total: 600 },
+        },
+        {
+          uid: "q2",
+          name: t("shared.demo.qoder.name.team"),
+          plan: { remaining: 80, total: 100 },
+          packs: null,
+        },
       ];
   /* 与真机同语义：`undefined` = 全部；显式集合 = 只回这些账号（空集合 ⇒ 空结果）。 */
   const rows = accountIds === undefined ? all : all.filter((row) => accountIds.includes(row.uid));
@@ -1764,17 +1781,40 @@ function demoQoderCredits(scope: string, accountIds?: string[]): unknown {
     summary: {
       okAccounts: rows.length,
       failedAccounts: 0,
-      remaining: rows.reduce((sum, row) => sum + row.remaining, 0),
-      total: rows.reduce((sum, row) => sum + row.total, 0),
+      remaining: rows.reduce(
+        (sum, row) => sum + row.plan.remaining + (row.packs?.remaining ?? 0),
+        0,
+      ),
+      total: rows.reduce((sum, row) => sum + row.plan.total + (row.packs?.total ?? 0), 0),
     },
-    accounts: rows.map((row, index) => ({
-      ...row,
-      ok: true,
-      used: row.total - row.remaining,
-      isExceeded: false,
-      expiresAt: futureAt(index === 0 ? 2 : 12),
-      plan: "Pro",
-    })),
+    accounts: rows.map((row, index) => {
+      const remaining = row.plan.remaining + (row.packs?.remaining ?? 0);
+      const total = row.plan.total + (row.packs?.total ?? 0);
+      return {
+        uid: row.uid,
+        name: row.name,
+        ok: true,
+        remaining,
+        used: total - remaining,
+        total,
+        isExceeded: false,
+        /* 顶层 `expiresAt` 是**套餐刷新**时刻；资源包逐包到期在网页会话通道里。 */
+        expiresAt: futureAt(index === 0 ? 2 : 12),
+        planQuota: {
+          remaining: row.plan.remaining,
+          used: row.plan.total - row.plan.remaining,
+          total: row.plan.total,
+        },
+        addOnQuota: row.packs
+          ? {
+              remaining: row.packs.remaining,
+              used: row.packs.total - row.packs.remaining,
+              total: row.packs.total,
+            }
+          : null,
+        plan: "Pro",
+      };
+    }),
   };
 }
 

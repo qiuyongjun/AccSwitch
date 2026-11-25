@@ -1413,15 +1413,33 @@ pub fn parse_checkin_status(payload: &Value, today: &str) -> CheckinStatus {
     }
 }
 
-/// 额度视图（userQuota + addOnQuota 的聚合）。
+/// 一个额度桶（`userQuota` / `addOnQuota`）的三标量。
+///
+/// 与聚合值分开暴露：两者的**到期口径不同** —— 套餐额度在账期结束时刷新，
+/// 资源包逐包独立到期（官方规则：每笔 30 天）。卡片必须分开渲染，不能把套餐的
+/// `expiresAt` 套在包含资源包的聚合余额上（2026-11-25 用户报障）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaBucket {
+    pub remaining: i64,
+    pub used: i64,
+    pub total: i64,
+}
+
+/// 额度视图（userQuota + addOnQuota 的聚合，并保留两个桶）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaView {
     pub remaining: i64,
     pub used: i64,
     pub total: i64,
+    /// 套餐内额度（`userQuota`）。上游没给这个键 ⇒ `None`（不编一个 0/0 桶）。
+    pub plan: Option<QuotaBucket>,
+    /// 加购资源包汇总（`addOnQuota`）。上游没给这个键 ⇒ `None`。
+    pub add_on: Option<QuotaBucket>,
     pub is_exceeded: bool,
-    /// 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）。
-    /// 缺失或不可信 ⇒ `None` —— 不编到期日。
+    /// **套餐桶**的刷新时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）。
+    ///
+    /// ⚠️ 只描述 `plan`：资源包（`add_on`）在聚合接口里没有到期时间，逐包到期只在
+    /// 网页会话通道。缺失或不可信 ⇒ `None` —— 不编刷新日。
     pub expires_at: Option<i64>,
     /// 上游用「9999-12-31」（哨兵时刻）表示**不过期**。
     ///
@@ -1461,9 +1479,19 @@ pub fn parse_quota(payload: &Value) -> Result<QuotaView, String> {
             .and_then(as_num)
             .unwrap_or(0)
     };
-    let remaining = num(user_quota, "remaining") + num(add_on_quota, "remaining");
-    let used = num(user_quota, "used") + num(add_on_quota, "used");
-    let total = num(user_quota, "total") + num(add_on_quota, "total");
+    let bucket = |source: Option<&Map<String, Value>>| {
+        source.map(|object| QuotaBucket {
+            remaining: num(Some(object), "remaining"),
+            used: num(Some(object), "used"),
+            total: num(Some(object), "total"),
+        })
+    };
+    let plan = bucket(user_quota);
+    let add_on = bucket(add_on_quota);
+    let remaining =
+        plan.map_or(0, |bucket| bucket.remaining) + add_on.map_or(0, |bucket| bucket.remaining);
+    let used = plan.map_or(0, |bucket| bucket.used) + add_on.map_or(0, |bucket| bucket.used);
+    let total = plan.map_or(0, |bucket| bucket.total) + add_on.map_or(0, |bucket| bucket.total);
     let is_exceeded = payload
         .get("isQuotaExceeded")
         .and_then(Value::as_bool)
@@ -1471,9 +1499,9 @@ pub fn parse_quota(payload: &Value) -> Result<QuotaView, String> {
     if is_exceeded && remaining == 0 && total == 0 {
         return Err("额度响应为退化形态（exceeded 且全 0）—— 拒绝写入".to_string());
     }
-    /* 到期时刻是**顶层**字段（Qoder SDK References：`expiresAt` = 当前套餐/额度到期时间，
-    Unix **毫秒**时间戳）；`userQuota` / `addOnQuota` 自身没有到期时间 ⇒ 聚合后的
-    `remaining` 与这同一个时刻到期。
+    /* 顶层 `expiresAt` 是**套餐桶**的刷新时刻（Qoder SDK References：`expiresAt` = 当前
+    套餐/额度到期时间，Unix **毫秒**）。⚠️ 它**不**覆盖 `addOnQuota`：资源包逐包独立到期，
+    聚合接口不给它的到期时间，逐包到期只在网页会话通道（2026-11-25 用户报障）。
     ⚠️ 只收**像毫秒**的值：小于 1e12 的不可能是当代毫秒时刻（若是秒，按毫秒渲染会变成
     1970）。宁可把到期写成「未知」，也不谎报。
     ⚠️ 「9999-12-31」是**不过期**哨兵（[`FOREVER_EXPIRY_MS`]）：不能把它当真实日期，
@@ -1488,6 +1516,8 @@ pub fn parse_quota(payload: &Value) -> Result<QuotaView, String> {
         remaining,
         used,
         total,
+        plan,
+        add_on,
         is_exceeded,
         expires_at,
         expires_forever,
@@ -2435,8 +2465,33 @@ mod tests {
         assert_eq!(view.remaining, 750);
         assert_eq!(view.used, 310);
         assert_eq!(view.total, 1060);
+        // 两个桶分开保留：套餐与资源包的到期口径不同，展示层不能只看聚合值。
+        assert_eq!(
+            view.plan,
+            Some(QuotaBucket {
+                remaining: 700,
+                used: 300,
+                total: 1000,
+            })
+        );
+        assert_eq!(
+            view.add_on,
+            Some(QuotaBucket {
+                remaining: 50,
+                used: 10,
+                total: 60,
+            })
+        );
         // 没给 expiresAt ⇒ 到期未知（不编）。
         assert_eq!(view.expires_at, None);
+
+        // 只有 userQuota ⇒ `addOnQuota` 是「上游没给」，不是编出来的 0/0 桶。
+        let plan_only = parse_quota(&serde_json::json!({
+            "userQuota": {"remaining": 700, "used": 300, "total": 1000},
+        }))
+        .unwrap();
+        assert!(plan_only.plan.is_some());
+        assert_eq!(plan_only.add_on, None);
 
         // 两键都缺失 ⇒ 拒绝（不写 0）。
         assert!(parse_quota(&serde_json::json!({"something": 1})).is_err());
@@ -2528,6 +2583,8 @@ mod tests {
         assert_eq!(view.remaining, 99, "浮点余额必须读出来，不能被当成 0");
         assert_eq!(view.total, 100);
         assert_eq!(view.used, 1);
+        assert_eq!(view.add_on.map(|bucket| bucket.remaining), Some(99));
+        assert_eq!(view.plan.map(|bucket| bucket.remaining), Some(0));
 
         // 字符串形态也认（有些上游会把数字序列化成字符串）。
         let as_text = parse_quota(&serde_json::json!({

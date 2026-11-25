@@ -3649,6 +3649,13 @@ export function qoderCheckinClaim(scope: Scope, uid: string): Promise<QoderCheck
   return call<QoderCheckinClaimResult>("qoder_checkin_claim", { scope, uid });
 }
 
+/** 一个额度桶（套餐 / 资源包）的三标量。 */
+export interface QoderQuotaBucket {
+  remaining: number;
+  used: number;
+  total: number;
+}
+
 /** 一条账号的额度行（`ok=false` 时带 `error`；部分失败不被伪装成全额）。 */
 export interface QoderCreditsRow {
   uid: string;
@@ -3659,13 +3666,20 @@ export interface QoderCreditsRow {
   used?: number;
   total?: number;
   isExceeded?: boolean;
-  /** 当前套餐/额度的到期时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）；缺值 ⇒ null。 */
+  /**
+   * 当前**套餐/额度**的刷新时刻（Unix **毫秒**，Qoder SDK 的 `expiresAt` 口径）；
+   * 缺值 ⇒ null。⚠️ 它只描述套餐桶：资源包逐包独立到期，不能拿它套在聚合余额上。
+   */
   expiresAt?: number | null;
   /**
    * 上游哨兵「9999-12-31」= **不过期**（此时 `expiresAt` 为 null）。
    * 界面写「长期有效」，不把哨兵渲染成日期。
    */
   expiresForever?: boolean;
+  /** 套餐内额度（上游 `userQuota`）；上游没给这个键 ⇒ 缺省 / null。 */
+  planQuota?: QoderQuotaBucket | null;
+  /** 加购资源包汇总（上游 `addOnQuota`）；没有加购额度 ⇒ 缺省 / null。 */
+  addOnQuota?: QoderQuotaBucket | null;
   plan?: string | null;
   raw?: unknown;
 }

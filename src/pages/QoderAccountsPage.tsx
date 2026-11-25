@@ -124,6 +124,8 @@ import {
   packSourceLabel,
   packState,
   packUnavailableCopy,
+  qoderPackExpiry,
+  qoderPriorityExpiry,
   visibleQoderPacks,
 } from "@/lib/qoder-packs";
 import {
@@ -141,7 +143,6 @@ import {
   ProgramSlotChip,
   creditMetricTip,
   drawerTabOpenAria,
-  expiryTooltipLines,
   formatCredits,
   nextExpiryLabel,
 } from "@/components/account-card";
@@ -151,7 +152,7 @@ import {
   writeQoderCreditCacheEntries,
   type CachedQoderCredit,
 } from "@/lib/credit-cache";
-import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
+import { isExpiryUrgent } from "@/lib/credit-expiry";
 import { REFRESH_DONE_LABEL, useAccountRefreshBusy, type AccountRefreshKind } from "@/lib/account-refresh";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { useT } from "@/lib/i18n";
@@ -337,7 +338,7 @@ function QoderAccountsPanel({
    * 绝不显示空区块 —— 那是「不知道」伪装成「没有」。
    */
   const [webPacks, setWebPacks] = useState<Record<string, api.QoderWebCreditPacks>>({});
-  /** 正在取逐包的账号（浮层里显示「读取中」而不是「未登录」）。 */
+  /** 正在取逐包的账号（抽屉里显示「读取中」而不是「未登录」）。 */
   const [packsLoading, setPacksLoading] = useState<Record<string, boolean>>({});
   /** 每账号上次取数时刻（TTL 用 ref：改它不该触发重渲染）。 */
   const packsFetchedAt = useRef<Record<string, number>>({});
@@ -657,15 +658,16 @@ function QoderAccountsPanel({
         numeric: true,
         sensitivity: "base",
       });
-    /* 积分优先级：**额度到期最近的先用**，同到期按剩余积分降序；无额度 / 已过期沉底。
-       与 WB / Trae 同义（「该先用谁」），不是「余额最多的排前面」。 */
+    /* 积分优先级：**套餐刷新与资源包到期中更近者**先用，同到期按剩余积分降序；
+       无额度 / 已过期沉底。逐包到期只有网页会话通道才有 —— 未读取时只用套餐刷新
+       时刻（不冒充资源包到期）；读到后按更近者重排（`qoderPriorityExpiry`）。
+       ⚠️ 这里的 `webPacks` 是**读到的真实数据**，不是展示层派生值。 */
     const creditComparator: AccountComparator<QoderAccountView> = (left, right) => {
       const now = Date.now();
       const expiryOf = (account: QoderAccountView): number | null => {
         const row = credits[account.uid];
-        if (!row?.ok || row.expiresAt == null || row.expiresAt <= now) return null;
-        if ((row.remaining ?? 0) <= 0) return null;
-        return row.expiresAt;
+        if (!row?.ok) return null;
+        return qoderPriorityExpiry(row, webPacks[account.uid], now);
       };
       const leftExpiry = expiryOf(left);
       const rightExpiry = expiryOf(right);
@@ -748,7 +750,7 @@ function QoderAccountsPanel({
       availableSorts: ["priority", "name", "expiry"],
       availableGroups: ["none", "program", "status", "group"],
     };
-  }, [t, credits, programs]);
+  }, [t, credits, programs, webPacks]);
 
   const sortOptions = useMemo(
     () =>
@@ -786,7 +788,7 @@ function QoderAccountsPanel({
     const now = Date.now();
     return sortAccounts(rows, "priority", listConfig).find((account) => {
       const row = credits[account.uid];
-      return row?.ok && row.expiresAt != null && row.expiresAt > now && (row.remaining ?? 0) > 0;
+      return row?.ok === true && qoderPriorityExpiry(row, webPacks[account.uid], now) != null;
     })?.uid;
   })();
 
@@ -1952,12 +1954,13 @@ function QoderAccountsPanel({
   /**
    * **展示用**额度行：聚合额度优先；缺失 / 失败时用逐包合计兜底。
    *
-   * 为什么需要：卡片「资源包」浮层取的是逐包（网页会话），而卡片主积分行、表格积分列
-   * 与抽屉指标读的是聚合额度（openapi）。两条通道互相独立 —— 用户只读了逐包时，
-   * 上面三个展示位会停在「—」，看起来像「详情页没有带过去、还要再取一次」。
+   * 为什么需要：逐包走网页会话（详情抽屉的「积分」页签），而卡片主积分行、表格积分列
+   * 与抽屉指标读的是聚合额度（openapi）。两条通道互相独立 —— 逐包先到时用逐包合计
+   * 兜底，避免这几个展示位停在「—」。
    *
-   * ⚠️ **只用于展示**：排序 / 「优先」标记仍读实时 `credits`（与 WorkBuddy 的
-   * `displayCreditMap` 同一纪律）—— 派生值不参与列表重排。
+   * ⚠️ **只用于展示**：排序 / 「优先」读实时 `credits` 与**已加载逐包**（`webPacks`），
+   * 不读这里的派生兜底（与 WorkBuddy 的 `displayCreditMap` 同一纪律）。
+   * 逐包到期不写回套餐字段。
    */
   const creditForDisplay = useCallback(
     (uid: string): QoderCreditsRow | undefined => {
@@ -1968,21 +1971,26 @@ function QoderAccountsPanel({
       /* 与列表同一口径：用完的包不参与合计（否则总量里会混着 0/0 的占位包）。 */
       const active = visibleQoderPacks(web.packs);
       if (active.length === 0) return row;
-      const now = Date.now();
-      const futureExpiries = active
-        .map((pack) => pack.expiresAtMs)
-        .filter((ms): ms is number => typeof ms === "number" && ms > now);
+      const remaining = active.reduce((sum, pack) => sum + pack.remaining, 0);
+      const used = active.reduce((sum, pack) => sum + pack.used, 0);
+      const total = active.reduce((sum, pack) => sum + pack.limit, 0);
       return {
         uid,
         name: row?.name ?? "",
         ok: true,
-        remaining: active.reduce((sum, pack) => sum + pack.remaining, 0),
-        used: active.reduce((sum, pack) => sum + pack.used, 0),
-        total: active.reduce((sum, pack) => sum + pack.limit, 0),
-        // 逐包有自己的到期时刻；聚合到期未知时取**最近的未来一批**，没有就留空。
-        expiresAt: futureExpiries.length > 0 ? Math.min(...futureExpiries) : null,
-        expiresForever: row?.expiresForever === true,
+        remaining,
+        used,
+        total,
+        /**
+         * ⚠️ 逐包合计**不等于**套餐桶：`expiresAt` 是套餐刷新时刻，这里拿不到的话
+         * 必须留空。逐包到期由接口返回的 `packs` 自行计算（`qoderPackExpiry`），
+         * 不能塞回套餐字段 —— 否则又会把资源包到期说成套餐刷新日。
+         */
+        expiresAt: null,
+        expiresForever: false,
         plan: row?.plan ?? null,
+        planQuota: null,
+        addOnQuota: { remaining, used, total },
       };
     },
     [credits, webPacks],
@@ -1992,7 +2000,7 @@ function QoderAccountsPanel({
    * 首屏展示行：实时值优先，缺席 / 失败时回落**上次成功读数**。
    *
    * 与 `creditForDisplay` 分开：后者只做「聚合 / 逐包」兜底，本函数额外允许
-   * 跨重启缓存。排序 / 「优先」标记仍只读 `credits`，缓存不参与任何业务判定。
+   * 跨重启缓存。排序 / 「优先」读 `credits` + 已加载逐包，**缓存不参与任何业务判定**。
    */
   const displayCreditFor = useCallback(
     (account: QoderAccountView): QoderCreditsRow | undefined => {
@@ -2007,8 +2015,9 @@ function QoderAccountsPanel({
   /**
    * 取某账号的逐包明细（带 TTL；`force` 绕过 TTL）。
    *
-   * ★ 并发去重：浮层与抽屉可能同时触发同一个账号 —— 用 `packsLoading` 挡第二次，
-   * 否则会并发打两次上游（逐包接口要带会话 Cookie，重复调用没有意义）。
+   * ★ 并发去重：抽屉 / 菜单读取 / 登录窗认领可能同时触发同一个账号 ——
+   * 用 `packsLoading` 挡第二次，否则会并发打两次上游（逐包接口要带会话 Cookie，
+   * 重复调用没有意义）。
    */
   async function loadPacks(uid: string, force = false) {
     if (!uid) return;
@@ -2026,7 +2035,7 @@ function QoderAccountsPanel({
         void loadCreditOne(uid);
       }
     } catch {
-      /* 静默：详情拿不到不是错误，浮层会按 `packs` 为空给出引导。 */
+      /* 静默：详情拿不到不是错误，抽屉会按结构化原因给出引导。 */
     } finally {
       setPacksLoading((prev) => {
         const next = { ...prev };
@@ -2060,7 +2069,7 @@ function QoderAccountsPanel({
       );
       return true;
     } catch {
-      /* 上游拒绝 / 网络失败：让浮层与抽屉按结构化原因给下一步，这里不重复报错。 */
+      /* 上游拒绝 / 网络失败：让抽屉按结构化原因给出下一步，这里不重复报错。 */
       await loadPacks(uid, true);
       return false;
     } finally {
@@ -2449,18 +2458,28 @@ function QoderAccountsPanel({
     const credBad = expired || !detailLive.hasCredential;
     /* ★ 2026-10-27（用户报障「详情页积分卡没像 WB 显示剩余/总数与到期」）：
        与 WB / Trae **同一口径** —— 副行报最急一批的「金额 + 到期」，3 天内警示。
-       `expiresAt` 是顶层额度到期（Unix 毫秒，Qoder SDK 口径）：`userQuota` 与
-       `addOnQuota` 共用这一个时刻 ⇒「到期积分数」就是聚合后的剩余；缺值或已过期 ⇒
-       `summarizeExpiry` 返回 null ⇒ 写「无临期积分」，**不编**到期日。
-       套餐名不再占副行 —— 它是静态属性，积分页签的包名已经写着（WB 的副行也只有到期）。 */
+       ★ 2026-11-25（用户报障）：套餐的顶层 `expiresAt` 是**账期刷新**时刻，不是资源包
+       到期。副行因此分两段：`套餐 MM-DD HH:mm 刷新` + 已读取逐包的最早到期；
+       没读到逐包就不写资源包日期，绝不拿套餐刷新日冒充。 */
     const now = Date.now();
-    const expiry = row?.ok
-      ? summarizeExpiry(
-          row.expiresAt != null ? [{ remaining: row.remaining ?? 0, expireAt: row.expiresAt }] : [],
-          { now },
-        )
-      : null;
-    const nextBatch = expiry?.batches[0] ?? null;
+    /* 刷新日只属于套餐桶：明确没有套餐桶（只有资源包）时不写；旧数据两桶都缺 ⇒ 退回聚合。 */
+    const hasPlan =
+      row?.ok === true && (row.planQuota != null || row.addOnQuota == null);
+    const forever = hasPlan && row?.expiresForever === true;
+    const planRefreshAt =
+      hasPlan && !forever && typeof row?.expiresAt === "number" && row.expiresAt > now
+        ? row.expiresAt
+        : null;
+    const packExpiry = row?.ok ? qoderPackExpiry(webPacks[detailLive.uid], now) : null;
+    const packNext = packExpiry?.batches[0] ?? null;
+    const subParts: string[] = [];
+    if (forever) subParts.push(t("qoder.page.accounts.metric.neverExpires"));
+    else if (planRefreshAt != null) {
+      subParts.push(
+        t("qoder.page.accounts.metric.refreshesOn", { date: formatDate(planRefreshAt) }),
+      );
+    }
+    if (packNext) subParts.push(nextExpiryLabel(packExpiry, t, now));
     return [
       {
         key: "credits",
@@ -2469,20 +2488,11 @@ function QoderAccountsPanel({
           row && row.ok
             ? `${formatCredits(row.remaining ?? 0)}/${formatCredits(row.total ?? 0)}`
             : "—",
-        /* 额度没取到、或取到了但上游没给到期 ⇒ 不写「无临期积分」
-           （那是「确实没有」，不是「不知道」）—— 宁可少一行，不编一个结论。
-           ★ 2026-10-29：「9999-12-31」哨兵已在 core 识别为 `expiresForever`
-           ⇒ 写「长期有效」，不是「到期未知」也不是一个假日期。 */
-        subText: row?.ok
-          ? row.expiresForever
-            ? t("qoder.page.accounts.metric.neverExpires")
-            : nextBatch
-              ? nextExpiryLabel(expiry, t, now)
-              : row.expiresAt != null
-                ? t("shared.stat.noExpiring")
-                : undefined
-          : undefined,
-        tone: nextBatch && isExpiryUrgent(nextBatch.expireAt, now) ? "warn" : undefined,
+        /* 额度没取到 ⇒ 不写结论（宁可少一行，不编一个到期日）。
+           「9999-12-31」哨兵已在 core 识别为 `expiresForever` ⇒ 写「长期有效」。 */
+        subText: row?.ok && subParts.length > 0 ? subParts.join(" · ") : undefined,
+        tone:
+          packNext && isExpiryUrgent(packNext.expireAt, now) ? "warn" : undefined,
         refreshKind: "credits",
       },
       {
@@ -2521,7 +2531,7 @@ function QoderAccountsPanel({
         refreshKind: "credential",
       },
     ];
-  }, [detailLive, creditForDisplay, detailCheckinText, checkinEntryOf, t]);
+  }, [detailLive, creditForDisplay, detailCheckinText, checkinEntryOf, webPacks, t]);
 
   /**
    * ★ 2026-10-26（用户报障「凭证页不显示内容」）：抽屉的**凭据页签**只渲染调用方注入的
@@ -2579,21 +2589,53 @@ function QoderAccountsPanel({
     : null;
 
   /**
-   * 抽屉的积分包 —— **有逐包用逐包，没有回落聚合行**（不是空区块）。
+   * 抽屉的积分包 —— **套餐行 + 资源包行**（有逐包用逐包，没有回落资源包汇总）。
    *
-   * 逐包来自网页会话（`qoderWebCreditPacks`），需要桌面端 + 登录过一次；
-   * 聚合三标量在任意形态都拿得到，所以回落行永远有内容。
+   * ★ 2026-11-25（用户报障）：套餐在账期结束时**刷新**，资源包逐包独立到期；
+   * 旧版把聚合余额（套餐 + 资源包）写成「X 到期」，把资源包说错了。
+   * 现在套餐行永远有（刷新日另写），资源包有逐包就列逐包、没有就列汇总
+   * 且**到期留空**（逐包到期只有网页会话通道才有）。
    */
   const detailPacks = useMemo<DetailPack[]>(() => {
     if (!detail) return [];
-    const web = webPacks[detail.uid];
+    const row = creditForDisplay(detail.uid);
+    if (!row || !row.ok) return [];
+    const now = Date.now();
+    const out: DetailPack[] = [];
 
-    // ① 有逐包 ⇒ 只渲染**还能用**的包，按最近到期排序（与浮层同一函数）。
+    // ① 套餐桶：顶层 `expiresAt` 是**刷新**时刻，不是到期。
+    const planQuota =
+      row.planQuota ??
+      (row.addOnQuota == null
+        ? { remaining: row.remaining ?? 0, used: row.used ?? 0, total: row.total ?? 0 }
+        : null);
+    if (planQuota) {
+      out.push({
+        key: `${detail.uid}-plan`,
+        name: displayText(row.plan) ?? t("qoder.page.accounts.web.sourcePlan"),
+        remainingText: formatCredits(planQuota.remaining),
+        totalText: formatCredits(planQuota.total),
+        usedText: t("qoder.page.accounts.metric.used", { n: formatCredits(planQuota.used) }),
+        expiryText: row.expiresForever
+          ? t("qoder.page.accounts.metric.neverExpires")
+          : row.expiresAt != null && row.expiresAt > now
+            ? t("qoder.page.accounts.metric.refreshesOn", { date: formatDate(row.expiresAt) })
+            : "—",
+        expired: false,
+        expiringSoon: false,
+        ratio:
+          planQuota.total > 0
+            ? Math.min(100, Math.max(0, (planQuota.remaining / planQuota.total) * 100))
+            : 0,
+      });
+    }
+
+    // ② 有逐包 ⇒ 只渲染**还能用**的包，按最近到期排序（与排序同一函数）。
+    const web = webPacks[detail.uid];
     const visible = web?.available ? visibleQoderPacks(web.packs) : [];
     if (visible.length > 0) {
-      const now = Date.now();
       const seen = new Map<string, number>();
-      return visible.map((pack, index) => {
+      for (const [index, pack] of visible.entries()) {
         const source = packSourceLabel(t, pack.source);
         const ordinal = (seen.get(source) ?? 0) + 1;
         seen.set(source, ordinal);
@@ -2604,7 +2646,7 @@ function QoderAccountsPanel({
           pack.limit > 0
             ? Math.min(100, Math.max(0, (pack.remaining / pack.limit) * 100))
             : 0;
-        return {
+        out.push({
           key: pack.id ?? `${pack.group}-${index}`,
           name: t("qoder.page.accounts.web.packName", {
             source,
@@ -2621,37 +2663,29 @@ function QoderAccountsPanel({
           expired,
           expiringSoon,
           ratio,
-        };
+        });
+      }
+    } else if (!web?.available && row.addOnQuota) {
+      // ③ 没有逐包可读（未登录 / 会话失效）⇒ 资源包汇总兜底。到期**留空**，
+      //    由下方说明引导登录网页端读取。逐包可读但全部不可用时，只留下方说明 ——
+      //    否则「剩余 > 0」的汇总行会与「没有可用资源包」互相矛盾。
+      const packs = row.addOnQuota;
+      out.push({
+        key: `${detail.uid}-packs`,
+        name: t("qoder.page.accounts.metric.packs"),
+        remainingText: formatCredits(packs.remaining),
+        totalText: formatCredits(packs.total),
+        usedText: t("qoder.page.accounts.metric.used", { n: formatCredits(packs.used) }),
+        expiryText: "—",
+        expired: false,
+        expiringSoon: false,
+        ratio:
+          packs.total > 0
+            ? Math.min(100, Math.max(0, (packs.remaining / packs.total) * 100))
+            : 0,
       });
     }
-
-    // ② 没有逐包 ⇒ 回落聚合行（逐包合计也参与兜底，见 `creditForDisplay`）。
-    const row = creditForDisplay(detail.uid);
-    if (!row || !row.ok) return [];
-    const remaining = row.remaining ?? 0;
-    const total = row.total ?? 0;
-    const used = row.used ?? 0;
-    const expiresAt = row.expiresAt ?? null;
-    const now = Date.now();
-    return [
-      {
-        key: detail.uid,
-        name: displayText(row.plan) ?? t("qoder.page.accounts.metric.credits"),
-        remainingText: formatCredits(remaining),
-        totalText: formatCredits(total),
-        usedText: t("qoder.page.accounts.metric.used", { n: formatCredits(used) }),
-        expiryText: row.expiresForever
-          ? t("qoder.page.accounts.metric.neverExpires")
-          : expiresAt == null
-            ? "—"
-            : expiresAt <= now
-              ? t("qoder.page.accounts.metric.expired")
-              : formatAbsoluteTime(expiresAt),
-        expired: expiresAt != null && expiresAt <= now,
-        expiringSoon: expiresAt != null && expiresAt > now && expiresAt - now <= 7 * 86_400_000,
-        ratio: total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0,
-      },
-    ];
+    return out;
   }, [detail, creditForDisplay, t, webPacks]);
 
   /**
@@ -2662,6 +2696,15 @@ function QoderAccountsPanel({
    */
   const detailPacksNotice = useMemo(() => {
     if (!detail) return null;
+    /* ★ 2026-11-25：卡片浮层移除后，headless 的解释不能跟着消失。
+       逐包只认浏览器会话，服务端会结构化拒绝（`api_qoder_web_desktop_only`）；
+       这里先给结论，不摆一个按了也没用的「登录 / 读取」。 */
+    if (api.isWebui() && !demoModeEnabled) {
+      return {
+        text: t("qoder.page.accounts.web.packsNoticeHeadless"),
+        busy: false,
+      };
+    }
     const web = webPacks[detail.uid];
     /* 还没取到结果（首次打开 / 取数失败）：不摆动作，避免把「未知」说成未登录或已登录。 */
     if (!web) return null;
@@ -2677,11 +2720,8 @@ function QoderAccountsPanel({
         busy: false,
       };
     }
-    /* 演示站按「桌面端」渲染（与浮层的 `demoModeEnabled || !api.isWebui()` 同口径），
-       否则这条引导在演示里永远看不到。 */
-    if (api.isWebui() && !demoModeEnabled) return null;
 
-    /* ★ 与浮层共用 `packUnavailableCopy`：未登录 / 会话过期 / 登错账号给「登录」，
+    /* ★ 与共享词条 `packUnavailableCopy` 同源：未登录 / 会话过期 / 登错账号给「登录」，
        上游抖动 / 未知给「读取」。此前这里无条件写「已登录，读取逐包明细」，
        未登录时会谎报状态（用户报障，2026-11-11）。 */
     const copy = packUnavailableCopy(t, web.reason);
@@ -2707,7 +2747,11 @@ function QoderAccountsPanel({
   /** 打开抽屉时取一次逐包（TTL 内不重复请求；切区域后重新取）。 */
   useEffect(() => {
     const uid = detail?.uid;
-    if (uid) void loadPacks(uid);
+    if (!uid) return;
+    /* headless 原理上拿不到逐包（服务端结构化拒绝）—— 不发这个必然失败的请求；
+       抽屉里的说明由 `detailPacksNotice` 给出。 */
+    if (api.isWebui() && !demoModeEnabled) return;
+    void loadPacks(uid);
     // `loadPacks` 是纯读取 + setState；只按 uid / scope 变化触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.uid, scope]);
@@ -2838,32 +2882,35 @@ function QoderAccountsPanel({
       render: (account) => {
         /* ★ 2026-10-26（与 WB 表格同形）：`<b>剩余</b>/总额`，千分位走共享 `formatCredits`。
            此前是 `String()` 拼 `"558 / 700"`（无千分位、斜杠两侧带空格），与卡片那一行也不一致。
-           ★ 2026-10-27（用户要求两种视图一致）：补**副行**「X 积分 MM-DD HH:mm 到期」——
-           与卡片指标行同一份 `summarizeExpiry` + `nextExpiryLabel`，3 天内转警示色。
-           `expiresAt` 是顶层额度到期（Unix 毫秒，Qoder SDK 口径），缺值就不编到期日。
+           ★ 2026-11-25（用户要求）：表格也只放汇总 —— 副行只写**套餐刷新**；
+           资源包的逐包明细与到期一律去详情抽屉看，表格不再显示逐包到期。
            ★ 2026-10-28（对齐 WB / Trae 表格）：整格是**一个真按钮** → 抽屉「积分」，
            取不到额度快照时也给 `—` 且**仍可点**（点进去正是「为什么没有」）；
-           主行补「剩余 · 总额 · 已用」（`creditMetricTip`），副行补逐批明细（`expiryTooltipLines`），
-           都用原生 `title` —— 表格里不用 Radix 浮层，与 WB 同一纪律。 */
+           主行补「剩余 · 总额 · 已用」（`creditMetricTip`），都用原生 `title` ——
+           表格里不用 Radix 浮层，与 WB 同一纪律。 */
         /* 展示用：实时聚合优先 → 逐包兜底 → 跨重启缓存。 */
         const row = displayCreditFor(account);
         const hasCredits = Boolean(row?.ok);
         const now = Date.now();
-        const expiry =
-          hasCredits && row?.expiresAt != null
-            ? summarizeExpiry([{ remaining: row.remaining ?? 0, expireAt: row.expiresAt }], { now })
+        /* 刷新日只属于套餐桶：明确没有套餐桶（只有资源包）时不写；
+           旧数据两桶都缺 ⇒ 退回聚合判断。 */
+        const hasPlan = hasCredits && (row?.planQuota != null || row?.addOnQuota == null);
+        const forever = hasPlan && row?.expiresForever === true;
+        const planRefreshAt =
+          hasPlan && !forever && typeof row?.expiresAt === "number" && row.expiresAt > now
+            ? row.expiresAt
             : null;
-        const next = expiry?.batches[0] ?? null;
-        /* ★ 2026-10-29：「9999-12-31」哨兵 ⇒ core 标记 `expiresForever`（`expiresAt` 为 null）。
-           副行写「长期有效」，不渲染成日期。 */
-        const forever = hasCredits && row?.expiresForever === true;
-        const expiryTip = expiry ? expiryTooltipLines(expiry, t) : null;
+        const planNote = forever
+          ? t("qoder.page.accounts.metric.neverExpires")
+          : planRefreshAt != null
+            ? t("qoder.page.accounts.metric.refreshesOn", { date: formatDate(planRefreshAt) })
+            : null;
         const priority = account.uid === priorityAccountId;
         const creditTip = creditMetricTip(
           {
             current: hasCredits ? row?.remaining ?? 0 : null,
             total: hasCredits ? row?.total ?? 0 : null,
-            expiry,
+            expiry: null,
           },
           t,
         );
@@ -2885,26 +2932,9 @@ function QoderAccountsPanel({
                 <span className="text-muted-foreground">—</span>
               )}
             </span>
-            {(next || forever || priority) && (
+            {(planNote || priority) && (
               <span className="flex flex-wrap items-center justify-end gap-x-1.5 whitespace-nowrap text-[11px]">
-                {next ? (
-                  <span
-                    className={
-                      isExpiryUrgent(next.expireAt, now) ? "text-warning" : "text-muted-foreground"
-                    }
-                    title={
-                      expiryTip
-                        ? [expiryTip.title, ...expiryTip.lines, expiryTip.more ?? ""].filter(Boolean).join("\n")
-                        : undefined
-                    }
-                  >
-                    {nextExpiryLabel(expiry, t, now)}
-                  </span>
-                ) : forever ? (
-                  <span className="text-muted-foreground">
-                    {t("qoder.page.accounts.metric.neverExpires")}
-                  </span>
-                ) : null}
+                {planNote ? <span className="text-muted-foreground">{planNote}</span> : null}
                 {priority ? (
                   <span className="text-primary" title={t("qoder.page.accounts.card.priorityTip")}>
                     {t("qoder.page.accounts.card.priority")}
@@ -3275,6 +3305,8 @@ function QoderAccountsPanel({
                   ? {
                       remaining: row.remaining ?? 0,
                       total: row.total ?? 0,
+                      plan: row.planQuota ?? null,
+                      packs: row.addOnQuota ?? null,
                       expiresAt: row.expiresAt ?? null,
                       expiresForever: row.expiresForever === true,
                     }
@@ -3284,9 +3316,6 @@ function QoderAccountsPanel({
               checkinHint={checkinHintOf(account)}
               creditPriority={account.uid === priorityAccountId}
               programs={programs}
-              packs={webPacks[account.uid]}
-              packsLoading={!!packsLoading[account.uid]}
-              onRequestPacks={(target) => void loadPacks(target.uid)}
               onWebLogin={(target) => void openWebLogin(target)}
               onReadPacks={(target) => void readPacks(target)}
               onSwitch={(program) => setSwitchTarget({ account, program })}

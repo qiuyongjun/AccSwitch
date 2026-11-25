@@ -248,6 +248,11 @@ export const zh = {
   "qoder.page.accounts.chip.checkinUnavailableTip":
     "官方暂未向该账号开放签到；可到官方客户端查看",
   "qoder.page.accounts.metric.credits": "积分",
+  // ★ 2026-11-25（用户报障）：套餐在账期结束时**刷新**、资源包逐包独立到期。
+  //   两者是两组数，不再把套餐日期套在含资源包的聚合余额上。
+  "qoder.page.accounts.metric.planCredits": "套餐",
+  "qoder.page.accounts.metric.packs": "资源包",
+  "qoder.page.accounts.metric.refreshesOn": "{date} 刷新",
   // ★ 2026-10-26（复刻 WB）：`{remaining} / {total}` 已删除 —— 卡片与表格都改成分开渲染
   //   `<b>剩余</b>/总额`（千分位走 `formatCredits`），斜杠两侧不带空格，与 WB 的
   //   `积分 4,678.19/4,788` 逐字同形。
@@ -259,12 +264,12 @@ export const zh = {
   "qoder.page.accounts.card.priority": "优先",
   "qoder.page.accounts.card.priorityTip": "建议优先使用",
   // ★ 2026-10-27：额度到期进抽屉积分包行（顶层 `expiresAt`，Unix 毫秒，Qoder SDK 口径）。
+  // ★ 2026-11-25：`metric.expiresOn` / `metric.expired` 已删 —— 套餐是「刷新」不是「到期」，
+  //   资源包逐包到期只在读到逐包后显示，两个旧词条不再有调用方。
   "qoder.page.accounts.metric.used": "已用 {n}",
-  "qoder.page.accounts.metric.expiresOn": "{date} 到期",
   // ★ 2026-10-29（用户报障）：上游用 9999-12-31 当「不过期」哨兵，此前被原样渲染成
   //   「9999-12-31 08:00 到期」。core 已把它归成 `expiresForever`，界面统一写这句。
   "qoder.page.accounts.metric.neverExpires": "长期有效",
-  "qoder.page.accounts.metric.expired": "已到期",
 
   // ── 网页端逐资源包明细（issue #111）──
   "qoder.page.accounts.web.loginMenu": "登录 Qoder 网页端（看逐包明细）",
@@ -273,10 +278,10 @@ export const zh = {
   "qoder.page.accounts.web.readDone": "已读取 {n} 个资源包",
   "qoder.page.accounts.web.readFailed": "没读到逐包明细：请确认登录窗里已完成登录，再试一次",
   "qoder.page.accounts.web.readMismatch": "登录窗里登的不是这个账号，已丢弃该会话",
-  "qoder.page.accounts.web.packsNotice": "逐包明细需要先在网页端登录一次（会话仅存本机）。当前显示的是账号聚合额度。",
+  "qoder.page.accounts.web.packsNotice": "逐包明细需要先在网页端登录一次（会话仅存本机）。当前显示套餐与资源包汇总。",
+  "qoder.page.accounts.web.packsNoticeHeadless": "逐包明细仅桌面版可见；当前显示积分汇总。",
   "qoder.page.accounts.web.packsNoticeReady": "{n} 个资源包 · 网页会话已保存在本机",
   "qoder.page.accounts.web.packsNoticeNoUsablePacks": "没有可用资源包 · 网页会话已保存在本机",
-  "qoder.page.accounts.web.noUsablePacks": "没有可用资源包（已用完或已过期）；新到账的包会重新出现在这里。",
   "qoder.page.accounts.web.logout": "退出网页登录",
   "qoder.page.accounts.web.logoutDone": "已清除本机的网页登录",
   "qoder.page.accounts.web.sourcePlan": "套餐额度",
@@ -286,18 +291,8 @@ export const zh = {
   "qoder.page.accounts.web.neverExpires": "长期有效",
   "qoder.page.accounts.web.expired": "已过期",
   "qoder.page.accounts.web.packName": "{source} · {n}",
-  "qoder.page.accounts.web.triggerUnsupported": "仅桌面版",
-  "qoder.page.accounts.web.triggerLoading": "读取中…",
-  "qoder.page.accounts.web.triggerPacks": "资源包 {n}",
-  "qoder.page.accounts.web.triggerNoUsablePacks": "无可用资源包",
-  "qoder.page.accounts.web.triggerNeutral": "资源包",
-  "qoder.page.accounts.web.triggerNoSession": "资源包 · 未登录",
-  "qoder.page.accounts.web.triggerHint": "查看逐资源包明细",
-  "qoder.page.accounts.web.title": "逐资源包明细",
-  "qoder.page.accounts.web.summary": "{n} 个 · 共剩 {remaining}",
-  "qoder.page.accounts.web.loading": "正在读取…",
-  "qoder.page.accounts.web.used": "已用 {n}",
-  "qoder.page.accounts.web.expiresAt": "{date} 到期",
+  // ★ 2026-11-25（用户要求）：卡片只留汇总 —— 逐包明细的浮层与其触发器词条已删除；
+  //   逐包到期与包数量只在详情抽屉里展示。
   "qoder.page.accounts.web.state.noSession": "还没有登录 Qoder 网页端",
   "qoder.page.accounts.web.state.noSessionHint": "逐包明细只存在于网页端接口，需要在网页端登录一次（之后会记住，不必重复登录）。",
   "qoder.page.accounts.web.state.expired": "网页登录已失效",
@@ -308,8 +303,6 @@ export const zh = {
   "qoder.page.accounts.web.state.upstreamHint": "这不是登录问题，稍后重试即可；登录态已保留。",
   "qoder.page.accounts.web.state.unknown": "暂未取到逐包明细",
   "qoder.page.accounts.web.state.unknownHint": "登录网页端后即可查看每个积分包各剩多少、何时到期。",
-  "qoder.page.accounts.web.state.unsupported": "当前形态看不到逐包",
-  "qoder.page.accounts.web.state.unsupportedHint": "逐包需要内嵌浏览器采集网页会话，仅桌面版支持；聚合额度在任意形态都可用。",
   "qoder.page.accounts.checkin.action": "签到",
   // Qoder 的「今天」= UTC+8 10:00 起的窗口；窗口未开 / 活动未刷新各成一档。
   "qoder.page.accounts.checkin.notStartedToast": "今日签到 10:00 后开放，到点再来",

@@ -2501,7 +2501,7 @@ check("★ Qoder 逐包 / 聚合两条通道：逐包成功后聚合不缺席（
      （openapi）。这一条钉住三件事：
        ① 逐包成功后，聚合缺席 / 失败时自动补取该账号；
        ② 展示层用 `creditForDisplay`（聚合优先、逐包合计兜底）；
-       ③ 排序 / 「优先」仍读实时 `credits`，派生值不得重排列表。 */
+       ③ 排序 / 「优先」读实时 `credits`（+ 已加载逐包），不读展示兜底。 */
   const page = readCode("src/pages/QoderAccountsPage.tsx");
   if (!/async function loadCreditOne\(/.test(page)) {
     throw new Error("逐包成功后补取聚合额度的入口不见了");
@@ -2523,16 +2523,18 @@ check("★ Qoder 逐包 / 聚合两条通道：逐包成功后聚合不缺席（
   if (!priority.includes("credits[account.uid]")) {
     throw new Error("「优先」标记改读了派生值 —— 展示兜底不得参与排序");
   }
-  return "逐包→聚合补取 · 展示兜底 · 排序仍读实时值";
+  return "逐包→聚合补取 · 展示兜底 · 排序读实时值 + 已加载逐包";
 });
 
 check("★ Qoder 资源包列表：用完 / 已过期不显示 · 最近到期在前", () => {
   /* 用户要求：资源包按最近到期排前面；用完的移除；已过期但仍有剩余的也不保留。
      变异：删掉 remaining 过滤 ⇒ 0/0 占位重新占满列表；漏掉过期过滤 ⇒ 过期包又回到
-     列表最前（它到期最近，排序会把它顶到第一位）；删掉 sort ⇒ 顺序回到后端原序。 */
+     列表最前（它到期最近，排序会把它顶到第一位）；删掉 sort ⇒ 顺序回到后端原序。
+     ★ 2026-11-25：卡片上的逐包浮层已移除（卡片只留汇总），列表只在详情抽屉 ——
+     本门禁只校验抽屉仍走共享的过滤/排序。 */
   const lib = readCode("src/lib/qoder-packs.ts");
   if (!/export function visibleQoderPacks/.test(lib)) {
-    throw new Error("共享的 `visibleQoderPacks` 不见了 —— 浮层与抽屉会各写一套");
+    throw new Error("共享的 `visibleQoderPacks` 不见了 —— 抽屉与排序会各写一套");
   }
   const fn = lib.slice(
     lib.indexOf("export function visibleQoderPacks"),
@@ -2547,15 +2549,11 @@ check("★ Qoder 资源包列表：用完 / 已过期不显示 · 最近到期�
   if (!fn.includes("expiresAtMs") || !fn.includes("sort(")) {
     throw new Error("资源包没有按到期时间排序（最近到期必须在前）");
   }
-  const popover = readCode("src/components/qoder/qoder-packs-popover.tsx");
-  if (!popover.includes("visibleQoderPacks(packs!.packs)")) {
-    throw new Error("卡片资源包浮层没走共享的过滤/排序");
-  }
   const page = readCode("src/pages/QoderAccountsPage.tsx");
   if (!page.includes("visibleQoderPacks(web.packs)")) {
     throw new Error("详情抽屉的资源包列表没走共享的过滤/排序");
   }
-  return "用完 / 过期不显示 · 最近到期在前 · 浮层/抽屉同源";
+  return "用完 / 过期不显示 · 最近到期在前 · 抽屉同源";
 });
 
 check("★ 成长任务标签四态：已完成 / 已领 x/y 也常显；无摘要不占位；点击直达任务页签", () => {

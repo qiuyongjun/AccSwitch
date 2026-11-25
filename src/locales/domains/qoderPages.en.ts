@@ -236,6 +236,11 @@ export const en = {
   "qoder.page.accounts.chip.checkinUnavailableTip":
     "Official check-in is not open for this account; check the official client",
   "qoder.page.accounts.metric.credits": "Credits",
+  // 2026-11-25: plan credits **refresh** at period end; add-on packs expire per pack.
+  // They render as two groups; the plan date is never applied to the aggregate balance.
+  "qoder.page.accounts.metric.planCredits": "Plan",
+  "qoder.page.accounts.metric.packs": "Add-on",
+  "qoder.page.accounts.metric.refreshesOn": "Refreshes {date}",
   // 2026-10-26: `{remaining} / {total}` removed — card and table render
   // `<b>remaining</b>/total` separately (thousands via `formatCredits`), matching WB.
   // 2026-10-28: this domain's `metric.creditsTip` was dropped — the "remaining · total · used"
@@ -246,12 +251,12 @@ export const en = {
   "qoder.page.accounts.card.priorityTip": "Recommended priority",
   // 2026-10-27: quota expiry now appears on the drawer's credit pack row (top-level
   // `expiresAt`, Unix milliseconds per the Qoder SDK).
+  // 2026-11-25: `metric.expiresOn` / `metric.expired` removed — plan credits **refresh**,
+  // they do not expire; per-pack expiry is only shown once pack detail is loaded.
   "qoder.page.accounts.metric.used": "Used {n}",
-  "qoder.page.accounts.metric.expiresOn": "Expires {date}",
   // 2026-10-29: upstream sends 9999-12-31 as a "never expires" sentinel; core folds it
   // into `expiresForever` so the UI never prints the fake date.
   "qoder.page.accounts.metric.neverExpires": "Never expires",
-  "qoder.page.accounts.metric.expired": "Expired",
 
   // ── Qoder web per-pack detail (issue #111) ──
   "qoder.page.accounts.web.loginMenu": "Sign in to Qoder web (per-pack detail)",
@@ -260,10 +265,10 @@ export const en = {
   "qoder.page.accounts.web.readDone": "Read {n} resource packs",
   "qoder.page.accounts.web.readFailed": "No per-pack detail yet. Make sure the sign-in window finished signing in, then retry.",
   "qoder.page.accounts.web.readMismatch": "The sign-in window was authenticated as a different account; that session was discarded.",
-  "qoder.page.accounts.web.packsNotice": "Per-pack detail needs a one-time web sign-in (the session stays on this machine). Showing aggregate credits for now.",
+  "qoder.page.accounts.web.packsNotice": "Per-pack detail needs a one-time web sign-in (the session stays on this machine). Showing plan and add-on totals for now.",
+  "qoder.page.accounts.web.packsNoticeHeadless": "Per-pack detail is available on desktop only; showing the credit summary.",
   "qoder.page.accounts.web.packsNoticeReady": "{n} packs · web session stored on this machine",
   "qoder.page.accounts.web.packsNoticeNoUsablePacks": "No usable packs · web session stored on this machine",
-  "qoder.page.accounts.web.noUsablePacks": "No usable credit packs (used up or expired); new packs will appear here.",
   "qoder.page.accounts.web.logout": "Sign out of web",
   "qoder.page.accounts.web.logoutDone": "Web session cleared from this machine",
   "qoder.page.accounts.web.sourcePlan": "Plan quota",
@@ -273,18 +278,8 @@ export const en = {
   "qoder.page.accounts.web.neverExpires": "No expiry",
   "qoder.page.accounts.web.expired": "Expired",
   "qoder.page.accounts.web.packName": "{source} · {n}",
-  "qoder.page.accounts.web.triggerUnsupported": "Desktop only",
-  "qoder.page.accounts.web.triggerLoading": "Loading…",
-  "qoder.page.accounts.web.triggerPacks": "{n} packs",
-  "qoder.page.accounts.web.triggerNoUsablePacks": "No usable packs",
-  "qoder.page.accounts.web.triggerNeutral": "Packs",
-  "qoder.page.accounts.web.triggerNoSession": "Packs · not signed in",
-  "qoder.page.accounts.web.triggerHint": "View per-pack detail",
-  "qoder.page.accounts.web.title": "Per-pack detail",
-  "qoder.page.accounts.web.summary": "{n} packs · {remaining} left",
-  "qoder.page.accounts.web.loading": "Loading…",
-  "qoder.page.accounts.web.used": "{n} used",
-  "qoder.page.accounts.web.expiresAt": "expires {date}",
+  // 2026-11-25 (user request): the card is summary-only — the per-pack popover and its
+  // trigger strings are gone; per-pack expiry/count live in the detail drawer only.
   "qoder.page.accounts.web.state.noSession": "Not signed in to Qoder web",
   "qoder.page.accounts.web.state.noSessionHint": "Per-pack detail lives behind the web endpoint. Sign in there once and it will be remembered.",
   "qoder.page.accounts.web.state.expired": "Web session expired",
@@ -295,8 +290,6 @@ export const en = {
   "qoder.page.accounts.web.state.upstreamHint": "This is not a sign-in problem. Retry later; the session is kept.",
   "qoder.page.accounts.web.state.unknown": "No per-pack data yet",
   "qoder.page.accounts.web.state.unknownHint": "Sign in to the web console to see how much each credit pack has left and when it expires.",
-  "qoder.page.accounts.web.state.unsupported": "Per-pack unavailable in this build",
-  "qoder.page.accounts.web.state.unsupportedHint": "Per-pack needs an embedded browser to capture the web session, so it is desktop-only. Aggregate credits work everywhere.",
   "qoder.page.accounts.checkin.action": "Check in",
   "qoder.page.accounts.checkin.notStartedToast":
     "Today’s check-in opens at 10:00; come back after that",

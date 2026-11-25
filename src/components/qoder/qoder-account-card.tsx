@@ -17,7 +17,7 @@
  * |:--|:--|:--|
  * | header | 头像 + 昵称 + 备注（身份行）+ 「当前登录」徽章 | 同形（「当前登录」= 任一程序位 `currentUid` 命中本账号） |
  * | chips | 状态（+ WB 的任务、旅行） | 状态槽（凭据可用 / 凭据未识别 / 无可用凭据）+ 归属异常 |
- * | body | 指标行（积分 · 临期）+ 凭据到期行 + 凭据明细 | 指标行（积分 · 临期 · 优先）+ 凭据到期 |
+ * | body | 指标行（积分 · 临期）+ 凭据到期行 + 凭据明细 | 指标行（**套餐 · 刷新 · 资源包** · 优先）+ 凭据到期（逐包明细只在详情抽屉） |
  * | footer | 程序位行 + 更多菜单 | 同形（程序位状态**未取到时不渲染整行**，不摆一排灰胶囊） |
  *
  * ⚠️ 2026-10-26：上表按**实现**重写。原表写「chips 含使用中 N 工具 / 临期 / 优先」
@@ -33,11 +33,12 @@
  * 2. **程序位行只在拿到状态时渲染**：没数据不摆一排「未检测到」的灰胶囊。
  * 3. ★ **凭据到期已可渲染**（2026-10-27）：core 的 `account_view` 通过
  *    `normalize_expiry_ms` 把秒 / 毫秒统一成 Unix 毫秒（无效 ⇒ null），因此卡片、列表与
- *    详情页签都复用 `CredentialExpiryMeta` 如实展示「凭据到期」；卡片指标行仍只放
- *    **额度到期**（`qoder_credits.expiresAt`），两者是不同字段，不要混用。
+ *    详情页签都复用 `CredentialExpiryMeta` 如实展示「凭据到期」。
+ *    ★ 2026-11-25：卡片指标行分**套餐**（顶层 `expiresAt` = 账期**刷新**）与**资源包**
+ *    （逐包到期，来自网页会话通道）两组；凭据到期是第三条字段，三者不要混用。
  */
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Ellipsis, FolderTree, Globe, Info, PackageSearch, StickyNote, Trash2 } from "lucide-react";
 
 import {
@@ -52,11 +53,8 @@ import {
   checkinBadgeTip,
   creditMetricTip,
   drawerTabOpenAria,
-  expiryTooltipLines,
   formatCredits,
-  nextExpiryLabel,
 } from "@/components/account-card";
-import { QoderPacksPopover } from "@/components/qoder/qoder-packs-popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -73,10 +71,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { AccountRefreshKind } from "@/lib/account-refresh";
 import type { DrawerTab } from "@/lib/drawer-tab-preference";
 import { shouldOpenAccountDetail } from "@/lib/account-open-guard";
-import type { QoderAccountView, QoderProgramStatus, QoderWebCreditPacks } from "@/lib/api";
-import { isExpiryUrgent, summarizeExpiry } from "@/lib/credit-expiry";
+import type { QoderAccountView, QoderProgramStatus, QoderQuotaBucket } from "@/lib/api";
 import { demoModeEnabled } from "@/lib/demo-mode";
 import { displayText } from "@/lib/display-text";
+import { formatDate } from "@/lib/format";
 import { useT, type Translate } from "@/lib/i18n";
 import { CheckinIcon } from "@/lib/semantic-icons";
 import { cn } from "@/lib/utils";
@@ -365,15 +363,25 @@ function programShortLabel(t: Translate, program: QoderProgramStatus): string {
 }
 
 export interface QoderCardCredits {
-  remaining: number;
-  total: number;
-  /** 当前套餐/额度的到期时刻（Unix **毫秒**，`qoder_credits` 的 `expiresAt`）；缺值 ⇒ 不渲染临期。 */
+  /** 聚合余额（仅用于旧缓存 / 缺桶数据回落；正常渲染按 `plan` / `packs` 分组）。 */
+  remaining?: number;
+  total?: number;
+  /** 套餐桶（上游 `userQuota`）；缺省 ⇒ 不渲染「套餐」组。 */
+  plan?: QoderQuotaBucket | null;
+  /** 资源包桶（上游 `addOnQuota`）；缺省 ⇒ 不渲染「资源包」组。 */
+  packs?: QoderQuotaBucket | null;
+  /**
+   * **套餐**刷新时刻（Unix 毫秒，quota/usage 顶层 `expiresAt`）；缺值 ⇒ 不渲染刷新日。
+   *
+   * ⚠️ 它只属于套餐桶。资源包逐包独立到期（官方规则：每笔 30 天），其明细与日期
+   * **只在详情抽屉**展示 —— 卡片只放汇总，不显示逐包到期。
+   */
   expiresAt?: number | null;
   /**
    * 上游哨兵「9999-12-31」= **不过期**（此时 `expiresAt` 为 null）。
    *
    * ★ 2026-10-29（用户报障）：它此前被当真实日期渲染成「9999-12-31 08:00 到期」。
-   * 现在指标行写「长期有效」，与 WB 的 `wbAccounts.card.forever` 同一口径。
+   * 现在套餐组写「长期有效」，与 WB 的 `wbAccounts.card.forever` 同一口径。
    */
   expiresForever?: boolean;
 }
@@ -395,7 +403,7 @@ export interface QoderAccountCardProps {
    * 别再写「没有回收站」。
    */
   onDelete?: (account: QoderAccountView) => void;
-  /** 额度快照；`null` / 不传 ⇒ 不渲染积分指标（无数据不渲染，不摆「0 / 0」）。 */
+  /** 额度快照；`null` / 不传 ⇒ 显示「积分 —」（不编 0，也不隐藏这一行）。 */
   credits?: QoderCardCredits | null;
   /** 是否为积分优先级最高的账号（指标行「优先」，与 WorkBuddy 同一口径）。 */
   creditPriority?: boolean;
@@ -416,13 +424,8 @@ export interface QoderAccountCardProps {
   onSetGroup?: (account: QoderAccountView) => void;
   /** 「更多 → 登录 Qoder 网页端」（issue #111；不传 ⇒ 不渲染该项）。 */
   onWebLogin?: (account: QoderAccountView) => void;
-  /** 「更多 → 读取逐包明细」/ 浮层里的显式读取入口（不传 ⇒ 不渲染）。 */
+  /** 「更多 → 读取逐包明细」（不传 ⇒ 不渲染）。 */
   onReadPacks?: (account: QoderAccountView) => void;
-  /** 该账号的逐包明细（`undefined` = 还没请求；`null` = 请求过但没结果）。 */
-  packs?: QoderWebCreditPacks | null;
-  packsLoading?: boolean;
-  /** 打开浮层时触发取数（缓存与 TTL 由页面持有）。 */
-  onRequestPacks?: (account: QoderAccountView) => void;
   /** 标签 / 指标直达详情页签（R10）。 */
   onOpenTab?: (account: QoderAccountView, tab: DrawerTab) => void;
   /**
@@ -459,9 +462,6 @@ export function QoderAccountCard({
   onSetGroup,
   onWebLogin,
   onReadPacks,
-  packs,
-  packsLoading = false,
-  onRequestPacks,
   onOpenTab,
   onRefreshPart,
   refreshingKinds,
@@ -480,20 +480,30 @@ export function QoderAccountCard({
   const isCurrent = currentPrograms.length > 0;
 
   /**
-   * 临期（最急一批）—— 与 WB / Trae 卡片**同一份**汇总与措辞（`summarizeExpiry` /
-   * `nextExpiryLabel`），只报最急一批的金额与到期日。
+   * 积分指标：**套餐**与**资源包**只放汇总（2026-11-25 用户要求）。
    *
-   * `expiresAt` 是**顶层**额度到期（Unix 毫秒，Qoder SDK 口径）：`userQuota` 与
-   * `addOnQuota` 共用这一个时刻 ⇒「到期积分数」就是聚合后的剩余。缺值 / 已过期 ⇒
-   * `summarizeExpiry` 返回 `null`，整段不渲染（不编到期日）。
+   * - 套餐桶（`userQuota`）与顶层 `expiresAt` 是同一根时间轴：账期结束时**刷新**；
+   * - 资源包桶（`addOnQuota`）只写「剩余/总量」；**逐包明细与到期一律去详情抽屉看**
+   *   —— 卡片不再显示逐包到期，也不摆包数量 / 浮层入口。
+   * - 两组都不是同一个时刻：更不能把套餐刷新日套在包含资源包的余额上。
    */
   const expiryNow = Date.now();
-  const creditExpiry =
-    credits && credits.expiresAt != null
-      ? summarizeExpiry([{ remaining: credits.remaining, expireAt: credits.expiresAt }], { now: expiryNow })
+  const planBucket = credits?.plan ?? null;
+  const packBucket = credits?.packs ?? null;
+  /* 旧缓存 / 缺桶数据：退回一组「积分」，避免整行消失。 */
+  const legacyBucket =
+    !planBucket && !packBucket && credits && typeof credits.remaining === "number"
+      ? {
+          remaining: credits.remaining,
+          total: credits.total ?? credits.remaining,
+          used: Math.max(0, (credits.total ?? credits.remaining) - credits.remaining),
+        }
       : null;
-  const expiringLabel = nextExpiryLabel(creditExpiry, t, expiryNow);
-  const expiryUrgent = creditExpiry ? isExpiryUrgent(creditExpiry.batches[0].expireAt, expiryNow) : false;
+  const planOrLegacy = planBucket ?? legacyBucket;
+  const planRefreshAt =
+    credits && !credits.expiresForever && typeof credits.expiresAt === "number" && credits.expiresAt > expiryNow
+      ? credits.expiresAt
+      : null;
 
   /** 「优先」——与 WB / Trae 卡片同位置同形态：指标行末尾的纯文字（`text-primary`）。 */
   const priorityNote = creditPriority ? (
@@ -502,11 +512,9 @@ export function QoderAccountCard({
     </span>
   ) : null;
 
-  /* 「积分 x/y」的 tip 走共享的 `creditMetricTip`：三平台那句「剩余 · 总额 · 已用」只可能有一份。 */
-  const creditTip = creditMetricTip(
-    { current: credits?.remaining ?? null, total: credits?.total ?? null, expiry: creditExpiry },
-    t,
-  );
+  /* 单个桶的 tip 走共享的 `creditMetricTip`：三平台那句「剩余 · 总额 · 已用」只可能有一份。 */
+  const bucketTip = (bucket: QoderQuotaBucket | null) =>
+    bucket ? creditMetricTip({ current: bucket.remaining, total: bucket.total, expiry: null }, t) : null;
 
   /**
    * 指标行里**可点的那一段** —— 与 WB / Trae 卡片同一个形状：真
@@ -531,54 +539,67 @@ export function QoderAccountCard({
       <span className="cursor-default tabular-nums">{content}</span>
     );
 
-  /** `积分 x/y` 的**内容**（与是否可点解耦）。无额度快照时 `积分 —`，**仍然可点** —— 点进去正是「为什么没有」。 */
-  const creditLine = (
-    <>
-      {t("qoder.page.accounts.metric.credits")}{" "}
-      {credits ? (
+  /** 一个额度桶的数字（`套餐 137/300` / `资源包 2,200/3,000`）。 */
+  const bucketGroup = (bucket: QoderQuotaBucket, label: string) => {
+    const tip = bucketTip(bucket);
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {creditsTrigger(
+            <>
+              {label}{" "}
+              <b className="font-semibold tabular-nums text-foreground">{formatCredits(bucket.remaining)}</b>
+              /{formatCredits(bucket.total)}
+            </>,
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {tip ? <div className="whitespace-nowrap tabular-nums">{tip}</div> : null}
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
+
+  /**
+   * 指标行节点（顺序即阅读顺序）：套餐 / 刷新日 / 资源包 / 优先。
+   * 无额度快照时仍渲染「积分 —」（与 WB 的「取不到就显示 —」同一纪律）。
+   */
+  const metricNodes: ReactNode[] = [];
+  if (!credits) {
+    metricNodes.push(
+      creditsTrigger(
         <>
-          <b className="font-semibold tabular-nums text-foreground">{formatCredits(credits.remaining)}</b>
-          /{formatCredits(credits.total)}
-        </>
-      ) : (
-        <b className="font-semibold tabular-nums text-foreground">—</b>
-      )}
-    </>
-  );
-
-  /** 临期：可点 → 抽屉「积分」，浮层给逐批明细（`expiryTooltipLines` 与 WB / Trae 同一份）。 */
-  const expiringTip = creditExpiry ? expiryTooltipLines(creditExpiry, t) : null;
-  const expiringNote = creditExpiry ? (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        {creditsTrigger(
-          <span className={expiryUrgent ? "text-warning" : "text-muted-foreground"}>{expiringLabel}</span>,
-        )}
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        {expiringTip ? (
-          <>
-            <div className="whitespace-nowrap font-medium">{expiringTip.title}</div>
-            {expiringTip.lines.map((line) => (
-              <div key={line} className="whitespace-nowrap tabular-nums">
-                {line}
-              </div>
-            ))}
-            {expiringTip.more ? (
-              <div className="whitespace-nowrap text-muted-foreground">{expiringTip.more}</div>
-            ) : null}
-          </>
-        ) : null}
-      </TooltipContent>
-    </Tooltip>
-  ) : null;
-
-  /** 上游「不过期」哨兵 ⇒ 写「长期有效」（`expiresAt` 已被 core 置空，两者互斥）。 */
-  const foreverNote = credits?.expiresForever ? (
-    creditsTrigger(
-      <span className="text-muted-foreground">{t("qoder.page.accounts.metric.neverExpires")}</span>,
-    )
-  ) : null;
+          {t("qoder.page.accounts.metric.credits")}{" "}
+          <b className="font-semibold tabular-nums text-foreground">—</b>
+        </>,
+      ),
+    );
+  } else {
+    if (planOrLegacy) {
+      metricNodes.push(
+        bucketGroup(
+          planOrLegacy,
+          planBucket
+            ? t("qoder.page.accounts.metric.planCredits")
+            : t("qoder.page.accounts.metric.credits"),
+        ),
+      );
+      /* 刷新日只属于套餐桶：只有资源包的账号不显示它（否则又是一个串轴）。
+         上游哨兵 ⇒ 长期有效；缺值 ⇒ 不写。 */
+      const planDateNote = credits.expiresForever
+        ? t("qoder.page.accounts.metric.neverExpires")
+        : planRefreshAt != null
+          ? t("qoder.page.accounts.metric.refreshesOn", { date: formatDate(planRefreshAt) })
+          : null;
+      if (planDateNote) {
+        metricNodes.push(<span className="text-muted-foreground">{planDateNote}</span>);
+      }
+    }
+    if (packBucket) {
+      metricNodes.push(bucketGroup(packBucket, t("qoder.page.accounts.metric.packs")));
+    }
+  }
+  if (priorityNote) metricNodes.push(priorityNote);
 
   /**
    * 「当前登录」徽章 —— **与昵称同一行**（WB `account-card.tsx` 与 Trae 卡同位置）。
@@ -758,62 +779,34 @@ export function QoderAccountCard({
         <QoderForeignBadge account={account} />
       </div>
 
-      {/* body：指标行（积分 · 临期 · 优先）+ 凭据块（令牌种类 · 掩码）。
-          ★ 2026-10-26（复刻 WB）：指标行改成 WB 的形态 —— `积分 <b>558</b>/700 · 临期`，
-          间距 9px、`·` 分隔、允许换行、`items-center`。此前是 `558 / 700`（斜杠两侧带空格、
-          无千分位）且用 `items-baseline` + 12px 间距，与 WB 那一行不是同一个东西。
-          ★ 2026-10-27：临期补进本行（用户要求「像 WB 一样显示到期时间与到期积分数」）：
-          WB / Trae 的临期也在这条指标行里，措辞共用 `nextExpiryLabel`；3 天内 `text-warning`。
-          ★ 2026-10-28（用户要求）：**套餐移出指标行** —— 它与「积分」是同一份额度快照的
-          两个属性，卡片上占一整段却不可操作；套餐名仍见详情抽屉的积分包行（`DetailPack.name`）。
-          ★ 并且**始终渲染**：无额度快照时显示 `积分 —`（与 WB 的「取不到就显示 —，不闪不藏」
-          同一条纪律）。此前整行 `null`，卡片会突然少一行，高度随之跳动。
-          ★ 2026-10-28（对齐 WB / Trae 的交互口径）：两段数字都是**真按钮**（`data-no-account-open`
-          + `cursor-pointer` + 悬停降透明 + 无障碍名），`积分 —` 那一支也可点；临期补上逐批明细
-          浮层（`expiryTooltipLines`）；tip 文案不再各自域内一份，改走共享的 `creditMetricTip`。 */}
+      {/* body：指标行（套餐 · 刷新 · 资源包 · 优先）+ 凭据到期。
+          ★ 2026-11-25（用户要求）：卡片只留**汇总** ——
+          `套餐 <b>137</b>/300 · 12-03 10:30 刷新 · 资源包 <b>2,200</b>/3,000`。
+          逐包到期、包数量与逐包入口一律不进卡片：它们只在**详情抽屉**的「积分」页签里。
+          ★ 2026-11-25（同日先修）：套餐在账期结束时刷新、资源包逐包独立到期，
+          两者不是同一个时刻，分组展示；不再把套餐日期套在聚合余额上。
+          ★ 2026-10-28（对齐 WB / Trae 的交互口径）：各段数字都是**真按钮**
+          （`data-no-account-open` + `cursor-pointer` + 悬停降透明 + 无障碍名），
+          `积分 —` 那一支也可点；tip 文案走共享的 `creditMetricTip`。 */}
       <section className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-1 text-[11.5px] text-muted-foreground">
-          {creditTip ? (
-            <Tooltip>
-              <TooltipTrigger asChild>{creditsTrigger(creditLine)}</TooltipTrigger>
-              <TooltipContent side="top">
-                <div className="whitespace-nowrap tabular-nums">{creditTip}</div>
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            creditsTrigger(creditLine)
-          )}
-          {(expiringNote || foreverNote) && (
-            <>
-              <span aria-hidden className="select-none text-muted-foreground/50">
-                ·
-              </span>
-              {expiringNote ?? foreverNote}
-            </>
-          )}
-          {priorityNote && (
-            <>
-              <span aria-hidden className="select-none text-muted-foreground/50">
-                ·
-              </span>
-              {priorityNote}
-            </>
-          )}
-          {/* 两级显示的**第二级入口**：聚合行照旧，逐包在浮层里（issue #111 R6）。 */}
-          <QoderPacksPopover
-            packs={packs}
-            loading={packsLoading}
-            onRequest={() => onRequestPacks?.(account)}
-            onWebLogin={() => onWebLogin?.(account)}
-            onReadPacks={() => onReadPacks?.(account)}
-          />
+          {metricNodes.map((node, index) => (
+            <Fragment key={index}>
+              {index > 0 ? (
+                <span aria-hidden className="select-none text-muted-foreground/50">
+                  ·
+                </span>
+              ) : null}
+              {node}
+            </Fragment>
+          ))}
         </div>
         {/* ★ 2026-10-27（T02 完成后与 WB / Trae 同批）：指标行下面单起一行给出**凭据到期**
             —— `expiresAt` 已由 core 的 `normalize_expiry_ms` 归一成 Unix 毫秒（无效 ⇒ null），
             因此可如实渲染；单元格复用 `CredentialExpiryMeta`（同一份日期格式与缺值分支）。
             `showRefreshToken={false}` 与 Trae 同理由：Qoder 只有 `hasRefreshToken`，
             没有刷新令牌的到期时间 —— 用「有」冒充「到期日」会答非所问。
-            额度到期是**另一个**字段（`credits.expiresAt`，已在上方指标行），两者不要混用。 */}
+            ⚠️ 它是**账号凭据**的到期，与上方套餐刷新 / 资源包到期是三条不同的字段。 */}
         <CredentialExpiryMeta
           account={{ expiresAt: account.expiresAt }}
           showRefreshToken={false}

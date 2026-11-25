@@ -147,6 +147,10 @@ export function matchesAccountQuery(searchText: string, query: string): boolean;
 > `summarizeExpiry`），没有可用批次时才回落快照的 `creditsExpireAt`。快照是刷新时刻算出的
 > 「最早有效到期」，时间走过之后会变成过去的时刻 —— 只看它会把「最早一包已过期、后面还有
 > 有效包」的账号当过期沉底（卡面写着「明天到期」，排序却排在 7 天后到期的账号之后）。
+> ★ 2026-11-25：Qoder 的套餐 `expiresAt` 是**账期刷新**，资源包逐包独立到期。`priority`
+> 改为取「套餐刷新与已加载逐包最近到期」的更近者（`qoderPriorityExpiry`）；逐包走网页会话
+> 通道，未读取时只用套餐刷新时刻。卡片与表格只放汇总（资源包金额），逐包明细与到期只在
+> 详情抽屉。
 
 **实现**：把排序抽成**纯函数**，比较器与置顶由平台经 `AccountListConfig` 注入（WB 用积分优先级，Trae 用自身积分字段）：
 
@@ -910,7 +914,10 @@ Qoder 此前默认 `name`。`priority` 在三个平台是同一句话：**最急
   （与卡面同源）→ 无可用批次时回落账号快照 `creditsExpireAt`（Unix 秒）+ `remainingCredits`；
   2026-10-28 补上「已过期 / 零积分沉底」（此前把 `creditsExpireAt` 直接当升序键，过期的号
   排最前），2026-10-29 改为优先读包（快照的「最早有效到期」在包过期后会变陈旧）；
-- Qoder：`qoder_credits.expiresAt` + `remaining`；2026-10-28 由「余额降序」改为本口径。
+- Qoder：2026-10-28 由「余额降序」改为本口径；2026-11-25 起取「**套餐刷新**（顶层
+  `expiresAt`）与**已加载逐包**最近到期」的**更近者**（`qoderPriorityExpiry`）。逐包需要
+  网页会话通道，未读取时只用套餐刷新时刻；读到后列表按新信息重排。`remaining` 为 0 或
+  两者都未知 ⇒ 沉底。
 
 **② `expiry` 一律 = 凭据到期。**
 WB `expiresAt`；Trae `jwtExpTimestamp`（过 `traeJwtExpiryMs`）；Qoder `expiresAt`

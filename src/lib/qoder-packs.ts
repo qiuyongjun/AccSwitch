@@ -1,11 +1,18 @@
 /**
  * Qoder 资源包（积分包）的展示口径 —— issue #111。
  *
- * 单独成文件而不是塞进页面：**状态判定与阈值**是会被两个地方用到的（抽屉列表、
- * 后续的卡片浮层），散落两处必然漂移（本仓已有太多这类教训）。
+ * 单独成文件而不是塞进页面：**状态判定与阈值**会被详情抽屉与优先排序共用，
+ * 散落两处必然漂移（本仓已有太多这类教训）。
  */
 
-import type { QoderCreditPack, QoderPacksUnavailableReason } from "@/lib/api";
+import type {
+  QoderCreditPack,
+  QoderCreditsRow,
+  QoderPacksUnavailableReason,
+  QoderWebCreditPacks,
+} from "@/lib/api";
+import type { ExpirySummary } from "@/lib/credit-expiry";
+import { summarizeExpiry } from "@/lib/credit-expiry";
 import type { Translate } from "@/lib/i18n";
 
 /**
@@ -20,8 +27,8 @@ export const EXPIRING_SOON_MS = 14 * 24 * 3600 * 1000;
 /**
  * 逐包数据的**前端缓存有效期**：60 秒。
  *
- * 为什么需要 TTL：浮层打开即请求、卡片与抽屉都会触发 ⇒ 没有 TTL 的话，同一个账号
- * 会被点一次打一次上游（逐包接口要带会话 Cookie，打多了容易被判异常）。
+ * 为什么需要 TTL：打开抽屉 / 菜单读取 / 登录窗认领都会触发逐包请求 ⇒ 没有 TTL 的话，
+ * 同一个账号会被点一次打一次上游（逐包接口要带会话 Cookie，打多了容易被判异常）。
  * 60s 是「够新鲜」与「别打扰上游」的折中；显式「刷新」按钮走 `force`，不受它限制。
  */
 export const PACKS_TTL_MS = 60_000;
@@ -48,15 +55,15 @@ export function packState(pack: QoderCreditPack, now: number): QoderPackState {
 }
 
 /**
- * 资源包列表的**可见性与顺序**（卡片浮层 / 详情抽屉共用）。
+ * 资源包列表的**可见性与顺序**（详情抽屉 / 优先排序共用）。
  *
  * - **没有可用额度的包不显示**：`remaining <= 0`（用完）或**已过期**（即使还有剩余）
  *   都剔除。过期包已经不能再用，继续占位只会让「最近到期」排在最前的是一批
  *   不可用的条目；用户真正要看的是现在还能用的包。
  * - **按到期时刻由近到远**：最近到期的排最前；缺到期时刻（长期有效）的排最后。
  *
- * 抽成共享函数而不是两处各写一遍 `map`：顺序/过滤规则一旦分叉，同一账号在浮层
- * 与抽屉里会给出两种列表（本仓已有同类漂移的教训）。
+ * 抽成共享函数而不是两处各写一遍 `map`：顺序/过滤规则一旦分叉，详情抽屉与排序
+ * 会给出两种结果（本仓已有同类漂移的教训）。
  *
  * `now` 可注入，便于单测/门禁固定时间；生产调用直接用当前时刻。
  */
@@ -85,6 +92,71 @@ export function visibleQoderPacks(
     });
 }
 
+/**
+ * 已加载逐包的**到期汇总**（按到期时刻合并同刻批次）。没有逐包 / 没有可用包 ⇒ `null`。
+ *
+ * ⚠️ 只用 `addOnQuota`（资源包桶）的逐包数据：套餐额度的刷新时刻是另一条时间轴
+ * （`QoderCreditsRow.expiresAt`），不能混进来。
+ */
+export function qoderPackExpiry(
+  packs: QoderWebCreditPacks | null | undefined,
+  now: number = Date.now(),
+): ExpirySummary | null {
+  if (!packs?.available) return null;
+  const visible = visibleQoderPacks(packs.packs, now);
+  if (visible.length === 0) return null;
+  return summarizeExpiry(
+    visible.map((pack) => ({ remaining: pack.remaining, expireAt: pack.expiresAtMs ?? null })),
+    { now },
+  );
+}
+
+/**
+ * 「积分优先级」的**唯一定义**：套餐刷新时刻与**已加载**资源包的最近到期中更近者。
+ *
+ * - 套餐刷新时刻来自聚合接口（始终可用）；资源包逐包到期只有网页会话通道才有，
+ *   未读取时只能用套餐刷新时刻，**不拿它冒充资源包到期**；
+ * - 读到逐包后按更近者重排 —— 官方扣减规则就是「先消耗最早到期的 Credits」。
+ */
+export function qoderPriorityExpiry(
+  row:
+    | Pick<
+        QoderCreditsRow,
+        "expiresAt" | "expiresForever" | "remaining" | "planQuota" | "addOnQuota"
+      >
+    | null
+    | undefined,
+  packs: QoderWebCreditPacks | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!row || (row.remaining ?? 0) <= 0) return null;
+  const candidates: number[] = [];
+  /* 套餐桶还有余额时，刷新时刻才代表「一批未用积分将失去」；套餐已用尽 / 明确没有
+     套餐桶 ⇒ 跳过。两桶都缺（旧数据）才退回聚合余额判断 —— 那时聚合日期是唯一线索。 */
+  const planHasBalance =
+    row.planQuota != null
+      ? row.planQuota.remaining > 0
+      : row.addOnQuota == null && (row.remaining ?? 0) > 0;
+  if (
+    planHasBalance &&
+    !row.expiresForever &&
+    typeof row.expiresAt === "number" &&
+    Number.isFinite(row.expiresAt) &&
+    row.expiresAt > now
+  ) {
+    candidates.push(row.expiresAt);
+  }
+  if (packs?.available) {
+    for (const pack of visibleQoderPacks(packs.packs, now)) {
+      if (typeof pack.expiresAtMs === "number" && pack.expiresAtMs > now) {
+        candidates.push(pack.expiresAtMs);
+      }
+    }
+  }
+  if (candidates.length === 0) return null;
+  return Math.min(...candidates);
+}
+
 /** 上游 `source` 取值 → 本地化标签。未知取值兜底成「资源包」，**不显示原始枚举串**。 */
 export function packSourceLabel(
   t: Translate,
@@ -107,7 +179,7 @@ export function packSourceLabel(
 /**
  * 「拿不到逐包」的原因 → 统一的说明与下一步动作。
  *
- * ★ 浮层与详情抽屉**共用这一份**：两边各写一套时，已经出现过「未登录却显示
+ * ★ 详情抽屉的说明与状态判定**共用这一份**：两边各写一套时，已经出现过「未登录却显示
  * 『已登录，读取逐包明细』」的文案漂移。`action` 只表达**该引导用户做什么**：
  * - `login`：没有会话 / 会话过期 / 登错账号 ⇒ 先登录网页端；
  * - `read`：上游抖动 / 未知 ⇒ 用已有会话再读一次。

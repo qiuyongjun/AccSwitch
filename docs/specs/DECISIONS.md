@@ -868,6 +868,31 @@ is_content_blocked(...) || (status == 400 && sanitized && is_channel_invalid(...
 账号凭据的 `expiresAt` 另由 `normalize_expiry_ms` 归一（见下条），两条字段不要混用
 （门禁 B1b ③ 只约束卡片的 `CredentialExpiryMeta`）。
 
+**2026-11-25（Qoder 套餐刷新与资源包到期拆分）**：上一条把顶层 `expiresAt` 当成
+`userQuota + addOnQuota` **共同**的到期时刻 —— 与官方客户端不符：套餐额度是
+「将于 MM-DD **刷新**」（账期结束），资源包是**逐包**独立到期（每笔 30 天），
+官方扣减按「最早到期优先」。把套餐日期套在聚合余额上，会把资源包里的大头说成
+同一天到期（用户报障）。现行口径：
+
+- `quota/usage` 的顶层 `expiresAt` **只属于套餐桶**（`userQuota`）；界面写
+  `MM-DD HH:mm 刷新`，不再写「到期」；
+- `addOnQuota` 单独成桶（聚合接口**没有**它的到期时间）；逐包到期只来自网页会话
+  通道的 `quota_detail[].expires_at`（`qoder_web_credit_packs`）。未读取逐包时
+  只写金额、**不写到期日**；
+- `qoder::credits::region_view` 的行结果新增 `planQuota` / `addOnQuota`
+  （桶缺键 ⇒ `null`，不编 0/0 桶）；聚合 `remaining` / `total` 保留给统计页与
+  表格主列；
+- **卡片与表格只放汇总**（同日用户要求）：卡片指标行写
+  `套餐 x/y · MM-DD HH:mm 刷新 · 资源包 x/y · 优先`，**不显示逐包到期、包数量或
+  逐包浮层入口**；表格副行只写套餐刷新。逐包明细、包数量与各自到期**只在详情抽屉**
+  的「积分 / 资源包」页签展示（`qoderPackExpiry` 只服务抽屉与排序）；
+- `priority` 排序取「套餐刷新与**已加载**逐包最近到期」的更近者，都未知则沉底
+  （逐包是懒加载的真实数据，读到时列表会按新信息重排）；
+- 旧缓存 / 缺桶数据回落一组「积分」，避免升级后整行消失。
+
+账号凭据的 `expiresAt` 另由 `normalize_expiry_ms` 归一（见下条），三条字段不要混用
+（门禁 B1b ③ 只约束卡片的 `CredentialExpiryMeta`）。
+
 **2026-10-27（Qoder 账号凭据到期归一，T02）**：`qoder/account.rs` 新增
 `normalize_expiry_ms`：`<= 0` / 缺失 ⇒ `None`；`< 1e11` 按秒 ×1000，否则按毫秒。
 账号视图（`account_view`）、保活（`refresh.rs`）与切换写回（`switch.rs`）**共用这一份**

@@ -94,7 +94,7 @@ macOS 上永远查不到钥匙串条目 ⇒ 解密失败 ⇒ 「桌面端检测�
 | 能力 | 有 | 说明 |
 |:---|:---:|:---|
 | 每日签到领积分 | ✅ | 走**活动平台**：`GET /sash/api/v1/me/campaigns` → 筛 `CLAIM_BENEFIT` + `CLAIMABLE` → 逐个 `POST …/{id}/claim`，累加 Credits；已领 ⇒ 幂等「今日已领」。旧 `/sash/daily-check-in` 只在**整区没有活动平台**（404/405/410）时兜底。三档语义不变：**没有积分类活动 ⇒ 未开放（`ok:false` + `disabled`）**，不谎报成功。★ 2026-11-19 真机复验（国内版 3 账号）：上游对部分账号**不下发**每日积分活动（列表只剩「首次订阅福利」这类 `VIEW_DETAILS`，`claimable:false`），此时本仓**无项可领**，界面按「不可签到」呈现（2026-11-24 起，此前误画成「今日未签」）并引导去官方客户端核对 —— 见 §4 下方「签到的两种 `NONE`」 |
-| 积分 / 额度查询 | ✅ | quota/usage + 套餐快照；顶层 `expiresAt`（Unix **毫秒**，SDK References 口径）驱动卡片 / 抽屉的「X 积分 … 到期」。⚠️ 上游用 **9999-12-31**（`≥ 253402214400000` ms）当「不过期」哨兵：`parse_quota` 把它归成 `expiresForever`（`expires_at = None`），界面统一写「长期有效」，**不**把哨兵渲染成日期（2026-10-29 用户报障） |
+| 积分 / 额度查询 | ✅ | quota/usage + 套餐快照。**两条时间轴分开**（2026-11-25）：顶层 `expiresAt`（Unix **毫秒**，SDK References 口径）只描述**套餐桶**（`userQuota`），界面写「MM-DD HH:mm **刷新**」（账期结束）；`addOnQuota` 是独立桶，聚合接口**不给到期**，逐包到期只在网页会话通道的 `quota_detail[].expires_at` 里。**卡片 / 表格只放汇总**（套餐 / 刷新 / 资源包金额），逐包明细与到期只在详情抽屉（2026-11-25 用户要求）。`credits` 行结果同时下发 `planQuota` / `addOnQuota`。⚠️ 上游用 **9999-12-31**（`≥ 253402214400000` ms）当「不过期」哨兵：`parse_quota` 把它归成 `expiresForever`（`expires_at = None`），界面统一写「长期有效」，**不**把哨兵渲染成日期（2026-10-29 用户报障） |
 | Pro 福利包 | ❌ | **未实现**：`PATH_PRO_CLAIM` 只有常量定义、零调用点（issue #58 第 1 阶段一并落地） |
 | OAuth 设备授权 | ✅ | **PKCE S256**；两区 URL 参数不同（国内带 `redirect_uri`，国际不带） |
 | PAT 导入 | ✅ | 前缀 `pt-`，导入后自动交换 jobToken |
@@ -436,10 +436,12 @@ URL query `Encode=1` 决定「先解码再按 JSON 解析」还是「直接按 J
 6. 国际版按 IP 判地区，逐包取数支持按区域配置出站代理（`qoder/proxy.json`，
    `qoder_web_proxy_get/set`），代理只作用于逐包请求，登录窗走系统代理。
 
-**降级**：拿不到逐包时**回落聚合额度行**，并在抽屉/浮层按结构化原因引导
+**降级**：拿不到逐包时**回落聚合额度行**，并在详情抽屉按结构化原因引导
 （`no_session` / `session_expired` / `session_mismatch` / `upstream`）；headless 服务端返回
 「仅桌面端可用」，**绝不返回空包列表**冒充「该账号没有资源包」。
+★ 2026-11-25（用户要求）：卡片 / 表格只放汇总，逐包明细与到期只在详情抽屉展示。
 
 **代码**：`qoder/web_usage.rs`（协议与解析）、`qoder/web_session.rs`（缓存）、
 `qoder/web_proxy.rs`（按区域代理）、`src-tauri/qoder_web.rs`（登录窗与命令）、
-`src/components/qoder/qoder-packs-popover.tsx`、`src/pages/QoderCreditsPage.tsx`。
+`src/lib/qoder-packs.ts`（共享过滤/排序/到期）、`src/pages/QoderAccountsPage.tsx`（抽屉）、
+`src/pages/QoderCreditsPage.tsx`。
